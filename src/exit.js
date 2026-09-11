@@ -37,7 +37,7 @@ function autoIp() {
 
 function publish() {
   seq += 1
-  const offer = { v: 2, host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, ts: Date.now() }
+  const offer = { v: 2, host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, ts: Date.now(), udp: process.env.MAGNETGATE_TRANSPORT !== 'tcp' ? 1 : undefined }
   dht.put({
     k: pk,
     salt: SALT,
@@ -64,8 +64,8 @@ dht.on('ready', () => {
 const IDLE_SESSION_MS = 10 * 60 * 1000
 
 function handleSession(sock) {
-  sock.setKeepAlive(true, 15000)
-  console.log(ts(), `[data] session from ${sock.remoteAddress}:${sock.remotePort}`)
+if (sock.setKeepAlive) sock.setKeepAlive(true, 15000)
+console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.remotePort ?? ''}`)
   let gotSalt = Buffer.alloc(0)
   let started = false
   const streams = new Map() // streamId -> upstream socket
@@ -188,3 +188,13 @@ function handleSession(sock) {
 }
 
 net.createServer(handleSession).listen(DATA_PORT, () => console.log(ts(), `[data] listening on ${DATA_PORT}`))
+
+// optional UDP transport (same port, datagram carriage): MAGNETGATE_TRANSPORT=udp
+if (process.env.MAGNETGATE_TRANSPORT !== 'tcp') {
+  const { ExitUdpMux } = await import('./udpsess.mjs')
+  new ExitUdpMux({ port: DATA_PORT, boxKey, onConn: (conn, rinfo) => {
+    console.log(ts(), `[data] udp stream from ${rinfo.address}:${rinfo.port}`)
+    handleSession(conn)
+  } })
+  console.log(ts(), `[data] udp transport enabled on ${DATA_PORT}/udp`)
+}

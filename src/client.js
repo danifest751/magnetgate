@@ -10,13 +10,14 @@ import {
   bep44Verify, BOOTSTRAP,
 } from './common.mjs'
 import { startSocks5Server } from './socks5.mjs'
+import { createClientUdpStream } from './udpsess.mjs'
 
 const OFFER_TTL_MS = 12 * 60 * 1000
 const ts = () => new Date().toISOString()
 
 // ---------- configuration ----------
 // Precedence: config file (arg ending in .json or MAGNETGATE_CONFIG) > CLI psk.
-let cfg = { localPort: 1080, rules: { direct: [], proxy: [] }, bootstrap: BOOTSTRAP, exits: [] }
+let cfg = { localPort: 1080, rules: { direct: [], proxy: [] }, bootstrap: BOOTSTRAP, exits: [], transport: process.env.MAGNETGATE_TRANSPORT ?? 'tcp' }
 {
   const cfgArg = process.argv[2] ?? process.env.MAGNETGATE_CONFIG ?? null
   const isFile = cfgArg && cfgArg.endsWith('.json') && fs.existsSync(cfgArg)
@@ -94,6 +95,7 @@ class Session {
     this.sock = sock
     this.keys = keys
     this.streams = new Map() // streamId -> app socket (TCP)
+    this.stats = { up: 0, down: 0, streams: 0 }
     this.relays = new Map()  // streamId -> { control, sendReply } (UDP)
     this.nextId = 1
     this.lastPong = Date.now()
@@ -112,6 +114,7 @@ class Session {
       this.lastPong = Date.now()
       if (type === FRAME.DATA) {
         const app = this.streams.get(id)
+        this.stats.down += plain.length
         if (app && !app.destroyed) app.write(plain)
       } else if (type === FRAME.UDP_DATA) {
         const r = this.relays.get(id)
@@ -152,10 +155,11 @@ class Session {
   openStream(target, app, firstData) {
     const id = this.nextId++ & 0x7fffffff || 1
     this.streams.set(id, app)
+    this.stats.streams++
     try {
       this.sock.write(frame2(this.keys.c2e, FRAME.OPEN, id, Buffer.from(JSON.stringify(target))))
       if (firstData?.length) this.sock.write(frame2(this.keys.c2e, FRAME.DATA, id, firstData))
-      app.on('data', (d) => { try { this.sock.write(frame2(this.keys.c2e, FRAME.DATA, id, d)) } catch {} })
+      app.on('data', (d) => { this.stats.up += d.length; try { this.sock.write(frame2(this.keys.c2e, FRAME.DATA, id, d)) } catch {} })
       app.on('close', () => { try { this.sock.write(frame2(this.keys.c2e, FRAME.CLOSE, id, Buffer.alloc(0))) } catch {} })
     } catch (e) {
       console.log(ts(), `[data][${this.exit.name}] stream #${id} open failed: ${e.message}`)
@@ -166,23 +170,48 @@ class Session {
 }
 
 function connectSession(exit, offer) {
-  return new Promise((resolve, reject) => {
-    const sock = net.connect(offer.port, offer.host)
-    const t = setTimeout(() => { sock.destroy(); reject(new Error('connect timeout')) }, 15000)
-    sock.on('connect', () => {
-      clearTimeout(t)
+  const connSalt = crypto.randomBytes(8)
+  const promise = new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('connect timeout')), 20000)
+
+    const useUdp = cfg.transport !== 'tcp' && offer.udp === 1
+    if (useUdp) {
+      createClientUdpStream({ remote: { host: offer.host, port: offer.port }, boxKey: exit.boxKey })
+        .then((stream) => {
+          // the first stream bytes are the connSalt (the exit derives its keys from it)
+          stream.write(connSalt)
+          const s = new Session(exit, stream, stream.keys)
+          sessions.set(exit.id, s)
+          sessionPromises.delete(exit.id)
+          console.log(ts(), `[data][${exit.name}] udp session to ${offer.host}:${offer.port} established`)
+          clearTimeout(t); resolve(s)
+        })
+        .catch((e) => {
+          console.log(ts(), `[data][${exit.name}] udp failed (${e.message}), falling back to tcp`)
+          tcpConnect()
+        })
+      return
+    }
+
+    tcpConnect()
+    function tcpConnect() {
+      const sock = net.connect(offer.port, offer.host)
       sock.setKeepAlive(true, 15000)
-      const connSalt = crypto.randomBytes(8)
-      sock.write(connSalt)
-      const keys = connKeys(exit.boxKey, connSalt)
-      const s = new Session(exit, sock, keys)
-      sessions.set(exit.id, s)
-      sessionPromises.delete(exit.id)
-      console.log(ts(), `[data][${exit.name}] session to ${offer.host}:${offer.port} established`)
-      resolve(s)
-    })
-    sock.on('error', (e) => { clearTimeout(t); reject(e) })
+      sock.on('connect', () => {
+        clearTimeout(t)
+        sock.write(connSalt)
+        const keys = connKeys(exit.boxKey, connSalt)
+        const s = new Session(exit, sock, keys)
+        sessions.set(exit.id, s)
+        sessionPromises.delete(exit.id)
+        console.log(ts(), `[data][${exit.name}] tcp session to ${offer.host}:${offer.port} established`)
+        resolve(s)
+      })
+      sock.on('error', (e) => { clearTimeout(t); reject(e) })
+    }
   })
+  promise.finally(() => { if (sessionPromises.get(exit.id) === promise) sessionPromises.delete(exit.id) }).catch(() => {})
+  return promise
 }
 
 function getSessionFor(exit) {
@@ -277,3 +306,13 @@ function udpFn(req, control, sendReply) {
 
 startSocks5Server(cfg.localPort, routeFn, udpFn)
   .listen(cfg.localPort, () => console.log(ts(), `[socks5] listening on 127.0.0.1:${cfg.localPort}`))
+
+// optional periodic stats: MAGNETGATE_STATS=<seconds>
+if (process.env.MAGNETGATE_STATS) {
+  const every = parseInt(process.env.MAGNETGATE_STATS, 10) || 60
+  setInterval(() => {
+    for (const s of sessions.values()) {
+      console.log(ts(), `[stats][${s.exit.name}] up=${(s.stats.up / 1024).toFixed(1)}KiB down=${(s.stats.down / 1024).toFixed(1)}KiB streams=${s.stats.streams} alive=${s.streams.size}`)
+    }
+  }, every * 1000)
+}
