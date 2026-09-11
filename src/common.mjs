@@ -66,10 +66,26 @@ export const FRAME = { OPEN: 1, DATA: 2, CLOSE: 3, PING: 4, PONG: 5, UDP_ASSOC: 
 
 // frame: [u32 len][u8 type][u32 streamId][24B nonce][secretbox(plain)]
 // len counts everything after the length field. streamId 0 = session-level (ping/pong).
+// The plaintext of DATA frames is padded inside the encryption ([padLen][pad][data]) so
+// wire sizes do not exactly reveal the payload shape — lengths are quantized to buckets.
+const PAD_BUCKETS = [64, 256, 512, 1024, 2048, 4096]
+
+function padPlain(plain) {
+  const bucket = PAD_BUCKETS.find(b => plain.length + 1 <= b) ?? Math.ceil((plain.length + 1) / 4096) * 4096
+  const padLen = Math.max(0, bucket - plain.length - 1)
+  const out = Buffer.alloc(1 + padLen + plain.length)
+  out[0] = padLen
+  if (padLen > 0) crypto.randomBytes(padLen).copy(out, 1)
+  plain.copy(out, 1 + padLen)
+  return out
+}
+
 export function frame2(key, type, streamId, plain) {
   const nonce = crypto.randomBytes(24)
-  const ct = Buffer.alloc(plain.length + 16)
-  sodium.crypto_secretbox_easy(ct, plain, nonce, key)
+  let padded = plain
+  if (type === FRAME.DATA) padded = padPlain(plain)
+  const ct = Buffer.alloc(padded.length + 16)
+  sodium.crypto_secretbox_easy(ct, padded, nonce, key)
   const head = Buffer.alloc(9)
   head.writeUInt32BE(5 + nonce.length + ct.length, 0)
   head[4] = type
@@ -90,9 +106,12 @@ export function makeCodecV2(key, onFrame, onKill) {
         const streamId = buf.readUInt32BE(5)
         const nonce = buf.subarray(9, 9 + 24)
         const ct = buf.subarray(9 + 24, 4 + len)
-        const plain = Buffer.alloc(len - 5 - 24 - 16)
-        if (!sodium.crypto_secretbox_open_easy(plain, ct, nonce, key)) return onKill()
+        const padded = Buffer.alloc(len - 5 - 24 - 16)
+        if (!sodium.crypto_secretbox_open_easy(padded, ct, nonce, key)) return onKill()
         buf = buf.subarray(4 + len)
+        const plain = type === FRAME.DATA && padded.length > 0
+          ? padded.subarray(1 + padded[0]) // strip [padLen][pad]
+          : padded
         onFrame(type, streamId, plain)
       }
     },
