@@ -2,6 +2,7 @@
 // node src/exit.js <psk> [dataPort] [publicHost]
 import DHT from 'bittorrent-dht'
 import net from 'node:net'
+import dgram from 'node:dgram'
 import os from 'node:os'
 import fs from 'node:fs'
 import {
@@ -83,6 +84,38 @@ function handleSession(sock) {
     started = true
     const rest = gotSalt.subarray(8)
     const keys = connKeys(boxKey, gotSalt.subarray(0, 8))
+    const streams = new Map() // streamId -> upstream TCP socket
+    const relays = new Map()  // streamId -> udp socket (UDP ASSOCIATE)
+    let lastActivity = Date.now()
+
+    const killSession = () => {
+      for (const up of streams.values()) { try { up.destroy() } catch {} }
+      streams.clear()
+      for (const u of relays.values()) { try { u.close() } catch {} }
+      relays.clear()
+      try { sock.destroy() } catch {}
+    }
+
+    // parse a tunnel UDP payload starting at ATYP: [atyp][addr][port][data]
+    const parseAddr = (payload) => {
+      const at = payload[0]
+      if (at === 1 && payload.length >= 7) {
+        const addr = [...payload.subarray(1, 5)].join('.')
+        return { host: addr, port: payload.readUInt16BE(5), data: payload.subarray(7) }
+      }
+      if (at === 3 && payload.length >= 4) {
+        const dl = payload[1]
+        if (payload.length < 4 + dl) return null
+        const host = payload.toString('latin1', 2, 2 + dl)
+        return { host, port: payload.readUInt16BE(2 + dl), data: payload.subarray(4 + dl) }
+      }
+      if (at === 4 && payload.length >= 19) {
+        const host = [...payload.subarray(1, 17)].map(b => b.toString(16)).join(':')
+        return { host, port: payload.readUInt16BE(17), data: payload.subarray(19) }
+      }
+      return null
+    }
+
     const codec = makeCodecV2(keys.c2e, (type, id, plain) => {
       lastActivity = Date.now()
       if (type === FRAME.OPEN) {
@@ -104,6 +137,39 @@ function handleSession(sock) {
       } else if (type === FRAME.CLOSE) {
         const up = streams.get(id)
         if (up) { streams.delete(id); try { up.destroy() } catch {} }
+        const r = relays.get(id)
+        if (r) { relays.delete(id); try { r.close() } catch {} }
+      } else if (type === FRAME.UDP_ASSOC) {
+        if (relays.has(id)) return sock.destroy()
+        const udp = dgram.createSocket('udp4')
+        relays.set(id, udp)
+        udp.on('error', () => {})
+        udp.on('message', (msg, rinfo) => {
+          console.log(ts(), `[data] udp relay #${id} reply from ${rinfo.address}:${rinfo.port} (${msg.length}b)`)
+          const payload = Buffer.alloc(7)
+          payload[0] = 1
+          const ip = rinfo.address.split('.').map(x => parseInt(x, 10) & 0xff)
+          Buffer.from(ip).copy(payload, 1)
+          payload.writeUInt16BE(rinfo.port, 5)
+          try { sock.write(frame2(keys.e2c, FRAME.UDP_DATA, id, Buffer.concat([payload, msg]))) } catch {}
+        })
+        const first = parseAddr(plain)
+        console.log(ts(), `[data] udp relay #${id} assoc: ${first ? first.host + ':' + first.port + ' (' + first.data.length + 'b)' : 'PARSE FAIL'}`)
+        if (first && first.data.length) {
+          try { udp.send(first.data, first.port, first.host) } catch (e) { console.log(ts(), `[data] udp send failed: ${e.message}`) }
+        }
+      } else if (type === FRAME.UDP_DATA) {
+        const udp = relays.get(id)
+        if (udp) {
+          const dst = parseAddr(plain)
+          console.log(ts(), `[data] udp relay #${id} data: ${dst ? dst.host + ':' + dst.port + ' (' + dst.data.length + 'b)' : 'PARSE FAIL'}`)
+          if (dst) { try { udp.send(dst.data, dst.port, dst.host) } catch {} }
+        } else {
+          console.log(ts(), `[data] udp relay #${id} not found`)
+        }
+      } else if (type === FRAME.UDP_CLOSE) {
+        const r = relays.get(id)
+        if (r) { relays.delete(id); try { r.close() } catch {} }
       } else if (type === FRAME.PING) {
         try { sock.write(frame2(keys.e2c, FRAME.PONG, 0, plain)) } catch {}
       }

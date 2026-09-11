@@ -62,7 +62,7 @@ export function connKeys(boxKey, connSalt) {
 
 // ---------- multiplexed frames (protocol v2) ----------
 
-export const FRAME = { OPEN: 1, DATA: 2, CLOSE: 3, PING: 4, PONG: 5 }
+export const FRAME = { OPEN: 1, DATA: 2, CLOSE: 3, PING: 4, PONG: 5, UDP_ASSOC: 6, UDP_DATA: 7, UDP_CLOSE: 8 }
 
 // frame: [u32 len][u8 type][u32 streamId][24B nonce][secretbox(plain)]
 // len counts everything after the length field. streamId 0 = session-level (ping/pong).
