@@ -1,0 +1,111 @@
+// Unit tests for the crypto/codec core. Run: npm test  (node:test, Node >= 18)
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
+import {
+  deriveKeys, saltOf, targetOf, signer, bep44Verify,
+  seal, unseal, connKeys, frame2, makeCodecV2, FRAME,
+} from '../src/common.mjs'
+
+const KEY = crypto.randomBytes(32)
+
+// collect frames decoded from a codec fed the given wire bytes (optionally in pieces)
+function decodeAll(key, wire, chunkSize = 0) {
+  const out = []
+  let killed = false
+  const codec = makeCodecV2(key, (type, id, plain) => out.push({ type, id, plain }), () => { killed = true })
+  if (chunkSize > 0) {
+    for (let i = 0; i < wire.length; i += chunkSize) codec.push(wire.subarray(i, i + chunkSize))
+  } else {
+    codec.push(wire)
+  }
+  return { out, killed }
+}
+
+test('DATA frame roundtrip across lengths 0..5000 (C2: padding must not corrupt >=512 B)', () => {
+  for (let n = 0; n <= 5000; n++) {
+    const plain = crypto.randomBytes(n)
+    const wire = frame2(KEY, FRAME.DATA, 7, plain)
+    const { out, killed } = decodeAll(KEY, wire)
+    assert.equal(killed, false, `killed at n=${n}`)
+    assert.equal(out.length, 1, `frame count at n=${n}`)
+    assert.equal(out[0].type, FRAME.DATA)
+    assert.equal(out[0].id, 7)
+    assert.ok(out[0].plain.equals(plain), `payload mismatch at n=${n} (got ${out[0].plain.length})`)
+  }
+})
+
+test('TLS ClientHello sized frame (517 B) survives — the exact HTTPS-breaking case', () => {
+  const plain = crypto.randomBytes(517)
+  const wire = frame2(KEY, FRAME.DATA, 1, plain)
+  const { out } = decodeAll(KEY, wire)
+  assert.ok(out[0].plain.equals(plain))
+})
+
+test('padding quantizes wire size to buckets (does not leak exact length)', () => {
+  const a = frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(100))
+  const b = frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(200))
+  assert.equal(a.length, b.length, 'two payloads in the same bucket must share a wire size')
+})
+
+test('codec reassembles frames split across arbitrary chunk boundaries', () => {
+  const parts = [
+    frame2(KEY, FRAME.OPEN, 1, Buffer.from(JSON.stringify({ host: 'example.com', port: 443 }))),
+    frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(1300)),
+    frame2(KEY, FRAME.PING, 0, Buffer.from('p')),
+    frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(3000)),
+  ]
+  const wire = Buffer.concat(parts)
+  for (const cs of [1, 3, 7, 45, 64, 500]) {
+    const { out, killed } = decodeAll(KEY, wire, cs)
+    assert.equal(killed, false, `killed at chunkSize=${cs}`)
+    assert.equal(out.length, 4, `frame count at chunkSize=${cs}`)
+    assert.equal(out[0].type, FRAME.OPEN)
+    assert.equal(out[2].type, FRAME.PING)
+  }
+})
+
+test('non-DATA frames are not padded/stripped', () => {
+  for (const t of [FRAME.OPEN, FRAME.CLOSE, FRAME.PING, FRAME.PONG, FRAME.UDP_ASSOC]) {
+    const plain = crypto.randomBytes(50)
+    const { out } = decodeAll(KEY, frame2(KEY, t, 3, plain))
+    assert.ok(out[0].plain.equals(plain), `type ${t} payload mismatch`)
+  }
+})
+
+test('wrong key or tampered ciphertext triggers onKill (auth holds)', () => {
+  const wire = frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(300))
+  assert.equal(decodeAll(crypto.randomBytes(32), wire).killed, true, 'wrong key must kill')
+  const tampered = Buffer.from(wire); tampered[tampered.length - 1] ^= 0xff
+  assert.equal(decodeAll(KEY, tampered).killed, true, 'tampered MAC must kill')
+})
+
+test('seal/unseal roundtrip and seq-bound nonce', () => {
+  const boxKey = crypto.randomBytes(32)
+  const msg = Buffer.from(JSON.stringify({ v: 2, host: '1.2.3.4', port: 49001, ts: Date.now() }))
+  const ct = seal(boxKey, msg, 42)
+  assert.ok(unseal(boxKey, ct, 42).equals(msg))
+  assert.equal(unseal(boxKey, ct, 43), null, 'wrong seq must fail to open')
+})
+
+test('deriveKeys is deterministic and connKeys directions differ', () => {
+  const a = deriveKeys('psk-abc')
+  const b = deriveKeys('psk-abc')
+  assert.ok(a.pk.equals(b.pk) && a.sk.equals(b.sk) && a.boxKey.equals(b.boxKey))
+  assert.ok(!a.pk.equals(deriveKeys('psk-xyz').pk))
+  const salt = crypto.randomBytes(8)
+  const k = connKeys(a.boxKey, salt)
+  assert.ok(!k.c2e.equals(k.e2c), 'c2e and e2c must differ')
+  assert.ok(connKeys(a.boxKey, salt).c2e.equals(k.c2e), 'connKeys must be deterministic')
+})
+
+test('BEP44 sign/verify and target derivation', () => {
+  const { pk, sk } = deriveKeys('psk-abc')
+  const value = crypto.randomBytes(120)
+  const sig = signer(sk)(value)
+  assert.equal(bep44Verify(sig, value, pk), true)
+  const bad = Buffer.from(value); bad[0] ^= 1
+  assert.equal(bep44Verify(sig, bad, pk), false)
+  assert.equal(bep44Verify(sig, value, crypto.randomBytes(32)), false)
+  assert.equal(targetOf(pk, saltOf('psk-abc')).length, 20)
+})

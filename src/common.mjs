@@ -66,17 +66,21 @@ export const FRAME = { OPEN: 1, DATA: 2, CLOSE: 3, PING: 4, PONG: 5, UDP_ASSOC: 
 
 // frame: [u32 len][u8 type][u32 streamId][24B nonce][secretbox(plain)]
 // len counts everything after the length field. streamId 0 = session-level (ping/pong).
-// The plaintext of DATA frames is padded inside the encryption ([padLen][pad][data]) so
+// The plaintext of DATA frames is padded inside the encryption ([padLen u16][pad][data]) so
 // wire sizes do not exactly reveal the payload shape — lengths are quantized to buckets.
+// padLen is a 2-byte big-endian prefix: buckets reach 4096, so pad can exceed 255 and must
+// not be truncated into a single byte (that corrupted every DATA frame >= 512 B, incl. TLS
+// ClientHello ~517 B — the cause of the "HTTPS through the tunnel fails" bug).
+const PAD_HDR = 2
 const PAD_BUCKETS = [64, 256, 512, 1024, 2048, 4096]
 
 function padPlain(plain) {
-  const bucket = PAD_BUCKETS.find(b => plain.length + 1 <= b) ?? Math.ceil((plain.length + 1) / 4096) * 4096
-  const padLen = Math.max(0, bucket - plain.length - 1)
-  const out = Buffer.alloc(1 + padLen + plain.length)
-  out[0] = padLen
-  if (padLen > 0) crypto.randomBytes(padLen).copy(out, 1)
-  plain.copy(out, 1 + padLen)
+  const bucket = PAD_BUCKETS.find(b => plain.length + PAD_HDR <= b) ?? Math.ceil((plain.length + PAD_HDR) / 4096) * 4096
+  const padLen = Math.max(0, bucket - plain.length - PAD_HDR)
+  const out = Buffer.alloc(PAD_HDR + padLen + plain.length)
+  out.writeUInt16BE(padLen, 0)
+  if (padLen > 0) crypto.randomBytes(padLen).copy(out, PAD_HDR)
+  plain.copy(out, PAD_HDR + padLen)
   return out
 }
 
@@ -109,8 +113,8 @@ export function makeCodecV2(key, onFrame, onKill) {
         const padded = Buffer.alloc(len - 5 - 24 - 16)
         if (!sodium.crypto_secretbox_open_easy(padded, ct, nonce, key)) return onKill()
         buf = buf.subarray(4 + len)
-        const plain = type === FRAME.DATA && padded.length > 0
-          ? padded.subarray(1 + padded[0]) // strip [padLen][pad]
+        const plain = type === FRAME.DATA && padded.length >= PAD_HDR
+          ? padded.subarray(PAD_HDR + padded.readUInt16BE(0)) // strip [padLen u16][pad]
           : padded
         onFrame(type, streamId, plain)
       }
