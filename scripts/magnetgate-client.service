@@ -1,0 +1,15 @@
+[Unit]
+Description=magnetgate SOCKS5 client
+After=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/magnetgate
+Environment=MAGNETGATE_CONFIG=/etc/magnetgate/client.json
+ExecStart=/usr/bin/node src/client.js /etc/magnetgate/client.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 — 2026-09-11
+- M6: **multi-exit client with failover** — a config file (`magnetgate.config.json`) lists several
+  exits (each with its own PSK); the client discovers every offer, spreads SOCKS streams
+  round-robin, and fails over to a healthy exit (dead exits get a 30 s cooldown, recovery is
+  automatic).
+- Client service-ization: `scripts/install-client-windows.ps1` (scheduled task at logon) and
+  `scripts/magnetgate-client.service` (Linux systemd template); user configs with PSKs are
+  gitignored (`magnetgate.config.json`).
+
 ## 0.3.0 — 2026-09-11
 - M5: **multiplexed sessions (protocol v2)** — one persistent session to the exit carries every
   SOCKS stream. Frames: `[u32 len][u8 type][u32 streamId][nonce][secretbox]` with

@@ -1,0 +1,9 @@
+{
+  "localPort": 1080,
+  "bootstrap": ["<exit-ip>:20001"],
+  "rules": { "direct": ["ru", "*.local"], "proxy": [] },
+  "exits": [
+    { "name": "nl", "psk": "<psk-hex-or-string>" },
+    { "name": "backup", "psk": "<another-psk>" }
+  ]
+}

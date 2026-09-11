@@ -65,6 +65,31 @@ DNS резолвится на exit'е (SOCKS5-домены), локальное 
 | `MAGNETGATE_SEQ_FILE` | персистентность `seq` (обязательно на exit: рестарты должны инкрементировать) |
 | `MAGNETGATE_RULES` | файл правил split-tunnel |
 
+## Конфигурация и автостарт
+
+Конфиг клиента (`magnetgate.config.json`, пример в `magnetgate.config.example.json`):
+
+```json
+{
+  "localPort": 1080,
+  "bootstrap": ["<exit-ip>:20001"],
+  "rules": { "direct": ["ru"], "proxy": [] },
+  "exits": [
+    { "name": "nl", "psk": "<psk>" },
+    { "name": "backup", "psk": "<другой-psk>" }
+  ]
+}
+```
+
+Несколько exit'ов: клиент находит offer'ы всех exit'ов, SOCKS-стримы раскладывает round-robin'ом
+и автоматически фейловерится на здоровый (мёртвый уходит в cooldown на 30 с).
+
+Автостарт в Windows (планировщик):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-client-windows.ps1 -ConfigPath .\magnetgate.config.json
+```
+Linux-автостарт: `scripts/magnetgate-client.service` (шаблон systemd-юнита).
+
 ## Деплой (pull-based автодеплой)
 
 Сервер сам подтягивает `main` с GitHub (без GitHub Actions и лишних портов):
