@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.env
+.env.*
+key/
+*.pem
+Thumbs.db
+.DS_Store
+
+# internal documentation (not published)
+docs/
