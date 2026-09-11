@@ -1,8 +1,12 @@
 import sodium from 'sodium-universal'
 import crypto from 'node:crypto'
 
+// router.bittorrent.com is listed first because it has an IPv4 address; the others are
+// IPv6-only on some hosts and bittorrent-dht speaks udp4, so an IPv4 node must lead or the
+// DHT fails to bootstrap ("No nodes to query"). A self-hosted node (DHT_BOOTSTRAP env) is
+// still the most reliable option.
 export const BOOTSTRAP = (process.env.DHT_BOOTSTRAP ??
-  'dht.transmissionbt.com:6881,dht.libtorrent.org:25401')
+  'router.bittorrent.com:6881,dht.transmissionbt.com:6881,dht.libtorrent.org:25401')
   .split(',').map(s => s.trim()).filter(Boolean)
 
 export function deriveKeys(secret) {
