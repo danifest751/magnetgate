@@ -141,11 +141,25 @@ function publish() {
   })
 }
 
+let dhtReady = false
 dht.listen(() => console.log(ts(), `[dht] node on port ${dht.address().port}, bootstrap=${BOOTSTRAP.join(',')}`))
 dht.on('ready', () => {
+  dhtReady = true
   setTimeout(publish, 2000)
   setInterval(publish, 5 * 60 * 1000)
 })
+
+// republish promptly when the data-plane file changes (e.g. credential rotation), so clients pick
+// up the new endpoint in seconds instead of waiting for the 5-minute cycle
+if (fs.existsSync(DP_FILE)) {
+  let deb = null
+  try {
+    fs.watch(DP_FILE, () => {
+      clearTimeout(deb)
+      deb = setTimeout(() => { if (dhtReady) { console.log(ts(), '[dht] dp file changed, republishing'); publish() } }, 1000)
+    })
+  } catch (e) { console.log(ts(), `[dht] dp watch unavailable: ${e.message}`) }
+}
 
 // ---------- data plane: multiplexed sessions ----------
 // One transport connection (TCP socket or reliable-UDP stream) = one session. The client
