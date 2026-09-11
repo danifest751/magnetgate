@@ -90,6 +90,17 @@ powershell -ExecutionPolicy Bypass -File scripts\install-client-windows.ps1 -Con
 ```
 Linux-автостарт: `scripts/magnetgate-client.service` (шаблон systemd-юнита).
 
+## Режим системного VPN
+
+Весь системный трафик гонится через клиент `127.0.0.1:1080` утилитой
+[ tun2proxy ](https://github.com/tun2proxy/tun2proxy) (TUN-адаптер, DNS уходит в туннель):
+
+```powershell
+# из PowerShell с правами администратора:
+powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1            # подключить (скачает tun2proxy)
+powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off       # отключить
+```
+
 ## Деплой (pull-based автодеплой)
 
 Сервер сам подтягивает `main` с GitHub (без GitHub Actions и лишних портов):

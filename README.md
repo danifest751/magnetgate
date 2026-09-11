@@ -90,6 +90,18 @@ powershell -ExecutionPolicy Bypass -File scripts\install-client-windows.ps1 -Con
 ```
 Linux autostart: `scripts/magnetgate-client.service` (systemd unit template).
 
+## System-wide VPN mode (Windows)
+
+The SOCKS5 client is the data plane; to route **all system traffic** through it (a real VPN),
+[ tun2proxy ](https://github.com/tun2proxy/tun2proxy) creates a TUN adapter and feeds everything
+into `127.0.0.1:1080` (DNS included, resolved at the exit):
+
+```powershell
+# from an elevated PowerShell
+powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1            # connect (downloads tun2proxy on first run)
+powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off       # disconnect
+```
+
 ## Deployment (pull-based autodeploy)
 
 The VPS pulls `main` from GitHub by itself (no GitHub Actions, no open webhook port):

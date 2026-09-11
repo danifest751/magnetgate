@@ -145,7 +145,7 @@ function handleSession(sock) {
         relays.set(id, udp)
         udp.on('error', () => {})
         udp.on('message', (msg, rinfo) => {
-          console.log(ts(), `[data] udp relay #${id} reply from ${rinfo.address}:${rinfo.port} (${msg.length}b)`)
+          // reply payload: [atyp=1][addr][port][data]
           const payload = Buffer.alloc(7)
           payload[0] = 1
           const ip = rinfo.address.split('.').map(x => parseInt(x, 10) & 0xff)
@@ -154,18 +154,14 @@ function handleSession(sock) {
           try { sock.write(frame2(keys.e2c, FRAME.UDP_DATA, id, Buffer.concat([payload, msg]))) } catch {}
         })
         const first = parseAddr(plain)
-        console.log(ts(), `[data] udp relay #${id} assoc: ${first ? first.host + ':' + first.port + ' (' + first.data.length + 'b)' : 'PARSE FAIL'}`)
         if (first && first.data.length) {
-          try { udp.send(first.data, first.port, first.host) } catch (e) { console.log(ts(), `[data] udp send failed: ${e.message}`) }
+          try { udp.send(first.data, first.port, first.host) } catch {}
         }
       } else if (type === FRAME.UDP_DATA) {
         const udp = relays.get(id)
         if (udp) {
           const dst = parseAddr(plain)
-          console.log(ts(), `[data] udp relay #${id} data: ${dst ? dst.host + ':' + dst.port + ' (' + dst.data.length + 'b)' : 'PARSE FAIL'}`)
           if (dst) { try { udp.send(dst.data, dst.port, dst.host) } catch {} }
-        } else {
-          console.log(ts(), `[data] udp relay #${id} not found`)
         }
       } else if (type === FRAME.UDP_CLOSE) {
         const r = relays.get(id)
