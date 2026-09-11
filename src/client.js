@@ -304,8 +304,10 @@ function udpFn(req, control, sendReply) {
   })
 }
 
+// bind to loopback only — a SOCKS5 server on 0.0.0.0 is an open no-auth proxy for the LAN
+const SOCKS_HOST = process.env.MAGNETGATE_SOCKS_HOST ?? '127.0.0.1'
 startSocks5Server(cfg.localPort, routeFn, udpFn)
-  .listen(cfg.localPort, () => console.log(ts(), `[socks5] listening on 127.0.0.1:${cfg.localPort}`))
+  .listen(cfg.localPort, SOCKS_HOST, () => console.log(ts(), `[socks5] listening on ${SOCKS_HOST}:${cfg.localPort}`))
 
 // optional periodic stats: MAGNETGATE_STATS=<seconds>
 if (process.env.MAGNETGATE_STATS) {
