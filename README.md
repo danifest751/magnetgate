@@ -77,7 +77,7 @@ cp systemd/*.service systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-deploy.timer
 ```
 
-`magnetgate-deploy.timer` runs `scripts/deploy.sh` every 5 minutes: fetch → hard reset to
+`magnetgate-deploy.timer` runs `scripts/deploy.sh` every 3 minutes: fetch → hard reset to
 `origin/main` → `npm install` (only when the lockfile changed) → copy changed systemd units →
 restart services. The public repo requires no credentials; if it ever goes private, add a
 read-only deploy key. Manual trigger: `systemctl start magnetgate-deploy.service`.
