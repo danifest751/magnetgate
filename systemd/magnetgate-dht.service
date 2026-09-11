@@ -7,7 +7,7 @@ Wants=network-online.target
 User=magnetgate
 Group=magnetgate
 WorkingDirectory=/opt/magnetgate
-ExecStart=/usr/bin/node src/dht-node.mjs 20001 dht.transmissionbt.com:6881,dht.libtorrent.org:25401
+ExecStart=/usr/bin/node src/dht-node.mjs 20001 router.bittorrent.com:6881,dht.transmissionbt.com:6881,dht.libtorrent.org:25401
 Restart=always
 RestartSec=5
 
