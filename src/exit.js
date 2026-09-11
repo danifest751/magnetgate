@@ -77,7 +77,9 @@ console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.rem
     try { sock.destroy() } catch {}
   }
 
-  sock.on('data', function onData(chunk) {
+    if (process.env.MAGNETGATE_DEBUG) console.log(ts(), `[dbg-exit] udp session waiting for salt`)
+    sock.on('data', function onData(chunk) {
+      if (process.env.MAGNETGATE_DEBUG && !started) console.log(ts(), `[dbg-exit] chunk ${chunk.length}b (got ${gotSalt.length})`)
     if (started) return
     gotSalt = Buffer.concat([gotSalt, chunk])
     if (gotSalt.length < 8) return
