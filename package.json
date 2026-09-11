@@ -1,6 +1,6 @@
 {
   "name": "magnetgate",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "SOCKS5 tunnel with rendezvous over the BitTorrent Mainline DHT (BEP 44) — no domains, no brokers, no fixed addresses",
   "type": "module",
   "license": "MIT",

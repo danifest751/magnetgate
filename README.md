@@ -74,7 +74,9 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_SOCKS_HOST` | client SOCKS5 bind address (default `127.0.0.1`; do not expose it to the LAN) |
 | `MAGNETGATE_ALLOW_PRIVATE` | exit: `1` allows CONNECT to loopback/link-local/RFC1918 targets (blocked by default — SSRF guard) |
 | `MAGNETGATE_MAX_SESSIONS` / `MAGNETGATE_MAX_STREAMS` | exit resource caps (default 512 sessions / 256 streams per session) |
-| `MAGNETGATE_TRANSPORT` | `tcp` (default) or `udp` (experimental reliable-UDP data transport) |
+| `MAGNETGATE_TRANSPORT` | native channel: `tcp` (default) or `udp` (experimental reliable-UDP) |
+| `MAGNETGATE_DATA_PLANE` | client: `auto` (default — prefer Reality/hysteria2 via sing-box, else native) or `mgt` (native only) |
+| `MAGNETGATE_NOSTR` | `off` disables the Nostr rendezvous channel; `MAGNETGATE_NOSTR_RELAYS` overrides the pool |
 | `MAGNETGATE_STATS` | client: log per-exit traffic counters every N seconds |
 
 ## Configuration and autostart
@@ -158,10 +160,15 @@ enforced by a `commit-msg` hook).
 
 M1–M9 are implemented and tested (see `tests/results.md`): BEP 44 rendezvous, SOCKS5 with remote
 DNS, split tunneling, multiplexed sessions (one persistent session carries all streams, with
-keep-alive), UDP ASSOCIATE relaying and a system-wide VPN mode. The data channel uses a
-forward-secret handshake (ephemeral X25519 authenticated under the PSK) with replay protection;
-the exit runs unprivileged under a systemd sandbox, blocks egress to loopback/link-local/RFC1918
-(SSRF guard) and caps concurrent sessions/streams. Unit tests: `npm test`.
+keep-alive), UDP ASSOCIATE relaying and a system-wide VPN mode.
+
+Rendezvous runs over **two independent channels** (the Mainline DHT and a Nostr relay pool), so
+discovery survives either being blocked. The offer advertises a list of data-plane endpoints; the
+client prefers **Reality (VLESS+Reality) and hysteria2** (run via a bundled sing-box —
+`scripts/get-singbox.ps1`) and **falls back to the native forward-secret channel** (ephemeral X25519
+authenticated under the PSK, with replay protection). The exit runs unprivileged under a systemd
+sandbox, blocks egress to loopback/link-local/RFC1918 (SSRF guard) and caps concurrent
+sessions/streams. Unit tests: `npm test`.
 
 Note: obfuscation is at PoC level — the data channel is only partially camouflaged as the
 BitTorrent family; the DHT platform sees put/get participants' IPs like any ordinary BT node, and
