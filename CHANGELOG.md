@@ -1,7 +1,9 @@
 # Changelog
 
 ## 0.2.0 — 2026-09-11
-- The project renamed to **magnetgate** (formerly oflx-poc); wire prefixes `oflx-*` → `mgt-*`,
+- Pull-based autodeploy on the VPS: a systemd timer (`magnetgate-deploy.timer`) runs
+  `scripts/deploy.sh` every 5 minutes (fetch → reset → conditional deps → restart).
+- Проект переименован в **magnetgate** (ранее oflx-poc); wire-префиксы `oflx-*` → `mgt-*`,
   env `OFLX_*` → `MAGNETGATE_*`.
 - M4: SOCKS5 (RFC 1928, no-auth, CONNECT, domains/IPv4) + split tunneling by rules
   (`MAGNETGATE_RULES`), remote DNS at the exit.
