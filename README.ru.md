@@ -65,6 +65,23 @@ DNS резолвится на exit'е (SOCKS5-домены), локальное 
 | `MAGNETGATE_SEQ_FILE` | персистентность `seq` (обязательно на exit: рестарты должны инкрементировать) |
 | `MAGNETGATE_RULES` | файл правил split-tunnel |
 
+## Деплой (pull-based автодеплой)
+
+Сервер сам подтягивает `main` с GitHub (без GitHub Actions и лишних портов):
+
+```bash
+# корень репозитория == /opt/magnetgate
+git init && git remote add origin https://github.com/danifest751/magnetgate.git
+git fetch origin && git checkout -f main origin/main
+cp systemd/*.service systemd/*.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-deploy.timer
+```
+
+`magnetgate-deploy.timer` каждые 5 минут запускает `scripts/deploy.sh`: fetch → hard reset на
+`origin/main` → `npm install` (только если изменился lockfile) → копирование изменённых
+systemd-юнитов → рестарт сервисов. Репо публичное — pull без ключей; если станет приватным,
+добавьте read-only deploy key. Ручной запуск: `systemctl start magnetgate-deploy`.
+
 ## Документация
 
 Дизайн-заметки, ТЗ, методика испытаний и общий ресёрч лежат во внутренней папке `docs/`, которая

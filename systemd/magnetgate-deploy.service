@@ -1,0 +1,7 @@
+[Unit]
+Description=magnetgate pull-based autodeploy
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/magnetgate/scripts/deploy.sh
