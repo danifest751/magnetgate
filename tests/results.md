@@ -155,3 +155,26 @@ client service-ization (autostart), multi-exit patching.
 - Client launch: `node src/client.js <psk> 1080` (env: `DHT_BOOTSTRAP`, `MAGNETGATE_RULES`).
 
 Russian version: [results.ru.md](results.ru.md).
+
+---
+
+## v0.6.0 — security remediation + forward secrecy (2026-09-12)
+
+Automated: `npm test` (node:test) — **13/13 pass**. Covers key derivation, the secretbox frame
+codec, DATA padding round-trips across lengths 0–5000 (the C2 regression), BEP 44 sign/verify, and
+the forward-secret v3 handshake (matching keys, fresh per-session ephemerals, rejection of a wrong
+PSK / tampered message / replayed message).
+
+| TC | Scenario | Result | Notes |
+|---|---|---|---|
+| C2 | HTTPS through the tunnel (TLS ClientHello ~517 B) | **pass** | was: all HTTPS failed — the 1-byte pad length overflowed and corrupted every DATA frame ≥512 B. Loopback e2e and prod RU→NL: HTTPS 200 |
+| v3 | forward-secret handshake, TCP transport | **pass** | loopback HTTP/HTTPS 200; prod RU→NL egress 194.31.204.95, HTTPS example/youtube 200 |
+| v3 | forward-secret handshake, reliable-UDP transport | **pass** | loopback HTTP/HTTPS 200 |
+| SSRF | CONNECT to 169.254.169.254 (cloud metadata) via the tunnel | **blocked** | exit logs `stream #N blocked 169.254.169.254`; curl code=000 |
+| H1 | client SOCKS5 bind address | **pass** | binds `127.0.0.1` only (was `0.0.0.0`, an open LAN proxy) |
+| deploy | non-root exit, PSK absent from argv | **pass** | exit runs as `magnetgate`; `ps` shows `node src/exit.js` with no secret; no sandbox errors |
+| dht | offer publish after the IPv4-bootstrap fix | **pass** | `[dht] published (n>0)` resumed (was "No nodes to query": IPv6-only public bootstrap vs udp4). Exit bootstraps via its own node `127.0.0.1:20001` |
+
+Environment: client Windows (Node v25) behind a full-tunnel WireGuard; exit Ubuntu 24.04
+(Node v20.20.2), NL 194.31.204.95, systemd sandbox, ufw 49001/tcp+udp + 20000–21000/udp.
+Note: protocol v3 is incompatible with v2 — client and exit were upgraded together.

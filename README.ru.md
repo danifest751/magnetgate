@@ -19,18 +19,23 @@ Exit-нода публикует в публичный DHT подписанны�
 Клиент: get(target) → проверка подписи → расшифровка → connect
 ```
 
-Ключи детерминированно выводятся из PSK (`mgt-sig:` / `mgt-salt:` / `mgt-box:`), поэтому
-никаких доменов, сертификатов, трекеров и брокеров не нужно. Данные — secretbox-фреймы с
-per-connection ключами.
+Ключи идентичности/рандеву детерминированно выводятся из PSK (`mgt-sig:` / `mgt-salt:` /
+`mgt-box:`), поэтому никаких доменов, сертификатов, трекеров и брокеров не нужно. Дальше дата-канал
+проходит **forward-secret хендшейк** — эфемерный X25519, аутентифицированный и зашифрованный под
+PSK, — поэтому ключи сессии эфемерны, и последующая утечка PSK не расшифровывает записанный ранее
+трафик. Данные идут аутентифицированными secretbox-фреймами с паддингом по бакетам.
 
 ## Быстрый старт
 
 **Exit (VPS с публичным IPv4):**
 ```bash
-npm install
-MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq node src/exit.js "<psk>" 49001 <PUBLIC_IP>
+npm ci
+# PSK читается из окружения, чтобы не попадать в argv / вывод ps
+MAGNETGATE_PSK='<psk>' MAGNETGATE_PORT=49001 MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> \
+MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq \
+DHT_BOOTSTRAP=127.0.0.1:20001,router.bittorrent.com:6881 node src/exit.js
 ```
-(продакшн — systemd-юниты в `systemd/`)
+(продакшн — systemd-юниты в `systemd/`, работают под непривилегированным пользователем `magnetgate`)
 
 **Клиент (локальная машина):**
 ```powershell
@@ -61,9 +66,16 @@ DNS резолвится на exit'е (SOCKS5-домены), локальное 
 
 | Переменная | Значение |
 |---|---|
-| `DHT_BOOTSTRAP` | CSV bootstrap-нод; по умолчанию публичные. Рекомендуется свой узел на VPS |
-| `MAGNETGATE_SEQ_FILE` | персистентность `seq` (обязательно на exit: рестарты должны инкрементировать) |
-| `MAGNETGATE_RULES` | файл правил split-tunnel |
+| `MAGNETGATE_PSK` | PSK exit'а из окружения, чтобы не попадать в argv/`ps` (argv — запасной вариант) |
+| `MAGNETGATE_PORT` / `MAGNETGATE_PUBLIC_HOST` | порт дата-канала и публичный хост, объявляемый в offer |
+| `DHT_BOOTSTRAP` | CSV bootstrap-нод. **Первой ставьте IPv4-ноду** — `dht.transmissionbt.com`/`dht.libtorrent.org` на части хостов резолвятся только в IPv6, а bittorrent-dht работает по udp4. Свой узел (`127.0.0.1:20001` на exit, `<exit-ip>:20001` на клиенте) — самый надёжный вариант |
+| `MAGNETGATE_SEQ_FILE` | персистентность `seq` (обязательно на exit: рестарты должны инкрементировать, иначе нонс offer может повториться) |
+| `MAGNETGATE_RULES` | файл правил split-tunnel (клиент) |
+| `MAGNETGATE_SOCKS_HOST` | адрес bind SOCKS5-клиента (по умолчанию `127.0.0.1`; не открывайте в LAN) |
+| `MAGNETGATE_ALLOW_PRIVATE` | exit: `1` разрешает CONNECT к loopback/link-local/RFC1918 (по умолчанию заблокировано — защита от SSRF) |
+| `MAGNETGATE_MAX_SESSIONS` / `MAGNETGATE_MAX_STREAMS` | лимиты exit'а (по умолчанию 512 сессий / 256 стримов на сессию) |
+| `MAGNETGATE_TRANSPORT` | `tcp` (по умолчанию) или `udp` (экспериментальный reliable-UDP транспорт) |
+| `MAGNETGATE_STATS` | клиент: логировать счётчики трафика по exit'ам каждые N секунд |
 
 ## Конфигурация и автостарт
 
@@ -109,13 +121,28 @@ powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off       # о
 # корень репозитория == /opt/magnetgate
 git init && git remote add origin https://github.com/danifest751/magnetgate.git
 git fetch origin && git checkout -f main origin/main
+
+# непривилегированный сервисный пользователь + каталог состояния + файл секретов/конфига (не в git)
+useradd --system --no-create-home --shell /usr/sbin/nologin magnetgate
+install -d -o magnetgate -g magnetgate -m 750 /var/lib/magnetgate
+umask 077 && cat > /etc/magnetgate.env <<'ENV'
+PSK=<ваш-128-битный-psk>
+MAGNETGATE_PORT=49001
+MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP>
+DHT_BOOTSTRAP=127.0.0.1:20001,router.bittorrent.com:6881
+ENV
+chown root:magnetgate /etc/magnetgate.env && chmod 640 /etc/magnetgate.env
+
 cp systemd/*.service systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-deploy.timer
 ```
 
 `magnetgate-deploy.timer` каждые 3 минуты запускает `scripts/deploy.sh`: fetch → hard reset на
-`origin/main` → `npm install` (только если изменился lockfile) → копирование изменённых
-systemd-юнитов → рестарт сервисов. Репо публичное — pull без ключей; если станет приватным,
+`origin/main` → `npm ci` (только если изменился lockfile) → копирование изменённых systemd-юнитов
+→ рестарт сервисов. Exit и DHT работают под непривилегированным пользователем `magnetgate` в
+песочнице systemd (`NoNewPrivileges`, `ProtectSystem=strict`, сброшенные capabilities). Файл
+`/opt/magnetgate/.deploy-verify` заставит деплой требовать подписанный коммит (`git verify-commit`)
+перед запуском нового кода от root. Репо публичное — pull без ключей; если станет приватным,
 добавьте read-only deploy key. Ручной запуск: `systemctl start magnetgate-deploy`.
 
 ## Документация
@@ -127,12 +154,17 @@ systemd-юнитов → рестарт сервисов. Репо публич�
 
 ## Статус и ограничения
 
-M1–M5 выполнены и испытаны (см. `tests/results.md`). Дальше: uTP/KCP дата-план,
-мультипатчинг нескольких exit'ов, сервис-изация клиента.
+M1–M9 выполнены и испытаны (см. `tests/results.md`): BEP 44 рандеву, SOCKS5 с удалённым DNS,
+split-tunneling, мультиплексные сессии (одна постоянная сессия несёт все стримы, keep-alive),
+UDP ASSOCIATE-релей и системный VPN-режим. Дата-канал использует forward-secret хендшейк
+(эфемерный X25519, аутентифицированный под PSK) с защитой от replay; exit работает
+непривилегированно в песочнице systemd, блокирует egress на loopback/link-local/RFC1918 (защита
+от SSRF) и ограничивает число сессий/стримов. Юнит-тесты: `npm test`.
 
 Важно: PoC-уровень обфускации — дата-канал маскируется под BitTorrent-семейство лишь частично;
-провайдер сервиса (DHT) видит IP-адреса участников put/get как обычный BT-узел. Используйте на
-свою ответственность и в рамках законов вашей юрисдикции.
+провайдер сервиса (DHT) видит IP-адреса участников put/get как обычный BT-узел, а target рандеву
+выводится из PSK (тот, кто знает — или сбрутит слабый — PSK, найдёт exit). Используйте случайный
+PSK ≥128 бит. Используйте на свою ответственность и в рамках законов вашей юрисдикции.
 
 ## Дисклеймер
 
