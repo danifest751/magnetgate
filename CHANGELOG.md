@@ -5,8 +5,14 @@
   VPN mode. Tunnel UDP payload format: `[atyp][addr][port][data]` in both directions.
 - M8: **system-wide VPN mode** — `scripts/vpn-windows.ps1` wires a tun2proxy TUN adapter to the
   client's SOCKS5 port (all system traffic, DNS resolved at the exit).
+- Experimental UDP data transport (`MAGNETGATE_TRANSPORT=udp`): a pure-JS reliable ordered
+  stream over UDP (ARQ: seq/ack, per-packet RTO with backoff, 64-packet window, HELLO
+  handshake). TCP remains the default and the fallback.
 - Verified end-to-end: a raw DNS query to 1.1.1.1:53 through the tunnel from a filtered network
   returns a valid answer relayed by the VPS exit.
+- Known issue: with a full-tunnel WireGuard in front of the client, the reliable-UDP return
+  traffic (exit → client) can be dropped by the WG chain's NAT/splitter — the local path works,
+  the TCP fallback covers it.
 
 ## 0.4.0 — 2026-09-11
 - M6: **multi-exit client with failover** — a config file (`magnetgate.config.json`) lists several
@@ -16,6 +22,9 @@
 - Client service-ization: `scripts/install-client-windows.ps1` (scheduled task at logon) and
   `scripts/magnetgate-client.service` (Linux systemd template); user configs with PSKs are
   gitignored (`magnetgate.config.json`).
+- Traffic masking: DATA frame sizes are padded and quantized to buckets (64–4096) so wire sizes
+  do not reveal the payload shape.
+- Optional metrics: `MAGNETGATE_STATS=<seconds>` logs per-exit traffic counters.
 
 ## 0.3.0 — 2026-09-11
 - M5: **multiplexed sessions (protocol v2)** — one persistent session to the exit carries every
