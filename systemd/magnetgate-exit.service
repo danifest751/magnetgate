@@ -1,0 +1,16 @@
+[Unit]
+Description=magnetgate exit (DHT signaling + data)
+After=network-online.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/magnetgate
+EnvironmentFile=/etc/magnetgate.env
+Environment=NODE_ENV=production
+Environment=MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq
+ExecStart=/usr/bin/node src/exit.js ${PSK} 49001 <exit-ip>
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

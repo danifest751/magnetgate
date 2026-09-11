@@ -1,0 +1,13 @@
+[Unit]
+Description=magnetgate self-hosted DHT bootstrap node
+After=network-online.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/magnetgate
+ExecStart=/usr/bin/node src/dht-node.mjs 20001 dht.transmissionbt.com:6881,dht.libtorrent.org:25401
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
