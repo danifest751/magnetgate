@@ -10,7 +10,6 @@
 import dgram from 'node:dgram'
 import { EventEmitter } from 'node:events'
 import crypto from 'node:crypto'
-import { connKeys } from './common.mjs'
 
 const MAGIC = 0x4d
 export const UDP_CMD = { HELLO: 1, HELLO_ACK: 2, PSH: 3, ACK: 4 }
@@ -75,9 +74,10 @@ export class ReliableStream extends EventEmitter {
     }
   }
 
-  // client side only: begin the HELLO handshake
-  startHello(connSalt) {
-    this.helloWait = connSalt
+  // client side only: begin the HELLO handshake (transport bring-up only; the
+  // forward-secret key exchange runs at the application layer over this stream)
+  startHello() {
+    this.helloWait = Buffer.alloc(0)
     this.helloSentAt = now()
     this.onTick()
   }
@@ -169,14 +169,12 @@ export class ReliableStream extends EventEmitter {
 }
 
 // Client side: HELLO handshake against a known exit UDP endpoint.
-export function createClientUdpStream({ remote, boxKey }) {
+export function createClientUdpStream({ remote }) {
   return new Promise((resolve, reject) => {
     const udp = dgram.createSocket('udp4')
     const conv = crypto.randomBytes(4).readUInt32BE(0)
-    const connSalt = crypto.randomBytes(8)
     const rremote = { host: remote.host, port: remote.port }
     const stream = new ReliableStream(udp, rremote, conv)
-    stream.keys = connKeys(boxKey, connSalt)
 
     const dbg = (...a) => { if (process.env.MAGNETGATE_DEBUG) console.log(...a) }
     udp.on('message', (msg, rinfo) => {
@@ -191,7 +189,7 @@ export function createClientUdpStream({ remote, boxKey }) {
     stream.once('ready', () => { dbg('[dbg] ready'); clearTimeout(t); resolve(stream) })
     stream.once('close', () => { dbg('[dbg] stream closed'); clearTimeout(t); reject(new Error('closed during handshake')) })
 
-    stream.startHello(connSalt)
+    stream.startHello()
   })
 }
 
@@ -214,12 +212,11 @@ export class ExitUdpMux {
     const payload = msg.subarray(10)
     if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-exit] datagram conv=${conv} cmd=${cmd} from ${rinfo.address}:${rinfo.port} (${payload.length}b)`)
 
-    if (cmd === UDP_CMD.HELLO && payload.length === 8) {
+    if (cmd === UDP_CMD.HELLO) {
       sendDatagram(this.udp, encode(conv, UDP_CMD.HELLO_ACK, 0), rinfo)
       if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-exit] HELLO_ACK sent to ${rinfo.address}:${rinfo.port}`)
       if (!this.streams.has(key)) {
         const stream = new ReliableStream(this.udp, { host: rinfo.address, port: rinfo.port }, conv)
-        stream.keys = connKeys(this.boxKey, payload)
         stream.ready = true
         this.streams.set(key, { stream })
         stream.on('close', () => { if (this.streams.get(key)?.stream === stream) this.streams.delete(key) })

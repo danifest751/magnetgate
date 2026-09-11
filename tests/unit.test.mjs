@@ -5,6 +5,7 @@ import crypto from 'node:crypto'
 import {
   deriveKeys, saltOf, targetOf, signer, bep44Verify,
   seal, unseal, connKeys, frame2, makeCodecV2, FRAME,
+  hsClientInit, hsExitRespond, hsClientFinish,
 } from '../src/common.mjs'
 
 const KEY = crypto.randomBytes(32)
@@ -108,4 +109,47 @@ test('BEP44 sign/verify and target derivation', () => {
   assert.equal(bep44Verify(sig, bad, pk), false)
   assert.equal(bep44Verify(sig, value, crypto.randomBytes(32)), false)
   assert.equal(targetOf(pk, saltOf('psk-abc')).length, 20)
+})
+
+test('forward-secret handshake: client and exit derive matching keys', () => {
+  const { boxKey } = deriveKeys('hs-psk')
+  const init = hsClientInit(boxKey)
+  const resp = hsExitRespond(boxKey, init.msg1)
+  assert.ok(resp, 'exit must accept a valid msg1')
+  const fin = hsClientFinish(boxKey, resp.msg2, init.ceSk, init.cePk)
+  assert.ok(fin, 'client must accept a valid msg2')
+  assert.ok(resp.keys.c2e.equals(fin.keys.c2e), 'c2e must match')
+  assert.ok(resp.keys.e2c.equals(fin.keys.e2c), 'e2c must match')
+  // a real DATA frame round-trips across the negotiated keys
+  const payload = crypto.randomBytes(1500)
+  let got = null
+  makeCodecV2(resp.keys.c2e, (t, id, p) => { got = p }, () => {}).push(frame2(fin.keys.c2e, FRAME.DATA, 1, payload))
+  assert.ok(got && got.equals(payload))
+})
+
+test('forward secrecy: every session negotiates fresh ephemeral keys', () => {
+  const { boxKey } = deriveKeys('hs-psk')
+  const a = hsExitRespond(boxKey, hsClientInit(boxKey).msg1)
+  const b = hsExitRespond(boxKey, hsClientInit(boxKey).msg1)
+  assert.ok(!a.keys.c2e.equals(b.keys.c2e), 'two sessions must not share keys')
+})
+
+test('handshake rejects wrong PSK and tampering', () => {
+  const { boxKey } = deriveKeys('hs-psk')
+  const wrong = deriveKeys('other-psk').boxKey
+  const init = hsClientInit(boxKey)
+  assert.equal(hsExitRespond(wrong, init.msg1), null, 'wrong PSK must be rejected')
+  const bad = Buffer.from(init.msg1); bad[30] ^= 0xff
+  assert.equal(hsExitRespond(boxKey, bad), null, 'tampered msg1 must be rejected')
+  const resp = hsExitRespond(boxKey, init.msg1)
+  const badMsg2 = Buffer.from(resp.msg2); badMsg2[30] ^= 0xff
+  assert.equal(hsClientFinish(boxKey, badMsg2, init.ceSk, init.cePk), null, 'tampered msg2 must be rejected')
+})
+
+test('handshake exposes a stable client ephemeral key for replay detection', () => {
+  const { boxKey } = deriveKeys('hs-psk')
+  const init = hsClientInit(boxKey)
+  const r1 = hsExitRespond(boxKey, init.msg1)
+  const r2 = hsExitRespond(boxKey, init.msg1) // replay of the same msg1
+  assert.ok(r1.cePk.equals(r2.cePk), 'replayed msg1 yields the same cePk so the caller cache blocks it')
 })
