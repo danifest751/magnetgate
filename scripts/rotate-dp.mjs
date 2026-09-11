@@ -40,7 +40,16 @@ if (fs.existsSync(KEEP)) {
   writeJson(KEEP, keep); chmodGrp(KEEP, 'sing-box')
 }
 
-const prev = fs.existsSync(STATE) ? readJson(STATE) : null
+let prev = fs.existsSync(STATE) ? readJson(STATE) : null
+// first run (no state): seed the grace slot from the currently-advertised generation so the
+// pre-existing credentials keep working through the first rotation too
+if (!prev) {
+  try {
+    const dpNow = readJson(DP).dp
+    const r = dpNow.find((d) => d.t === 'reality'); const h = dpNow.find((d) => d.t === 'hy2')
+    if (r && h) prev = { uuid: r.uuid, sid: r.sid, pw: h.pw }
+  } catch {}
+}
 const gen = { uuid: crypto.randomUUID(), sid: crypto.randomBytes(8).toString('hex'), pw: crypto.randomBytes(16).toString('hex') }
 
 const uuids = [gen.uuid, ...(prev ? [prev.uuid] : [])]
