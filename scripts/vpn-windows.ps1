@@ -10,7 +10,12 @@ param(
   [string]$Version = 'v0.6.5',
   # SHA-256 of tun2proxy-x86_64-pc-windows-msvc.zip for the pinned $Version (verified 2026-09-12).
   # For any other $Version you MUST pass the matching -Sha256, or the download is rejected.
-  [string]$Sha256 = '88f358b30ccf69f8439918e1f805b3482f2b033ff073a82e819ec532aa05c0d1'
+  [string]$Sha256 = '88f358b30ccf69f8439918e1f805b3482f2b033ff073a82e819ec532aa05c0d1',
+  # IPs to keep OFF the tunnel. The magnetgate client's own uplink to the exit/DHT must bypass the
+  # TUN — otherwise that connection is captured and looped back into 127.0.0.1:1080 and nothing
+  # connects. Auto-filled from the config bootstrap; add the exit IP here if it is not there.
+  [string[]]$Bypass = @(),
+  [string]$ConfigPath = (Join-Path (Split-Path $PSScriptRoot -Parent) 'magnetgate.config.json')
 )
 $ErrorActionPreference = 'Stop'
 $tools = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\tun2proxy'
@@ -43,6 +48,30 @@ if (-not (Test-Path (Join-Path $tools 'tun2proxy-bin.exe'))) {
   Remove-Item $zip -Force -ErrorAction SilentlyContinue
 }
 
+# Build the bypass list: the client's own path to the exit/DHT must not go through the TUN, or the
+# uplink loops back into 127.0.0.1:1080. Pull IP-literal bootstrap hosts from the config and merge
+# any -Bypass the caller passed.
+$bypassIps = New-Object System.Collections.Generic.List[string]
+foreach ($b in $Bypass) { if ($b) { [void]$bypassIps.Add($b) } }
+if (Test-Path $ConfigPath) {
+  try {
+    $cfg = Get-Content $ConfigPath -Raw | ConvertFrom-Json
+    foreach ($entry in @($cfg.bootstrap)) {
+      $h = ([string]$entry -split ':')[0]
+      if ($h -match '^\d{1,3}(\.\d{1,3}){3}$') { [void]$bypassIps.Add($h) }
+    }
+  } catch { Write-Warning "could not parse $ConfigPath for bypass IPs: $($_.Exception.Message)" }
+}
+$bypassIps = @($bypassIps | Select-Object -Unique)
+if ($bypassIps.Count -eq 0) {
+  Write-Warning 'No exit/DHT IP to bypass was found (config bootstrap has no IP literal). If the tunnel does not come up, re-run with -Bypass <exit-ip> — otherwise the client uplink loops through the TUN.'
+} else {
+  Write-Host ("bypassing (kept off the tunnel): " + ($bypassIps -join ', '))
+}
+
+$t2pArgs = @('--setup', '--proxy', 'socks5://127.0.0.1:1080')
+foreach ($ip in $bypassIps) { $t2pArgs += @('--bypass', $ip) }
+
 Write-Host 'starting tun2proxy (all traffic -> 127.0.0.1:1080 -> DHT tunnel -> exit)...'
 Write-Host 'stop with: powershell -File scripts\vpn-windows.ps1 -Off   (or Ctrl+C here)'
-& (Join-Path $tools 'tun2proxy-bin.exe') --setup --proxy socks5://127.0.0.1:1080
+& (Join-Path $tools 'tun2proxy-bin.exe') @t2pArgs
