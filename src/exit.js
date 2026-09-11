@@ -1,22 +1,81 @@
 #!/usr/bin/env node
-// node src/exit.js <psk> [dataPort] [publicHost]
+// node src/exit.js [psk] [dataPort] [publicHost]
+// Secrets/config are read from the environment first (so the PSK never lands on the process
+// command line / ps output), falling back to argv for ad-hoc local runs:
+//   MAGNETGATE_PSK, MAGNETGATE_PORT, MAGNETGATE_PUBLIC_HOST
 import DHT from 'bittorrent-dht'
 import net from 'node:net'
 import dgram from 'node:dgram'
 import os from 'node:os'
 import fs from 'node:fs'
+import dns from 'node:dns'
 import {
   deriveKeys, saltOf, signer, seal, connKeys, frame2, makeCodecV2, FRAME,
   bep44Verify, BOOTSTRAP,
 } from './common.mjs'
 
-const SECRET = process.argv[2]
-const DATA_PORT = parseInt(process.argv[3] ?? '49001')
-const PUBLIC_HOST = process.argv[4] ?? null
+const SECRET = process.env.MAGNETGATE_PSK ?? process.env.PSK ?? process.argv[2]
+const DATA_PORT = parseInt(process.env.MAGNETGATE_PORT ?? process.argv[3] ?? '49001')
+const PUBLIC_HOST = process.env.MAGNETGATE_PUBLIC_HOST ?? process.argv[4] ?? null
 const SEQ_FILE = process.env.MAGNETGATE_SEQ_FILE ?? null
 const ts = () => new Date().toISOString()
 
-if (!SECRET) { console.error('usage: node src/exit.js <psk> [dataPort] [publicHost]'); process.exit(1) }
+if (!SECRET) { console.error('usage: MAGNETGATE_PSK=<psk> node src/exit.js [dataPort] [publicHost]'); process.exit(1) }
+
+// ---------- resource limits (DoS guardrails) ----------
+const MAX_SESSIONS = parseInt(process.env.MAGNETGATE_MAX_SESSIONS ?? '512')
+const MAX_STREAMS = parseInt(process.env.MAGNETGATE_MAX_STREAMS ?? '256') // per session (TCP + UDP)
+const IDLE_SESSION_MS = 10 * 60 * 1000
+let sessionCount = 0
+
+// ---------- egress filter (SSRF guard) ----------
+// A client with the PSK could otherwise make the exit connect to loopback, link-local
+// (incl. 169.254.169.254 cloud metadata) or RFC1918 hosts. Blocked by default.
+const ALLOW_PRIVATE = process.env.MAGNETGATE_ALLOW_PRIVATE === '1'
+function isBlockedIp(ip) {
+  if (typeof ip !== 'string' || !ip) return true
+  let s = ip
+  if (s.startsWith('::ffff:') && s.includes('.')) s = s.slice(7) // IPv4-mapped IPv6
+  if (net.isIPv4(s)) {
+    const [a, b] = s.split('.').map(Number)
+    if (a === 0 || a === 127 || a === 10) return true            // this-host, loopback, RFC1918
+    if (a === 172 && b >= 16 && b <= 31) return true             // RFC1918
+    if (a === 192 && b === 168) return true                      // RFC1918
+    if (a === 169 && b === 254) return true                      // link-local + cloud metadata
+    if (a === 100 && b >= 64 && b <= 127) return true            // CGNAT
+    if (a === 192 && b === 0) return true                        // 192.0.0.0/24 special
+    if (a === 198 && (b === 18 || b === 19)) return true         // benchmarking
+    if (a >= 224) return true                                    // multicast + reserved
+    return false
+  }
+  const l = s.toLowerCase()
+  if (l === '::' || l === '::1') return true                     // unspecified, loopback
+  if (l.startsWith('fe8') || l.startsWith('fe9') || l.startsWith('fea') || l.startsWith('feb')) return true // fe80::/10
+  if (l.startsWith('fc') || l.startsWith('fd')) return true      // fc00::/7 ULA
+  return false
+}
+// custom lookup for net.connect: resolve, then reject internal targets (covers hostnames too).
+// net.connect uses Happy Eyeballs (autoSelectFamily) and calls this with { all: true }, in which
+// case dns.lookup yields an array of { address, family } — handle both shapes.
+function guardedLookup(hostname, options, cb) {
+  const all = !!(options && options.all)
+  if (net.isIP(hostname)) {
+    const fam = net.isIPv6(hostname) ? 6 : 4
+    if (!ALLOW_PRIVATE && isBlockedIp(hostname)) return cb(new Error(`blocked target ${hostname}`))
+    return all ? cb(null, [{ address: hostname, family: fam }]) : cb(null, hostname, fam)
+  }
+  dns.lookup(hostname, options, (err, address, family) => {
+    if (err) return cb(err)
+    if (all) {
+      const list = Array.isArray(address) ? address : [{ address, family }]
+      const allowed = ALLOW_PRIVATE ? list : list.filter(a => !isBlockedIp(a.address))
+      if (!allowed.length) return cb(new Error(`blocked target ${hostname} (all addresses internal)`))
+      return cb(null, allowed)
+    }
+    if (!ALLOW_PRIVATE && isBlockedIp(address)) return cb(new Error(`blocked target ${hostname} -> ${address}`))
+    cb(null, address, family)
+  })
+}
 
 const { pk, sk, boxKey } = deriveKeys(SECRET)
 const SALT = saltOf(SECRET)
@@ -58,73 +117,80 @@ dht.on('ready', () => {
 })
 
 // ---------- data plane: multiplexed sessions ----------
-// One TCP connection = one session. Frames carry streamId; each OPEN stream maps
-// to one upstream TCP connection. streamId 0 is session-level (PING/PONG).
-
-const IDLE_SESSION_MS = 10 * 60 * 1000
-
+// One transport connection (TCP socket or reliable-UDP stream) = one session. The client
+// sends an 8-byte connSalt first; both sides derive the per-connection keys from it.
+// Frames carry a streamId; each OPEN maps to one upstream TCP connection. streamId 0 is
+// session-level (PING/PONG).
 function handleSession(sock) {
-if (sock.setKeepAlive) sock.setKeepAlive(true, 15000)
-console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.remotePort ?? ''}`)
+  if (sessionCount >= MAX_SESSIONS) { try { sock.destroy() } catch {}; return }
+  sessionCount++
+  if (sock.setKeepAlive) sock.setKeepAlive(true, 15000)
+  console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.remotePort ?? ''} (active=${sessionCount})`)
+
   let gotSalt = Buffer.alloc(0)
   let started = false
-  const streams = new Map() // streamId -> upstream socket
+  let closed = false
+  const streams = new Map() // streamId -> upstream TCP socket
+  const relays = new Map()  // streamId -> udp socket (UDP ASSOCIATE)
   let lastActivity = Date.now()
+  let idle = null
 
   const killSession = () => {
+    if (closed) return
+    closed = true
+    sessionCount = Math.max(0, sessionCount - 1)
+    if (idle) clearInterval(idle)
     for (const up of streams.values()) { try { up.destroy() } catch {} }
     streams.clear()
+    for (const u of relays.values()) { try { u.close() } catch {} }
+    relays.clear()
     try { sock.destroy() } catch {}
   }
 
-    if (process.env.MAGNETGATE_DEBUG) console.log(ts(), `[dbg-exit] udp session waiting for salt`)
-    sock.on('data', function onData(chunk) {
-      if (process.env.MAGNETGATE_DEBUG && !started) console.log(ts(), `[dbg-exit] chunk ${chunk.length}b (got ${gotSalt.length})`)
+  // parse a tunnel UDP payload starting at ATYP: [atyp][addr][port][data]
+  const parseAddr = (payload) => {
+    const at = payload[0]
+    if (at === 1 && payload.length >= 7) {
+      const addr = [...payload.subarray(1, 5)].join('.')
+      return { host: addr, port: payload.readUInt16BE(5), data: payload.subarray(7) }
+    }
+    if (at === 3 && payload.length >= 4) {
+      const dl = payload[1]
+      if (payload.length < 4 + dl) return null
+      const host = payload.toString('latin1', 2, 2 + dl)
+      return { host, port: payload.readUInt16BE(2 + dl), data: payload.subarray(4 + dl) }
+    }
+    if (at === 4 && payload.length >= 19) {
+      const host = [...payload.subarray(1, 17)].map(b => b.toString(16)).join(':')
+      return { host, port: payload.readUInt16BE(17), data: payload.subarray(19) }
+    }
+    return null
+  }
+
+  const onData = (chunk) => {
     if (started) return
     gotSalt = Buffer.concat([gotSalt, chunk])
     if (gotSalt.length < 8) return
     started = true
     const rest = gotSalt.subarray(8)
     const keys = connKeys(boxKey, gotSalt.subarray(0, 8))
-    const streams = new Map() // streamId -> upstream TCP socket
-    const relays = new Map()  // streamId -> udp socket (UDP ASSOCIATE)
-    let lastActivity = Date.now()
-
-    const killSession = () => {
-      for (const up of streams.values()) { try { up.destroy() } catch {} }
-      streams.clear()
-      for (const u of relays.values()) { try { u.close() } catch {} }
-      relays.clear()
-      try { sock.destroy() } catch {}
-    }
-
-    // parse a tunnel UDP payload starting at ATYP: [atyp][addr][port][data]
-    const parseAddr = (payload) => {
-      const at = payload[0]
-      if (at === 1 && payload.length >= 7) {
-        const addr = [...payload.subarray(1, 5)].join('.')
-        return { host: addr, port: payload.readUInt16BE(5), data: payload.subarray(7) }
-      }
-      if (at === 3 && payload.length >= 4) {
-        const dl = payload[1]
-        if (payload.length < 4 + dl) return null
-        const host = payload.toString('latin1', 2, 2 + dl)
-        return { host, port: payload.readUInt16BE(2 + dl), data: payload.subarray(4 + dl) }
-      }
-      if (at === 4 && payload.length >= 19) {
-        const host = [...payload.subarray(1, 17)].map(b => b.toString(16)).join(':')
-        return { host, port: payload.readUInt16BE(17), data: payload.subarray(19) }
-      }
-      return null
-    }
 
     const codec = makeCodecV2(keys.c2e, (type, id, plain) => {
       lastActivity = Date.now()
       if (type === FRAME.OPEN) {
-        if (streams.has(id)) return sock.destroy()
-        const cmd = JSON.parse(plain.toString())
+        if (streams.has(id)) return killSession()
+        if (streams.size + relays.size >= MAX_STREAMS) return
+        let cmd
+        try { cmd = JSON.parse(plain.toString()) } catch { return } // malformed OPEN: ignore, don't crash
+        if (!cmd || typeof cmd.host !== 'string' || !Number.isInteger(cmd.port)) return
+        // literal IP targets bypass net.connect's custom lookup, so screen them here too
+        if (!ALLOW_PRIVATE && net.isIP(cmd.host) && isBlockedIp(cmd.host)) {
+          console.log(ts(), `[data] stream #${id} blocked ${cmd.host}:${cmd.port}`)
+          try { sock.write(frame2(keys.e2c, FRAME.CLOSE, id, Buffer.alloc(0))) } catch {}
+          return
+        }
         console.log(ts(), `[data] stream #${id} CONNECT ${cmd.host}:${cmd.port}`)
-        const up = net.connect(cmd.port, cmd.host)
+        const up = net.connect({ port: cmd.port, host: cmd.host, lookup: guardedLookup })
         up.setKeepAlive(true, 15000)
         streams.set(id, up)
         up.on('data', (d) => { try { sock.write(frame2(keys.e2c, FRAME.DATA, id, d)) } catch {} })
@@ -142,7 +208,8 @@ console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.rem
         const r = relays.get(id)
         if (r) { relays.delete(id); try { r.close() } catch {} }
       } else if (type === FRAME.UDP_ASSOC) {
-        if (relays.has(id)) return sock.destroy()
+        if (relays.has(id)) return killSession()
+        if (streams.size + relays.size >= MAX_STREAMS) return
         const udp = dgram.createSocket('udp4')
         relays.set(id, udp)
         udp.on('error', () => {})
@@ -156,14 +223,14 @@ console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.rem
           try { sock.write(frame2(keys.e2c, FRAME.UDP_DATA, id, Buffer.concat([payload, msg]))) } catch {}
         })
         const first = parseAddr(plain)
-        if (first && first.data.length) {
+        if (first && first.data.length && (ALLOW_PRIVATE || !isBlockedIp(first.host))) {
           try { udp.send(first.data, first.port, first.host) } catch {}
         }
       } else if (type === FRAME.UDP_DATA) {
         const udp = relays.get(id)
         if (udp) {
           const dst = parseAddr(plain)
-          if (dst) { try { udp.send(dst.data, dst.port, dst.host) } catch {} }
+          if (dst && (ALLOW_PRIVATE || !isBlockedIp(dst.host))) { try { udp.send(dst.data, dst.port, dst.host) } catch {} }
         }
       } else if (type === FRAME.UDP_CLOSE) {
         const r = relays.get(id)
@@ -171,22 +238,23 @@ console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.rem
       } else if (type === FRAME.PING) {
         try { sock.write(frame2(keys.e2c, FRAME.PONG, 0, plain)) } catch {}
       }
-    }, () => { killSession() })
-    sock.removeListener('data', onData)
+    }, () => killSession())
+
     sock.on('data', (c) => codec.push(c))
     sock.on('error', () => {})
     if (rest.length) codec.push(rest)
 
-    const idle = setInterval(() => {
+    idle = setInterval(() => {
       if (Date.now() - lastActivity > IDLE_SESSION_MS) {
         console.log(ts(), `[data] session idle, closing`)
         killSession()
-        clearInterval(idle)
       }
     }, 60 * 1000)
-    sock.on('close', () => clearInterval(idle))
-  })
+  }
+
+  sock.on('data', onData)
   sock.on('error', () => {})
+  sock.on('close', () => killSession())
 }
 
 net.createServer(handleSession).listen(DATA_PORT, () => console.log(ts(), `[data] listening on ${DATA_PORT}`))
