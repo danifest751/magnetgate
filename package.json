@@ -10,7 +10,8 @@
   "scripts": {
     "exit": "node src/exit.js",
     "client": "node src/client.js",
-    "dht": "node src/dht-node.mjs"
+    "dht": "node src/dht-node.mjs",
+    "test": "node --test tests/unit.test.mjs"
   },
   "dependencies": {
     "bittorrent-dht": "^11.0.12",
