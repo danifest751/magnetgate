@@ -50,7 +50,7 @@ const exits = cfg.exits.map((e, i) => {
   const w = pskWarning(e.psk); if (w) console.log(ts(), `[warn] exit ${e.name ?? i}: ${w}`)
   const { pk, boxKey } = deriveKeys(e.psk)
   const salt = e.salt ? Buffer.from(e.salt, 'hex') : saltOf(e.psk)
-  return { id: i, name: e.name ?? `exit${i}`, pk, boxKey, salt, target: targetOf(pk, salt), offer: null }
+  return { id: i, name: e.name ?? `exit${i}`, psk: e.psk, pk, boxKey, salt, target: targetOf(pk, salt), offer: null }
 })
 
 const dht = new DHT({ bootstrap: cfg.bootstrap, verify: bep44Verify })
@@ -60,11 +60,38 @@ const fresh = (e) =>
   (e.offer && Date.now() - e.offer.ts < OFFER_TTL_MS && (!e.cooldownUntil || Date.now() > e.cooldownUntil))
     ? e.offer : null
 
+// offer v3 carries a list of data-plane endpoints; pick the preferred one the client can use.
+// Reality/hysteria2 are added in a later phase; for now only the native "mgt" channel is usable.
+const DP_PREFERENCE = ['mgt']
+function pickDataPlane(o) {
+  for (const t of DP_PREFERENCE) { const d = o?.dp?.find((x) => x.t === t); if (d) return d }
+  return null
+}
+
+// accept an offer from any rendezvous channel (DHT or Nostr), dedup by ts
+function handleOffer(e, o) {
+  if (!o || o.v !== 3 || typeof o.ts !== 'number') return
+  if (Date.now() - o.ts >= OFFER_TTL_MS) return
+  const dp = pickDataPlane(o)
+  if (!dp) return
+  const isNew = !e.offer || e.offer.ts !== o.ts
+  e.offer = o
+  if (isNew) console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port}`)
+}
+
 dht.listen(() => console.log(ts(), `[dht] node on port ${dht.address().port}, bootstrap=${cfg.bootstrap.join(',')}`))
 dht.on('ready', () => {
   lookupAll()
   setInterval(lookupAll, 3000)
 })
+
+// second rendezvous channel: Nostr (push, instant), independent of the DHT
+if (process.env.MAGNETGATE_NOSTR !== 'off') {
+  import('./nostr.mjs').then(({ nostrSubscriber }) => {
+    for (const e of exits) e.nostr = nostrSubscriber(e.psk, e.boxKey, (o) => handleOffer(e, o))
+    console.log(ts(), `[nostr] subscribed for ${exits.length} exit(s)`)
+  }).catch((err) => console.log(ts(), `[nostr] disabled: ${err.message}`))
+}
 
 function lookupAll() {
   for (const e of exits) {
@@ -73,14 +100,7 @@ function lookupAll() {
       if (err || !res?.v) return
       const plain = unseal(e.boxKey, res.v, res.seq)
       if (!plain) return
-      try {
-        const o = JSON.parse(plain.toString())
-        if (o.v === 2 && Date.now() - o.ts < OFFER_TTL_MS) {
-          const isNew = !e.offer || e.offer.ts !== o.ts
-          e.offer = o
-          if (isNew) console.log(ts(), `[dht] offer[${e.name}]: ${o.host}:${o.port}`)
-        }
-      } catch {}
+      try { handleOffer(e, JSON.parse(plain.toString())) } catch {}
     })
   }
 }
@@ -196,7 +216,9 @@ function fsHandshake(stream, boxKey) {
 }
 
 function connectSession(exit, offer) {
+  const dp = pickDataPlane(offer)
   const promise = new Promise((resolve, reject) => {
+    if (!dp || dp.t !== 'mgt') return reject(new Error('no usable data-plane endpoint in offer'))
     const t = setTimeout(() => reject(new Error('connect timeout')), 20000)
 
     // run the forward-secret handshake, then stand up the Session
@@ -206,7 +228,7 @@ function connectSession(exit, offer) {
         if (leftover.length) s.codec.push(leftover)
         sessions.set(exit.id, s)
         sessionPromises.delete(exit.id)
-        console.log(ts(), `[data][${exit.name}] ${label} session to ${offer.host}:${offer.port} established`)
+        console.log(ts(), `[data][${exit.name}] ${label} session to ${dp.host}:${dp.port} established`)
         clearTimeout(t); resolve(s)
       }).catch((e) => {
         try { stream.destroy() } catch {}
@@ -215,10 +237,10 @@ function connectSession(exit, offer) {
       })
     }
 
-    const useUdp = cfg.transport !== 'tcp' && offer.udp === 1
+    const useUdp = cfg.transport !== 'tcp' && dp.udp === 1
     if (useUdp) {
       const toTcp = (e) => { console.log(ts(), `[data][${exit.name}] udp failed (${e.message}), falling back to tcp`); tcpConnect() }
-      createClientUdpStream({ remote: { host: offer.host, port: offer.port }, boxKey: exit.boxKey })
+      createClientUdpStream({ remote: { host: dp.host, port: dp.port }, boxKey: exit.boxKey })
         .then((stream) => establish(stream, 'udp', toTcp))
         .catch(toTcp)
       return
@@ -226,7 +248,7 @@ function connectSession(exit, offer) {
 
     tcpConnect()
     function tcpConnect() {
-      const sock = net.connect(offer.port, offer.host)
+      const sock = net.connect(dp.port, dp.host)
       sock.setKeepAlive(true, 15000)
       sock.on('connect', () => establish(sock, 'tcp', null))
       sock.on('error', (e) => { clearTimeout(t); reject(e) })

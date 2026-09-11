@@ -7,6 +7,8 @@ import {
   seal, unseal, connKeys, frame2, makeCodecV2, FRAME,
   hsClientInit, hsExitRespond, hsClientFinish,
 } from '../src/common.mjs'
+import { nostrKeys, buildEvent } from '../src/nostr.mjs'
+import { schnorr } from '@noble/curves/secp256k1.js'
 
 const KEY = crypto.randomBytes(32)
 
@@ -152,4 +154,35 @@ test('handshake exposes a stable client ephemeral key for replay detection', () 
   const r1 = hsExitRespond(boxKey, init.msg1)
   const r2 = hsExitRespond(boxKey, init.msg1) // replay of the same msg1
   assert.ok(r1.cePk.equals(r2.cePk), 'replayed msg1 yields the same cePk so the caller cache blocks it')
+})
+
+test('nostr identity is deterministic from the PSK (valid 32-byte x-only pubkey)', () => {
+  const a = nostrKeys('psk-abc'); const b = nostrKeys('psk-abc')
+  assert.equal(a.pkHex, b.pkHex)
+  assert.equal(a.pkHex.length, 64)
+  assert.notEqual(nostrKeys('psk-xyz').pkHex, a.pkHex)
+})
+
+test('nostr event id and schnorr signature verify', () => {
+  const { sk, pkHex } = nostrKeys('psk-abc')
+  const ev = buildEvent(sk, pkHex, [['d', 'x'], ['mgt-seq', '7']], 'payload')
+  const id = crypto.createHash('sha256')
+    .update(JSON.stringify([0, ev.pubkey, ev.created_at, ev.kind, ev.tags, ev.content])).digest('hex')
+  assert.equal(ev.id, id, 'id must be sha256 of the serialized event')
+  const ok = schnorr.verify(Buffer.from(ev.sig, 'hex'), Buffer.from(ev.id, 'hex'), Buffer.from(ev.pubkey, 'hex'))
+  assert.equal(ok, true, 'signature must verify over the id bytes')
+})
+
+test('sealed offer v3 survives the Nostr content path (base64 + seq tag, MAC-checked)', () => {
+  const { boxKey } = deriveKeys('psk-abc')
+  const offer = { v: 3, ts: Date.now(), dp: [{ t: 'mgt', host: '1.2.3.4', port: 49001, udp: 1 }] }
+  const seq = 123
+  const sealed = seal(boxKey, Buffer.from(JSON.stringify(offer)), seq)
+  const ct = Buffer.from(sealed.toString('base64'), 'base64') // publish -> content -> subscribe
+  const plain = unseal(boxKey, ct, seq)
+  assert.ok(plain, 'must decrypt with the right seq')
+  const got = JSON.parse(plain.toString())
+  assert.equal(got.v, 3)
+  assert.equal(got.dp[0].host, '1.2.3.4')
+  assert.equal(unseal(boxKey, ct, seq + 1), null, 'a tampered seq must fail the MAC')
 })

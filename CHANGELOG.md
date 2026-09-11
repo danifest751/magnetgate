@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 — 2026-09-12
+- **Offer schema v3 + a second rendezvous channel (Nostr).** The rendezvous offer is now an
+  extensible list of data-plane endpoints (`{v:3, ts, dp:[{t:'mgt',host,port,udp?}, …]}`), so the
+  client can be handed several data planes and fail over between them; the native channel is
+  `t:'mgt'` (Reality/hysteria2 land in a later phase — Track 3).
+- The same sealed offer is now published to **both** the Mainline DHT and a pool of **Nostr relays**
+  (kind 30078 parameterized-replaceable, secp256k1/BIP-340 identity derived from the PSK). Discovery
+  no longer depends on the DHT alone — closing the single point of failure before it becomes the
+  linchpin of the daily driver. Confidentiality/authenticity stay in the secretbox seal under boxKey;
+  the Nostr signature only satisfies relays and gives a stable author key to filter by.
+- Client and exit must be upgraded together (offer v3 is incompatible with v2).
+- New deps: `ws`, `@noble/curves`. New env: `MAGNETGATE_NOSTR=off` (disable), `MAGNETGATE_NOSTR_RELAYS`
+  (override the relay pool).
+- Verified: 16/16 unit tests; a live Nostr publish→subscribe against public relays; the loopback
+  tunnel over the v3 DHT offer.
+
 ## 0.6.0 — 2026-09-12
 - **Security audit remediation.** Data protocol bumped to **v3** — client and exit must be
   upgraded together (v3 is incompatible with v2).
