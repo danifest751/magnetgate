@@ -16,6 +16,7 @@ udp.bind(() => {
   const connSalt = crypto.randomBytes(8)
   const stream = new ReliableStream(udp, { host, port }, 424242)
   stream.keys = connKeys(boxKey, connSalt)
+  udp.on('message', (msg, rinfo) => stream.onDatagram(msg, rinfo))
   stream.once('ready', () => { console.log('HANDSHAKE OK'); process.exit(0) })
   stream.once('close', () => { console.log('STREAM CLOSED'); process.exit(1) })
   stream.startHello(connSalt)

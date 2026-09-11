@@ -35,7 +35,11 @@ function decode(msg) {
 }
 
 function sendDatagram(udp, buf, remote) {
-  try { udp.send(buf, remote.port, remote.host) } catch {}
+  try {
+    udp.send(buf, remote.port, remote.host)
+  } catch (e) {
+    if (process.env.MAGNETGATE_DEBUG) console.log('[dbg-net] udp send failed:', e.message)
+  }
 }
 
 // One reliable ordered stream. The same socket can carry many streams (exit side):
@@ -83,6 +87,7 @@ export class ReliableStream extends EventEmitter {
     const p = decode(msg)
     if (!p || p.conv !== this.conv) return
     if (p.cmd === UDP_CMD.HELLO_ACK) {
+      if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-net] HELLO_ACK received from ${rinfo.address}:${rinfo.port} (ready=${this.ready})`)
       if (this.helloWait && !this.ready) {
         this.helloWait = null
         this.ready = true
