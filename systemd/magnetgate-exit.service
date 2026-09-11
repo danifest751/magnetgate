@@ -1,16 +1,42 @@
 [Unit]
 Description=magnetgate exit (DHT signaling + data)
 After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=root
+User=magnetgate
+Group=magnetgate
 WorkingDirectory=/opt/magnetgate
+# PSK, MAGNETGATE_PORT, MAGNETGATE_PUBLIC_HOST live in the env file (never on the argv/ps line)
 EnvironmentFile=/etc/magnetgate.env
 Environment=NODE_ENV=production
 Environment=MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq
-ExecStart=/usr/bin/node src/exit.js ${PSK} 49001 194.31.204.95
+ExecStart=/usr/bin/node src/exit.js
 Restart=always
 RestartSec=5
+
+# --- sandboxing / least privilege ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+StateDirectory=magnetgate
+StateDirectoryMode=0750
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

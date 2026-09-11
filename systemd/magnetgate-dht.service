@@ -1,13 +1,36 @@
 [Unit]
 Description=magnetgate self-hosted DHT bootstrap node
 After=network-online.target
+Wants=network-online.target
 
 [Service]
-User=root
+User=magnetgate
+Group=magnetgate
 WorkingDirectory=/opt/magnetgate
 ExecStart=/usr/bin/node src/dht-node.mjs 20001 dht.transmissionbt.com:6881,dht.libtorrent.org:25401
 Restart=always
 RestartSec=5
+
+# --- sandboxing / least privilege ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
