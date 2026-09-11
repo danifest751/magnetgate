@@ -3,7 +3,7 @@ Description=check GitHub for magnetgate updates every 5 minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
+OnUnitActiveSec=3min
 RandomizedDelaySec=30
 Persistent=true
 
