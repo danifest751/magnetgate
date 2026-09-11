@@ -30,7 +30,7 @@ New-Item -ItemType Directory -Force -Path (Split-Path $runner) | Out-Null
 
 # npm install if needed
 if (-not (Test-Path (Join-Path $repo 'node_modules'))) {
-  Push-Location $repo; npm install --omit=dev --loglevel=error; Pop-Location
+  Push-Location $repo; npm ci --omit=dev --loglevel=error; Pop-Location
 }
 
 schtasks /Create /TN $task /TR "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$runner`"" /SC ONLOGON /RL LIMITED /F
