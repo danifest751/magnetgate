@@ -10,8 +10,8 @@ import os from 'node:os'
 import fs from 'node:fs'
 import dns from 'node:dns'
 import {
-  deriveKeys, saltOf, signer, seal, connKeys, frame2, makeCodecV2, FRAME,
-  bep44Verify, BOOTSTRAP,
+  deriveKeys, saltOf, signer, seal, frame2, makeCodecV2, FRAME,
+  bep44Verify, BOOTSTRAP, hsExitRespond, HS_TS_SKEW_MS, pskWarning,
 } from './common.mjs'
 
 const SECRET = process.env.MAGNETGATE_PSK ?? process.env.PSK ?? process.argv[2]
@@ -21,12 +21,14 @@ const SEQ_FILE = process.env.MAGNETGATE_SEQ_FILE ?? null
 const ts = () => new Date().toISOString()
 
 if (!SECRET) { console.error('usage: MAGNETGATE_PSK=<psk> node src/exit.js [dataPort] [publicHost]'); process.exit(1) }
+{ const w = pskWarning(SECRET); if (w) console.log(ts(), `[warn] ${w}`) }
 
 // ---------- resource limits (DoS guardrails) ----------
 const MAX_SESSIONS = parseInt(process.env.MAGNETGATE_MAX_SESSIONS ?? '512')
 const MAX_STREAMS = parseInt(process.env.MAGNETGATE_MAX_STREAMS ?? '256') // per session (TCP + UDP)
 const IDLE_SESSION_MS = 10 * 60 * 1000
 let sessionCount = 0
+const seenHs = new Map() // handshake anti-replay: client ephemeral pubkey (hex) -> expiry ms
 
 // ---------- egress filter (SSRF guard) ----------
 // A client with the PSK could otherwise make the exit connect to loopback, link-local
@@ -127,7 +129,7 @@ function handleSession(sock) {
   if (sock.setKeepAlive) sock.setKeepAlive(true, 15000)
   console.log(ts(), `[data] session from ${sock.remoteAddress ?? 'udp'}:${sock.remotePort ?? ''} (active=${sessionCount})`)
 
-  let gotSalt = Buffer.alloc(0)
+  let hsBuf = Buffer.alloc(0)
   let started = false
   let closed = false
   const streams = new Map() // streamId -> upstream TCP socket
@@ -169,11 +171,26 @@ function handleSession(sock) {
 
   const onData = (chunk) => {
     if (started) return
-    gotSalt = Buffer.concat([gotSalt, chunk])
-    if (gotSalt.length < 8) return
+    hsBuf = Buffer.concat([hsBuf, chunk])
+    if (hsBuf.length < 2) return
+    const len = hsBuf.readUInt16BE(0)
+    if (len > 4096) return killSession()
+    if (hsBuf.length < 2 + len) return
     started = true
-    const rest = gotSalt.subarray(8)
-    const keys = connKeys(boxKey, gotSalt.subarray(0, 8))
+    const msg1 = hsBuf.subarray(2, 2 + len)
+    const rest = hsBuf.subarray(2 + len)
+
+    // forward-secret handshake: authenticate (PSK), derive ephemeral session keys, reply
+    const r = hsExitRespond(boxKey, msg1)
+    if (!r) { console.log(ts(), '[data] handshake rejected'); return killSession() }
+    const cek = r.cePk.toString('hex')
+    const nowMs = Date.now()
+    for (const [k, exp] of seenHs) if (exp < nowMs) seenHs.delete(k)
+    if (seenHs.has(cek)) { console.log(ts(), '[data] handshake replay rejected'); return killSession() }
+    seenHs.set(cek, nowMs + HS_TS_SKEW_MS)
+    const keys = r.keys
+    const hdr = Buffer.alloc(2); hdr.writeUInt16BE(r.msg2.length, 0)
+    try { sock.write(Buffer.concat([hdr, r.msg2])) } catch { return killSession() }
 
     const codec = makeCodecV2(keys.c2e, (type, id, plain) => {
       lastActivity = Date.now()

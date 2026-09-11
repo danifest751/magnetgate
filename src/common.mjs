@@ -15,6 +15,15 @@ export function deriveKeys(secret) {
   return { pk, sk, boxKey }
 }
 
+// advisory PSK strength check (non-blocking): the whole security model rests on the PSK
+export function pskWarning(psk) {
+  if (typeof psk !== 'string' || !psk) return 'empty PSK'
+  const hex = /^[0-9a-f]+$/i.test(psk)
+  if (hex && psk.length >= 32) return null                              // >=128-bit hex
+  if (!hex && psk.length >= 20 && new Set(psk).size >= 12) return null  // long, varied passphrase
+  return 'weak PSK — use a >=128-bit random secret (e.g. `openssl rand -hex 16`)'
+}
+
 export const saltOf = (s) => crypto.createHash('sha1').update('mgt-salt:' + s).digest()
 
 export const targetOf = (pk, salt) =>
@@ -58,6 +67,81 @@ export function connKeys(boxKey, connSalt) {
   sodium.crypto_generichash(c2e, Buffer.concat([boxKey, connSalt, Buffer.from('c2e')]))
   sodium.crypto_generichash(e2c, Buffer.concat([boxKey, connSalt, Buffer.from('e2c')]))
   return { c2e, e2c }
+}
+
+// ---------- forward-secret session handshake (protocol v3) ----------
+// Ephemeral X25519 DH, authenticated and encrypted under the PSK-derived boxKey, with a
+// timestamp for replay protection. The ephemeral secrets are discarded after the handshake,
+// so a later compromise of the PSK does NOT reveal past session keys (forward secrecy).
+//   msg1 (client -> exit): nonce(24) || secretbox(boxKey, nonce, cePk(32) || tsMs(8))
+//   msg2 (exit -> client): nonce(24) || secretbox(boxKey, nonce, eePk(32))
+//   session keys = BLAKE2b-512(dh || cePk || eePk || boxKey) split into { c2e, e2c }
+export const HS_TS_SKEW_MS = 60_000
+const HS_MSG1_LEN = 24 + (32 + 8) + 16
+const HS_MSG2_LEN = 24 + 32 + 16
+
+function ephemeral() {
+  const sk = Buffer.alloc(sodium.crypto_scalarmult_SCALARBYTES)
+  crypto.randomFillSync(sk)
+  const pk = Buffer.alloc(sodium.crypto_scalarmult_BYTES)
+  sodium.crypto_scalarmult_base(pk, sk)
+  return { sk, pk }
+}
+
+function sessionKeys(dh, cePk, eePk, boxKey) {
+  const okm = Buffer.alloc(64)
+  sodium.crypto_generichash(okm, Buffer.concat([dh, cePk, eePk, boxKey]))
+  return { c2e: okm.subarray(0, 32), e2c: okm.subarray(32, 64) }
+}
+
+export function hsClientInit(boxKey) {
+  const { sk: ceSk, pk: cePk } = ephemeral()
+  const pl = Buffer.alloc(40)
+  cePk.copy(pl, 0)
+  pl.writeBigUInt64BE(BigInt(Date.now()), 32)
+  const nonce = crypto.randomBytes(24)
+  const ct = Buffer.alloc(pl.length + 16)
+  sodium.crypto_secretbox_easy(ct, pl, nonce, boxKey)
+  return { msg1: Buffer.concat([nonce, ct]), ceSk, cePk }
+}
+
+// exit side: verify PSK auth, check clock skew, derive keys, build the reply.
+// returns { msg2, keys, cePk, ts } or null on failure. Replay (repeated cePk) is the
+// caller's responsibility (needs a shared TTL cache).
+export function hsExitRespond(boxKey, msg1) {
+  try {
+    if (!msg1 || msg1.length !== HS_MSG1_LEN) return null
+    const nonce = msg1.subarray(0, 24)
+    const ct = msg1.subarray(24)
+    const pl = Buffer.alloc(ct.length - 16)
+    if (!sodium.crypto_secretbox_open_easy(pl, ct, nonce, boxKey)) return null
+    const cePk = Buffer.from(pl.subarray(0, 32))
+    const ts = Number(pl.readBigUInt64BE(32))
+    if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > HS_TS_SKEW_MS) return null
+    const { sk: eeSk, pk: eePk } = ephemeral()
+    const dh = Buffer.alloc(sodium.crypto_scalarmult_BYTES)
+    sodium.crypto_scalarmult(dh, eeSk, cePk) // throws on all-zero / low-order point
+    const keys = sessionKeys(dh, cePk, eePk, boxKey)
+    const n2 = crypto.randomBytes(24)
+    const ct2 = Buffer.alloc(eePk.length + 16)
+    sodium.crypto_secretbox_easy(ct2, eePk, n2, boxKey)
+    return { msg2: Buffer.concat([n2, ct2]), keys, cePk, ts }
+  } catch { return null }
+}
+
+// client side: verify the exit's reply and derive the same session keys.
+// returns { keys } or null.
+export function hsClientFinish(boxKey, msg2, ceSk, cePk) {
+  try {
+    if (!msg2 || msg2.length !== HS_MSG2_LEN) return null
+    const nonce = msg2.subarray(0, 24)
+    const ct = msg2.subarray(24)
+    const eePk = Buffer.alloc(ct.length - 16)
+    if (!sodium.crypto_secretbox_open_easy(eePk, ct, nonce, boxKey)) return null
+    const dh = Buffer.alloc(sodium.crypto_scalarmult_BYTES)
+    sodium.crypto_scalarmult(dh, ceSk, eePk) // throws on all-zero / low-order point
+    return { keys: sessionKeys(dh, Buffer.from(cePk), eePk, boxKey) }
+  } catch { return null }
 }
 
 // ---------- multiplexed frames (protocol v2) ----------

@@ -3,11 +3,10 @@
 // A config file enables multiple exits: { "exits": [{"name":"nl","psk":"..."}], ... }
 import DHT from 'bittorrent-dht'
 import net from 'node:net'
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import {
-  deriveKeys, saltOf, targetOf, unseal, connKeys, frame2, makeCodecV2, FRAME,
-  bep44Verify, BOOTSTRAP,
+  deriveKeys, saltOf, targetOf, unseal, frame2, makeCodecV2, FRAME,
+  bep44Verify, BOOTSTRAP, hsClientInit, hsClientFinish, pskWarning,
 } from './common.mjs'
 import { startSocks5Server } from './socks5.mjs'
 import { createClientUdpStream } from './udpsess.mjs'
@@ -48,6 +47,7 @@ function decide(host) {
 
 // ---------- exits: keys, discovery, session pool ----------
 const exits = cfg.exits.map((e, i) => {
+  const w = pskWarning(e.psk); if (w) console.log(ts(), `[warn] exit ${e.name ?? i}: ${w}`)
   const { pk, boxKey } = deriveKeys(e.psk)
   const salt = e.salt ? Buffer.from(e.salt, 'hex') : saltOf(e.psk)
   return { id: i, name: e.name ?? `exit${i}`, pk, boxKey, salt, target: targetOf(pk, salt), offer: null }
@@ -169,27 +169,58 @@ class Session {
   }
 }
 
+// forward-secret handshake (protocol v3) over a byte stream (net.Socket or ReliableStream):
+// send [u16 len][msg1], read [u16 len][msg2], derive per-session ephemeral keys.
+function fsHandshake(stream, boxKey) {
+  return new Promise((resolve, reject) => {
+    const { msg1, ceSk, cePk } = hsClientInit(boxKey)
+    let buf = Buffer.alloc(0)
+    let done = false
+    const onData = (chunk) => {
+      if (done) return
+      buf = Buffer.concat([buf, chunk])
+      if (buf.length < 2) return
+      const len = buf.readUInt16BE(0)
+      if (len > 4096) { done = true; stream.removeListener('data', onData); return reject(new Error('bad handshake')) }
+      if (buf.length < 2 + len) return
+      done = true
+      stream.removeListener('data', onData)
+      const r = hsClientFinish(boxKey, buf.subarray(2, 2 + len), ceSk, cePk)
+      if (!r) return reject(new Error('handshake auth failed'))
+      resolve({ keys: r.keys, leftover: buf.subarray(2 + len) })
+    }
+    stream.on('data', onData)
+    const hdr = Buffer.alloc(2); hdr.writeUInt16BE(msg1.length, 0)
+    try { stream.write(Buffer.concat([hdr, msg1])) } catch (e) { reject(e) }
+  })
+}
+
 function connectSession(exit, offer) {
-  const connSalt = crypto.randomBytes(8)
   const promise = new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('connect timeout')), 20000)
 
+    // run the forward-secret handshake, then stand up the Session
+    const establish = (stream, label, onFail) => {
+      fsHandshake(stream, exit.boxKey).then(({ keys, leftover }) => {
+        const s = new Session(exit, stream, keys)
+        if (leftover.length) s.codec.push(leftover)
+        sessions.set(exit.id, s)
+        sessionPromises.delete(exit.id)
+        console.log(ts(), `[data][${exit.name}] ${label} session to ${offer.host}:${offer.port} established`)
+        clearTimeout(t); resolve(s)
+      }).catch((e) => {
+        try { stream.destroy() } catch {}
+        if (onFail) return onFail(e)          // keep the overall timeout guarding the fallback
+        clearTimeout(t); reject(e)
+      })
+    }
+
     const useUdp = cfg.transport !== 'tcp' && offer.udp === 1
     if (useUdp) {
+      const toTcp = (e) => { console.log(ts(), `[data][${exit.name}] udp failed (${e.message}), falling back to tcp`); tcpConnect() }
       createClientUdpStream({ remote: { host: offer.host, port: offer.port }, boxKey: exit.boxKey })
-        .then((stream) => {
-          // the first stream bytes are the connSalt (the exit derives its keys from it)
-          stream.write(connSalt)
-          const s = new Session(exit, stream, stream.keys)
-          sessions.set(exit.id, s)
-          sessionPromises.delete(exit.id)
-          console.log(ts(), `[data][${exit.name}] udp session to ${offer.host}:${offer.port} established`)
-          clearTimeout(t); resolve(s)
-        })
-        .catch((e) => {
-          console.log(ts(), `[data][${exit.name}] udp failed (${e.message}), falling back to tcp`)
-          tcpConnect()
-        })
+        .then((stream) => establish(stream, 'udp', toTcp))
+        .catch(toTcp)
       return
     }
 
@@ -197,16 +228,7 @@ function connectSession(exit, offer) {
     function tcpConnect() {
       const sock = net.connect(offer.port, offer.host)
       sock.setKeepAlive(true, 15000)
-      sock.on('connect', () => {
-        clearTimeout(t)
-        sock.write(connSalt)
-        const keys = connKeys(exit.boxKey, connSalt)
-        const s = new Session(exit, sock, keys)
-        sessions.set(exit.id, s)
-        sessionPromises.delete(exit.id)
-        console.log(ts(), `[data][${exit.name}] tcp session to ${offer.host}:${offer.port} established`)
-        resolve(s)
-      })
+      sock.on('connect', () => establish(sock, 'tcp', null))
       sock.on('error', (e) => { clearTimeout(t); reject(e) })
     }
   })
