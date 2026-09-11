@@ -82,7 +82,16 @@ function guardedLookup(hostname, options, cb) {
 const { pk, sk, boxKey } = deriveKeys(SECRET)
 const SALT = saltOf(SECRET)
 
-// ---------- signaling (DHT offer publication) ----------
+// ---------- signaling (rendezvous: DHT + optional Nostr, same sealed offer) ----------
+let nostr = null
+if (process.env.MAGNETGATE_NOSTR !== 'off') {
+  try {
+    const { nostrPublisher } = await import('./nostr.mjs')
+    nostr = nostrPublisher(SECRET)
+    console.log(ts(), `[nostr] publishing offers to ${nostr.relays} relay(s)`)
+  } catch (e) { console.log(ts(), `[nostr] disabled: ${e.message}`) }
+}
+
 const dht = new DHT({ bootstrap: BOOTSTRAP, verify: bep44Verify })
 let seq = Math.floor(Date.now() / 1000)
 if (SEQ_FILE && fs.existsSync(SEQ_FILE)) {
@@ -98,13 +107,19 @@ function autoIp() {
 
 function publish() {
   seq += 1
-  const offer = { v: 2, host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, ts: Date.now(), udp: process.env.MAGNETGATE_TRANSPORT !== 'tcp' ? 1 : undefined }
+  const udp = process.env.MAGNETGATE_TRANSPORT !== 'tcp' ? 1 : undefined
+  // offer v3: an extensible list of data-plane endpoints. The native channel ("mgt") is the
+  // fallback; Reality/hysteria2 entries are added in a later phase. Sealed once, shared by both
+  // rendezvous channels (same seq => same nonce => identical ciphertext, no nonce reuse).
+  const offer = { v: 3, ts: Date.now(), dp: [{ t: 'mgt', host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, udp }] }
+  const sealed = seal(boxKey, Buffer.from(JSON.stringify(offer)), seq)
+  if (nostr) nostr.publish(sealed, seq)
   dht.put({
     k: pk,
     salt: SALT,
     seq,
     sign: signer(sk),
-    v: seal(boxKey, Buffer.from(JSON.stringify(offer)), seq),
+    v: sealed,
   }, (err, _h, n) => {
     if (SEQ_FILE) { try { fs.writeFileSync(SEQ_FILE, String(seq)) } catch {} }
     console.log(ts(), err ? `[dht] put failed: ${err.message}` : `[dht] published (n=${n})`)
