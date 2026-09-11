@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-// node exit.js <psk> [dataPort] [publicHost]
+// node src/exit.js <psk> [dataPort] [publicHost]
 import DHT from 'bittorrent-dht'
 import net from 'node:net'
 import os from 'node:os'
 import fs from 'node:fs'
-import { deriveKeys, saltOf, signer, seal, connKeys, frame, makeCodec, bep44Verify, BOOTSTRAP } from './common.mjs'
+import {
+  deriveKeys, saltOf, signer, seal, connKeys, frame2, makeCodecV2, FRAME,
+  bep44Verify, BOOTSTRAP,
+} from './common.mjs'
 
 const SECRET = process.argv[2]
 const DATA_PORT = parseInt(process.argv[3] ?? '49001')
@@ -12,11 +15,12 @@ const PUBLIC_HOST = process.argv[4] ?? null
 const SEQ_FILE = process.env.MAGNETGATE_SEQ_FILE ?? null
 const ts = () => new Date().toISOString()
 
-if (!SECRET) { console.error('usage: node exit.js <psk> [dataPort] [publicHost]'); process.exit(1) }
+if (!SECRET) { console.error('usage: node src/exit.js <psk> [dataPort] [publicHost]'); process.exit(1) }
 
 const { pk, sk, boxKey } = deriveKeys(SECRET)
 const SALT = saltOf(SECRET)
 
+// ---------- signaling (DHT offer publication) ----------
 const dht = new DHT({ bootstrap: BOOTSTRAP, verify: bep44Verify })
 let seq = Math.floor(Date.now() / 1000)
 if (SEQ_FILE && fs.existsSync(SEQ_FILE)) {
@@ -32,7 +36,7 @@ function autoIp() {
 
 function publish() {
   seq += 1
-  const offer = { v: 1, host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, ts: Date.now() }
+  const offer = { v: 2, host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, ts: Date.now() }
   dht.put({
     k: pk,
     salt: SALT,
@@ -52,13 +56,25 @@ dht.on('ready', () => {
   setInterval(publish, 5 * 60 * 1000)
 })
 
-// ---------- data plane ----------
-net.createServer((sock) => {
+// ---------- data plane: multiplexed sessions ----------
+// One TCP connection = one session. Frames carry streamId; each OPEN stream maps
+// to one upstream TCP connection. streamId 0 is session-level (PING/PONG).
+
+const IDLE_SESSION_MS = 10 * 60 * 1000
+
+function handleSession(sock) {
   sock.setKeepAlive(true, 15000)
-  console.log(ts(), `[data] incoming ${sock.remoteAddress}:${sock.remotePort}`)
+  console.log(ts(), `[data] session from ${sock.remoteAddress}:${sock.remotePort}`)
   let gotSalt = Buffer.alloc(0)
   let started = false
-  let upstream = null
+  const streams = new Map() // streamId -> upstream socket
+  let lastActivity = Date.now()
+
+  const killSession = () => {
+    for (const up of streams.values()) { try { up.destroy() } catch {} }
+    streams.clear()
+    try { sock.destroy() } catch {}
+  }
 
   sock.on('data', function onData(chunk) {
     if (started) return
@@ -67,23 +83,46 @@ net.createServer((sock) => {
     started = true
     const rest = gotSalt.subarray(8)
     const keys = connKeys(boxKey, gotSalt.subarray(0, 8))
-    const codec = makeCodec(keys.c2e, (plain) => {
-      if (!upstream) {
+    const codec = makeCodecV2(keys.c2e, (type, id, plain) => {
+      lastActivity = Date.now()
+      if (type === FRAME.OPEN) {
+        if (streams.has(id)) return sock.destroy()
         const cmd = JSON.parse(plain.toString())
-        console.log(ts(), `[data] CONNECT ${cmd.host}:${cmd.port}`)
-        upstream = net.connect(cmd.port, cmd.host)
-        upstream.setKeepAlive(true, 15000)
-        upstream.setTimeout(20000, () => { console.log(ts(), '[data] upstream timeout'); sock.destroy() })
-        upstream.on('data', (d) => { try { sock.write(frame(keys.e2c, d)) } catch {} })
-        upstream.on('error', (e) => { console.log(ts(), `[data] upstream error: ${e.message}`); sock.destroy() })
-      } else {
-        upstream.write(plain)
+        console.log(ts(), `[data] stream #${id} CONNECT ${cmd.host}:${cmd.port}`)
+        const up = net.connect(cmd.port, cmd.host)
+        up.setKeepAlive(true, 15000)
+        streams.set(id, up)
+        up.on('data', (d) => { try { sock.write(frame2(keys.e2c, FRAME.DATA, id, d)) } catch {} })
+        up.on('error', (e) => { console.log(ts(), `[data] stream #${id} upstream error: ${e.message}`); up.destroy() })
+        up.on('close', () => {
+          streams.delete(id)
+          try { sock.write(frame2(keys.e2c, FRAME.CLOSE, id, Buffer.alloc(0))) } catch {}
+        })
+      } else if (type === FRAME.DATA) {
+        const up = streams.get(id)
+        if (up) up.write(plain)
+      } else if (type === FRAME.CLOSE) {
+        const up = streams.get(id)
+        if (up) { streams.delete(id); try { up.destroy() } catch {} }
+      } else if (type === FRAME.PING) {
+        try { sock.write(frame2(keys.e2c, FRAME.PONG, 0, plain)) } catch {}
       }
-    }, () => { try { sock.destroy() } catch {} })
+    }, () => { killSession() })
     sock.removeListener('data', onData)
     sock.on('data', (c) => codec.push(c))
     sock.on('error', () => {})
     if (rest.length) codec.push(rest)
+
+    const idle = setInterval(() => {
+      if (Date.now() - lastActivity > IDLE_SESSION_MS) {
+        console.log(ts(), `[data] session idle, closing`)
+        killSession()
+        clearInterval(idle)
+      }
+    }, 60 * 1000)
+    sock.on('close', () => clearInterval(idle))
   })
   sock.on('error', () => {})
-}).listen(DATA_PORT, () => console.log(ts(), `[data] listening on ${DATA_PORT}`))
+}
+
+net.createServer(handleSession).listen(DATA_PORT, () => console.log(ts(), `[data] listening on ${DATA_PORT}`))

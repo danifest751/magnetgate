@@ -28,7 +28,7 @@ export function signer(sk) {
   }
 }
 
-  // opts.verify for bittorrent-dht: verify(signature, encodeSigData(value), publicKey)
+// opts.verify for bittorrent-dht: verify(signature, encodeSigData(value), publicKey)
 export function bep44Verify(sig, value, pk) {
   try {
     if (!sig || sig.length !== 64 || !value || !pk || pk.length !== 32) return false
@@ -60,31 +60,42 @@ export function connKeys(boxKey, connSalt) {
   return { c2e, e2c }
 }
 
-export function frame(key, plain) {
+// ---------- multiplexed frames (protocol v2) ----------
+
+export const FRAME = { OPEN: 1, DATA: 2, CLOSE: 3, PING: 4, PONG: 5 }
+
+// frame: [u32 len][u8 type][u32 streamId][24B nonce][secretbox(plain)]
+// len counts everything after the length field. streamId 0 = session-level (ping/pong).
+export function frame2(key, type, streamId, plain) {
   const nonce = crypto.randomBytes(24)
   const ct = Buffer.alloc(plain.length + 16)
   sodium.crypto_secretbox_easy(ct, plain, nonce, key)
-  const len = Buffer.alloc(4)
-  len.writeUInt32BE(nonce.length + ct.length, 0)
-  return Buffer.concat([len, nonce, ct])
+  const head = Buffer.alloc(9)
+  head.writeUInt32BE(5 + nonce.length + ct.length, 0)
+  head[4] = type
+  head.writeUInt32BE(streamId >>> 0, 5)
+  return Buffer.concat([head, nonce, ct])
 }
 
-export function makeCodec(key, onPlain, onKill) {
+export function makeCodecV2(key, onFrame, onKill) {
   let buf = Buffer.alloc(0)
   return {
     push(chunk) {
       buf = Buffer.concat([buf, chunk])
-      while (buf.length >= 4) {
+      while (buf.length >= 9) {
         const len = buf.readUInt32BE(0)
-        if (len < 40 || len > 4 * 1024 * 1024) return onKill()
+        if (len < 45 || len > 4 * 1024 * 1024) return onKill()
         if (buf.length < 4 + len) return
-        const nonce = buf.subarray(4, 4 + 24)
-        const ct = buf.subarray(4 + 24, 4 + len)
-        const plain = Buffer.alloc(len - 24 - 16)
+        const type = buf[4]
+        const streamId = buf.readUInt32BE(5)
+        const nonce = buf.subarray(9, 9 + 24)
+        const ct = buf.subarray(9 + 24, 4 + len)
+        const plain = Buffer.alloc(len - 5 - 24 - 16)
         if (!sodium.crypto_secretbox_open_easy(plain, ct, nonce, key)) return onKill()
         buf = buf.subarray(4 + len)
-        onPlain(plain)
+        onFrame(type, streamId, plain)
       }
     },
   }
 }
+
