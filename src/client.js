@@ -93,7 +93,8 @@ class Session {
     this.exit = exit
     this.sock = sock
     this.keys = keys
-    this.streams = new Map() // streamId -> app socket
+    this.streams = new Map() // streamId -> app socket (TCP)
+    this.relays = new Map()  // streamId -> { control, sendReply } (UDP)
     this.nextId = 1
     this.lastPong = Date.now()
     sock.on('data', (c) => this.codec.push(c))
@@ -112,9 +113,14 @@ class Session {
       if (type === FRAME.DATA) {
         const app = this.streams.get(id)
         if (app && !app.destroyed) app.write(plain)
+      } else if (type === FRAME.UDP_DATA) {
+        const r = this.relays.get(id)
+        if (r) r.sendReply(plain)
       } else if (type === FRAME.CLOSE) {
         const app = this.streams.get(id)
         if (app) { this.streams.delete(id); try { app.destroy() } catch {} }
+        const relay = this.relays.get(id)
+        if (relay) { this.relays.delete(id); try { relay.control.destroy() } catch {} }
       }
     }, () => this.teardown())
   }
@@ -124,7 +130,23 @@ class Session {
     clearInterval(this.ping)
     for (const app of this.streams.values()) { try { app.destroy() } catch {} }
     this.streams.clear()
+    for (const r of this.relays.values()) { try { r.control.destroy() } catch {} }
+    this.relays.clear()
     try { this.sock.destroy() } catch {}
+  }
+
+  // UDP relay: association lives on the exit; the SOCKS control connection keeps it alive
+  openRelay(first, control, sendReply) {
+    const id = this.nextId++ & 0x7fffffff || 1
+    this.relays.set(id, { control, sendReply })
+    try {
+      this.sock.write(frame2(this.keys.c2e, FRAME.UDP_ASSOC, id, first ?? Buffer.alloc(0)))
+      control.on('close', () => { try { this.sock.write(frame2(this.keys.c2e, FRAME.UDP_CLOSE, id, Buffer.alloc(0))) } catch {} })
+    } catch (e) {
+      console.log(ts(), `[data][${this.exit.name}] relay #${id} open failed: ${e.message}`)
+      control.destroy()
+    }
+    return id
   }
 
   openStream(target, app, firstData) {
@@ -232,5 +254,26 @@ function routeFn({ host, port }, app, firstData) {
   app.on('error', () => {})
 }
 
-startSocks5Server(cfg.localPort, routeFn)
+function udpFn(req, control, sendReply) {
+  // UDP ASSOCIATE: register the relay on the (current) session; first datagram rides along
+  const exit = exits.find(fresh)
+  if (!exit) {
+    console.log(ts(), '[socks][udp] no offer yet')
+    try { control.destroy() } catch {}
+    return
+  }
+  const addr = Buffer.alloc(7)
+  addr[0] = 1 // IPv4
+  req.host.split('.').forEach((o, i) => { addr[1 + i] = parseInt(o, 10) & 0xff })
+  addr.writeUInt16BE(req.port, 5)
+  getSessionFor(exit).then((s) => s.openRelay(
+    Buffer.concat([addr, req.data]),
+    control, sendReply,
+  )).catch((e) => {
+    console.log(ts(), `[socks][udp] association failed: ${e.message}`)
+    try { control.destroy() } catch {}
+  })
+}
+
+startSocks5Server(cfg.localPort, routeFn, udpFn)
   .listen(cfg.localPort, () => console.log(ts(), `[socks5] listening on 127.0.0.1:${cfg.localPort}`))
