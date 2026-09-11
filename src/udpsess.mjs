@@ -134,7 +134,7 @@ export class ReliableStream extends EventEmitter {
       sendDatagram(this.udp, packet, this.remote)
       if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-net] PSH sent seq=${seq} (${this.remote.host}:${this.remote.port})`)
     }
-    for (const [, u] of this.unacked) {
+    for (const [seq, u] of this.unacked) {
       if (now() - u.sentAt >= this.rto) {
         u.sentAt = now()
         sendDatagram(this.udp, u.packet, this.remote)
@@ -178,17 +178,18 @@ export function createClientUdpStream({ remote, boxKey }) {
     const stream = new ReliableStream(udp, rremote, conv)
     stream.keys = connKeys(boxKey, connSalt)
 
+    const dbg = (...a) => { if (process.env.MAGNETGATE_DEBUG) console.log(...a) }
     udp.on('message', (msg, rinfo) => {
       const p = decode(msg)
-      console.log('[dbg-cli] datagram', p ? `cmd=${p.cmd} seq=${p.seq} (${p.payload.length}b)` : 'undecodable', 'from', rinfo.address + ':' + rinfo.port)
+      dbg('[dbg-cli] datagram', p ? `cmd=${p.cmd} seq=${p.seq} (${p.payload.length}b)` : 'undecodable', 'from', rinfo.address + ':' + rinfo.port)
       if (!p || p.conv !== conv) return
       stream.onDatagram(msg, rinfo)
     })
 
-    udp.on('error', (e) => { console.log('[dbg] client udp error:', e.message); clearTimeout(t); stream.destroy(); reject(e) })
-    const t = setTimeout(() => { console.log('[dbg] handshake timeout'); stream.destroy(); reject(new Error('udp handshake timeout')) }, 15000)
-    stream.once('ready', () => { console.log('[dbg] ready'); clearTimeout(t); resolve(stream) })
-    stream.once('close', () => { console.log('[dbg] stream closed'); clearTimeout(t); reject(new Error('closed during handshake')) })
+    udp.on('error', (e) => { dbg('[dbg] client udp error:', e.message); clearTimeout(t); stream.destroy(); reject(e) })
+    const t = setTimeout(() => { dbg('[dbg] handshake timeout'); stream.destroy(); reject(new Error('udp handshake timeout')) }, 15000)
+    stream.once('ready', () => { dbg('[dbg] ready'); clearTimeout(t); resolve(stream) })
+    stream.once('close', () => { dbg('[dbg] stream closed'); clearTimeout(t); reject(new Error('closed during handshake')) })
 
     stream.startHello(connSalt)
   })
@@ -221,6 +222,7 @@ export class ExitUdpMux {
         stream.keys = connKeys(this.boxKey, payload)
         stream.ready = true
         this.streams.set(key, { stream })
+        stream.on('close', () => { if (this.streams.get(key)?.stream === stream) this.streams.delete(key) })
         this.onConn(stream, rinfo)
       }
       return
