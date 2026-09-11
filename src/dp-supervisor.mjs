@@ -61,33 +61,48 @@ export class DpSupervisor {
 
   available() { return fs.existsSync(BIN) }
 
-  // ensure sing-box is running for this dp; resolves true when the local SOCKS accepts connections
+  // ensure sing-box is running for this dp; resolves true when the local SOCKS accepts connections.
+  // All ensure/stop operations are serialized on one chain so overlapping offers (e.g. rapid
+  // rotations) can't spawn two sing-box that fight over the SOCKS port.
   ensure(dp) {
     if (!this.available()) return Promise.resolve(false)
     const key = dpKey(dp)
-    if (this.proc && this.ready && this.curKey === key) return Promise.resolve(true)
-    if (this.starting && this.curKey === key) return this.starting
-    if (this.proc && this.curKey !== key) this.stop() // endpoint changed (e.g. rotation) -> restart
-    this.curKey = key
-    this.starting = (async () => {
-      try { fs.mkdirSync(TOOLS, { recursive: true }) } catch {}
-      try { fs.writeFileSync(this.cfgPath, JSON.stringify(buildConfig(dp, this.socksPort))) } catch (e) { this.log(`[dp] config write failed: ${e.message}`); return false }
-      this.proc = spawn(BIN, ['run', '-c', this.cfgPath], { stdio: 'ignore', windowsHide: true })
-      this.proc.on('exit', (code) => { this.log(`[dp] sing-box exited (code=${code})`); this.proc = null; this.ready = false; this.curKey = null })
-      this.proc.on('error', (e) => { this.log(`[dp] sing-box spawn error: ${e.message}`); this.proc = null; this.ready = false })
-      this.ready = await waitPort('127.0.0.1', this.socksPort, 8000)
-      if (this.ready) this.log(`[dp] ${dp.t} data plane up (sing-box socks 127.0.0.1:${this.socksPort})`)
-      else { this.log(`[dp] ${dp.t} data plane failed to come up`); this.stop() }
-      this.starting = null
-      return this.ready
-    })()
-    return this.starting
+    this.chain = (this.chain || Promise.resolve()).then(() => this._ensure(key, dp)).catch(() => false)
+    return this.chain
   }
 
-  stop() {
-    if (this.proc) { try { this.proc.kill() } catch {} }
-    this.proc = null; this.ready = false; this.curKey = null; this.starting = null
+  async _ensure(key, dp) {
+    if (this.proc && this.ready && this.curKey === key) return true
+    if (this.proc) await this._stop() // different endpoint or a dead proc: tear down and wait for exit first
+    try { fs.mkdirSync(TOOLS, { recursive: true }) } catch {}
+    try { fs.writeFileSync(this.cfgPath, JSON.stringify(buildConfig(dp, this.socksPort))) } catch (e) { this.log(`[dp] config write failed: ${e.message}`); return false }
+    this.curKey = key
+    this.ready = false
+    const proc = spawn(BIN, ['run', '-c', this.cfgPath], { stdio: 'ignore', windowsHide: true })
+    this.proc = proc
+    proc.on('exit', (code) => { if (this.proc === proc) { this.proc = null; this.ready = false; this.curKey = null } this.log(`[dp] sing-box exited (code=${code})`) })
+    proc.on('error', (e) => { this.log(`[dp] sing-box spawn error: ${e.message}`) })
+    this.ready = await waitPort('127.0.0.1', this.socksPort, 8000)
+    if (this.ready) this.log(`[dp] ${dp.t} data plane up (sing-box socks 127.0.0.1:${this.socksPort})`)
+    else { this.log(`[dp] ${dp.t} data plane failed to come up`); await this._stop() }
+    return this.ready
   }
+
+  // kill the current sing-box and wait for it to exit + a short grace for the OS to release the port
+  _stop() {
+    return new Promise((resolve) => {
+      const proc = this.proc
+      this.proc = null; this.ready = false; this.curKey = null
+      if (!proc) return resolve()
+      let done = false
+      const finish = () => { if (!done) { done = true; resolve() } }
+      proc.once('exit', () => setTimeout(finish, 300))
+      try { proc.kill() } catch { finish() }
+      setTimeout(finish, 3000)
+    })
+  }
+
+  stop() { this.chain = (this.chain || Promise.resolve()).then(() => this._stop()); return this.chain }
 }
 
 // Minimal SOCKS5 (no-auth) client: connect through a local SOCKS proxy to host:port.
