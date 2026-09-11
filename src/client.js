@@ -10,13 +10,16 @@ import {
 } from './common.mjs'
 import { startSocks5Server } from './socks5.mjs'
 import { createClientUdpStream } from './udpsess.mjs'
+import { DpSupervisor, socks5Connect } from './dp-supervisor.mjs'
 
 const OFFER_TTL_MS = 12 * 60 * 1000
 const ts = () => new Date().toISOString()
 
 // ---------- configuration ----------
 // Precedence: config file (arg ending in .json or MAGNETGATE_CONFIG) > CLI psk.
-let cfg = { localPort: 1080, rules: { direct: [], proxy: [] }, bootstrap: BOOTSTRAP, exits: [], transport: process.env.MAGNETGATE_TRANSPORT ?? 'tcp' }
+// dataPlane: 'auto' prefers Reality/hysteria2 (via sing-box) then falls back to the native channel;
+// 'mgt' forces the native channel only.
+let cfg = { localPort: 1080, rules: { direct: [], proxy: [] }, bootstrap: BOOTSTRAP, exits: [], transport: process.env.MAGNETGATE_TRANSPORT ?? 'tcp', dataPlane: process.env.MAGNETGATE_DATA_PLANE ?? 'auto', singboxPort: 1081 }
 {
   const cfgArg = process.argv[2] ?? process.env.MAGNETGATE_CONFIG ?? null
   const isFile = cfgArg && cfgArg.endsWith('.json') && fs.existsSync(cfgArg)
@@ -60,11 +63,16 @@ const fresh = (e) =>
   (e.offer && Date.now() - e.offer.ts < OFFER_TTL_MS && (!e.cooldownUntil || Date.now() > e.cooldownUntil))
     ? e.offer : null
 
+// data-plane engine (sing-box) for Reality/hysteria2; the native "mgt" channel is the fallback
+const supervisor = new DpSupervisor({ socksPort: cfg.singboxPort, log: (m) => console.log(ts(), m) })
+if (cfg.dataPlane !== 'mgt' && !supervisor.available())
+  console.log(ts(), '[dp] sing-box not found (run scripts/get-singbox.ps1) — using the native channel only')
+const SB_OK = cfg.dataPlane !== 'mgt' && supervisor.available()
+const DP_PREFERENCE = SB_OK ? ['reality', 'hy2', 'mgt'] : ['mgt']
+
 // offer v3 carries a list of data-plane endpoints; pick the preferred one the client can use.
-// Reality/hysteria2 are added in a later phase; for now only the native "mgt" channel is usable.
-const DP_PREFERENCE = ['mgt']
-function pickDataPlane(o) {
-  for (const t of DP_PREFERENCE) { const d = o?.dp?.find((x) => x.t === t); if (d) return d }
+function pickDp(o, pref = DP_PREFERENCE) {
+  for (const t of pref) { const d = o?.dp?.find((x) => x.t === t); if (d) return d }
   return null
 }
 
@@ -72,11 +80,14 @@ function pickDataPlane(o) {
 function handleOffer(e, o) {
   if (!o || o.v !== 3 || typeof o.ts !== 'number') return
   if (Date.now() - o.ts >= OFFER_TTL_MS) return
-  const dp = pickDataPlane(o)
+  const dp = pickDp(o)
   if (!dp) return
   const isNew = !e.offer || e.offer.ts !== o.ts
   e.offer = o
-  if (isNew) console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port}`)
+  if (isNew) {
+    console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port}`)
+    if (dp.t === 'reality' || dp.t === 'hy2') supervisor.ensure(dp).catch(() => {}) // warm-start the engine
+  }
 }
 
 dht.listen(() => console.log(ts(), `[dht] node on port ${dht.address().port}, bootstrap=${cfg.bootstrap.join(',')}`))
@@ -216,7 +227,7 @@ function fsHandshake(stream, boxKey) {
 }
 
 function connectSession(exit, offer) {
-  const dp = pickDataPlane(offer)
+  const dp = pickDp(offer, ['mgt']) // the native session always uses the mgt endpoint
   const promise = new Promise((resolve, reject) => {
     if (!dp || dp.t !== 'mgt') return reject(new Error('no usable data-plane endpoint in offer'))
     const t = setTimeout(() => reject(new Error('connect timeout')), 20000)
@@ -294,8 +305,8 @@ async function openTunnelStream(target, app, firstData) {
 
 function routeFn({ host, port }, app, firstData) {
   const mode = decide(host)
-  console.log(ts(), `[socks] ${host}:${port} -> ${mode}`)
   if (mode === 'direct') {
+    console.log(ts(), `[socks] ${host}:${port} -> direct`)
     const up = net.connect(port, host, () => { if (firstData?.length) up.write(firstData) })
     up.setTimeout(15000, () => { try { app.destroy() } catch {} })
     app.pipe(up); up.pipe(app)
@@ -305,26 +316,54 @@ function routeFn({ host, port }, app, firstData) {
     return
   }
 
-  // buffer app data until a tunnel stream is actually open
+  // buffer app data through the (async) upstream setup; collect stays attached until the upstream
+  // socket/stream is wired, so no early bytes (e.g. the TLS ClientHello) are dropped.
   const pending = [firstData].filter(d => d && d.length)
   const collect = (d) => { if (pending.length < 256) pending.push(d) }
   app.on('data', collect)
+  app.on('error', () => {})
 
   const t0 = Date.now()
-  const wait = setInterval(() => {
-    if (exits.some(fresh) || Date.now() - t0 > 20000) {
-      clearInterval(wait)
-      app.removeListener('data', collect)
-      openTunnelStream({ host, port }, app).then((stream) => {
-        for (const d of pending) stream.write(d)
-        pending.length = 0
-      }).catch((e) => {
-        console.log(ts(), `[socks] ${host}:${port} failed: ${e.message}`)
-        try { app.destroy() } catch {}
-      })
+  const wait = setInterval(async () => {
+    const exit = exits.find(fresh)
+    if (!exit && Date.now() - t0 <= 20000) return
+    clearInterval(wait)
+    if (!exit) {
+      console.log(ts(), `[socks] ${host}:${port} failed: no offer yet`)
+      app.removeListener('data', collect); try { app.destroy() } catch {}; return
     }
+
+    // preferred: Reality/hysteria2 through the local sing-box SOCKS
+    const dp = pickDp(exit.offer)
+    if (dp && (dp.t === 'reality' || dp.t === 'hy2')) {
+      const ok = await supervisor.ensure(dp).catch(() => false)
+      if (ok) {
+        try {
+          const { sock, leftover } = await socks5Connect(supervisor.socksPort, host, port)
+          app.removeListener('data', collect)
+          if (leftover && leftover.length) app.write(leftover)
+          for (const d of pending) sock.write(d)
+          pending.length = 0
+          app.pipe(sock); sock.pipe(app)
+          sock.on('error', () => { try { app.destroy() } catch {} })
+          app.on('close', () => { try { sock.destroy() } catch {} })
+          console.log(ts(), `[socks] ${host}:${port} -> ${dp.t}`)
+          return
+        } catch (e) { console.log(ts(), `[socks] ${dp.t} dial failed (${e.message}), falling back to native`) }
+      }
+    }
+
+    // fallback: the native mgt tunnel (multiplexed, forward-secret)
+    app.removeListener('data', collect)
+    console.log(ts(), `[socks] ${host}:${port} -> mgt`)
+    openTunnelStream({ host, port }, app).then((stream) => {
+      for (const d of pending) stream.write(d)
+      pending.length = 0
+    }).catch((e) => {
+      console.log(ts(), `[socks] ${host}:${port} failed: ${e.message}`)
+      try { app.destroy() } catch {}
+    })
   }, 250)
-  app.on('error', () => {})
 }
 
 function udpFn(req, control, sendReply) {
