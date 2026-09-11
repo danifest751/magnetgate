@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.0 — 2026-09-11
+- M5: **multiplexed sessions (protocol v2)** — one persistent session to the exit carries every
+  SOCKS stream. Frames: `[u32 len][u8 type][u32 streamId][nonce][secretbox]` with
+  `OPEN/DATA/CLOSE/PING/PONG`; streamId 0 is session-level.
+- Keep-alive: client PINGs every 20 s, a session without PONG for 30 s is torn down and
+  re-established on the next stream request.
+- The exit demultiplexes streams onto upstream TCP connections; sessions idle >10 min are closed.
+- Data arriving between the SOCKS handshake and stream open is buffered (fixes a request-loss race).
+- Removed the aggressive 20 s upstream idle timeout on the exit.
+- Verified on a real network: parallel HTTPS streams (youtube+google) over one session, both 200;
+  egress IP = VPS.
+- Deployment: client and exit must be upgraded together (protocol v2 is incompatible with v1).
+
 ## 0.2.0 — 2026-09-11
 - Pull-based autodeploy on the VPS: a systemd timer (`magnetgate-deploy.timer`) runs
   `scripts/deploy.sh` every 3 minutes (fetch → reset → conditional deps → restart).
