@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.8.0 — 2026-09-12
+- **Reality + hysteria2 data planes (Track 3, phase 1).** The exit runs sing-box with VLESS+Reality
+  (TCP/443, borrowed SNI) and hysteria2 (UDP/443) inbounds and advertises both in the offer `dp`
+  list (from `/etc/magnetgate-dp.json`). The client runs a bundled sing-box
+  (`src/dp-supervisor.mjs`) as the data-plane engine — templating a client config from the chosen
+  endpoint, exposing a local SOCKS — and `routeFn` dials proxied connections through it, preferring
+  reality > hysteria2 and **falling back to the native `mgt` tunnel** on failure.
+  `MAGNETGATE_DATA_PLANE=mgt` forces the native channel; `scripts/get-singbox.ps1` fetches sing-box
+  (pinned SHA-256); `tools/` is gitignored.
+- magnetgate is now the rendezvous + data-plane-selection control plane around sing-box; the exit,
+  the DHT/Nostr rendezvous and the native channel are unchanged (still the fallback).
+- Known limitation: hysteria2 currently uses `insecure` TLS (traffic is encrypted and the client is
+  authed via password + salamander obfs, but the self-signed server cert is not validated) to keep
+  the offer within the DHT 1000-byte limit; Reality is fully authenticated. Hardening hy2 server-auth
+  (ship the cert via the size-unbounded Nostr offer) is a follow-up.
+- Verified in prod: client → Reality → exit (egress = exit IP, HTTPS 200); hysteria2 likewise;
+  forced-native fallback (`-> mgt`) works.
+
 ## 0.7.0 — 2026-09-12
 - **Offer schema v3 + a second rendezvous channel (Nostr).** The rendezvous offer is now an
   extensible list of data-plane endpoints (`{v:3, ts, dp:[{t:'mgt',host,port,udp?}, …]}`), so the
