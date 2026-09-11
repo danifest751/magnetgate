@@ -65,6 +65,31 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_SEQ_FILE` | persistence for `seq` (mandatory on the exit: restarts must increment it) |
 | `MAGNETGATE_RULES` | split-tunnel rules file |
 
+## Configuration and autostart
+
+Client config (`magnetgate.config.json`, see `magnetgate.config.example.json`):
+
+```json
+{
+  "localPort": 1080,
+  "bootstrap": ["<exit-ip>:20001"],
+  "rules": { "direct": ["ru"], "proxy": [] },
+  "exits": [
+    { "name": "nl", "psk": "<psk>" },
+    { "name": "backup", "psk": "<other-psk>" }
+  ]
+}
+```
+
+Multiple exits: the client discovers every exit's offer, opens SOCKS streams round-robin across
+them, and fails over to a healthy exit automatically (dead exits get a 30 s cooldown).
+
+Windows autostart (scheduled task at logon):
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-client-windows.ps1 -ConfigPath .\magnetgate.config.json
+```
+Linux autostart: `scripts/magnetgate-client.service` (systemd unit template).
+
 ## Deployment (pull-based autodeploy)
 
 The VPS pulls `main` from GitHub by itself (no GitHub Actions, no open webhook port):
