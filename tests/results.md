@@ -63,6 +63,24 @@ Deployment note: client and exit must be upgraded together — protocol v2 is in
 with v1 framing (the autodeploy restarts both sides of the server; the client is restarted
 manually).
 
+## M5–M9 results (2026-09-11, final round)
+
+| Item | Result | Notes |
+|---|---|---|
+| M5: multiplexed sessions (protocol v2) | **pass** | parallel HTTPS streams over one session (youtube+google, both 200) |
+| M6: multi-exit failover | **pass** | two exits, round-robin; killing one exit mid-run → 5/5 requests served via the survivor; 30 s cooldown; automatic recovery |
+| M7: SOCKS5 UDP ASSOCIATE + tunnel UDP relay | **pass** | raw DNS to 1.1.1.1:53 through the tunnel from a filtered network → valid answer relayed by the VPS |
+| M8: system-wide VPN mode (tun2proxy) | **pass** | scripts/vpn-windows.ps1 (TUN adapter, all traffic, DNS at the exit) |
+| M9a: list updater | **pass** | scripts/update-rules.mjs converts a community blocklist into split-tunnel rules |
+| M9b: traffic masking (frame padding) | **pass** | DATA frame sizes quantized to 64–4096 buckets |
+| M9c: metrics | **pass** | MAGNETGATE_STATS per-exit counters |
+| M9d: experimental UDP data transport | **pass local / inconclusive over the WG chain** | handshake + data work locally; over the user's WG chain the reliable-UDP return traffic is dropped by the NAT/splitter chain (documented, TCP fallback covers it) |
+
+Defects fixed in this round: `createClientUdpStream` did not dispatch datagrams to the stream
+(handshake hang); the exit's reliable stream double-dispatched datagrams (ExitUdpMux delegation +
+a global socket handler); reliable-UDP handshakes timed out when the exit's UDP mux was bound
+behind ufw without a 49001/udp allow rule; PowerShell 5.1 writes BOM'ed UTF-8 configs.
+
 ## Architecture after M4
 
 ```
