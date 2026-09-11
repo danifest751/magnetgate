@@ -105,14 +105,28 @@ function autoIp() {
   return '127.0.0.1'
 }
 
+// extra data-plane endpoints (Reality/hysteria2) advertised via a file that a sing-box setup /
+// rotation writes; read fresh each publish so rotation is picked up automatically.
+const DP_FILE = process.env.MAGNETGATE_DP_FILE ?? '/etc/magnetgate-dp.json'
+function readExtraDp() {
+  try {
+    if (!fs.existsSync(DP_FILE)) return []
+    const arr = JSON.parse(fs.readFileSync(DP_FILE, 'utf8')).dp
+    return Array.isArray(arr) ? arr : []
+  } catch { return [] }
+}
+
 function publish() {
   seq += 1
   const udp = process.env.MAGNETGATE_TRANSPORT !== 'tcp' ? 1 : undefined
-  // offer v3: an extensible list of data-plane endpoints. The native channel ("mgt") is the
-  // fallback; Reality/hysteria2 entries are added in a later phase. Sealed once, shared by both
+  // offer v3: an extensible list of data-plane endpoints. Reality/hysteria2 (from the dp file)
+  // are preferred; the native channel ("mgt") is the fallback. Sealed once, shared by both
   // rendezvous channels (same seq => same nonce => identical ciphertext, no nonce reuse).
-  const offer = { v: 3, ts: Date.now(), dp: [{ t: 'mgt', host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, udp }] }
+  const dp = [...readExtraDp(), { t: 'mgt', host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, udp }]
+  const offer = { v: 3, ts: Date.now(), dp }
   const sealed = seal(boxKey, Buffer.from(JSON.stringify(offer)), seq)
+  if (sealed.length > 950) console.log(ts(), `[warn] offer ${sealed.length}B may exceed the DHT ~1000B limit`)
+  if (nostr) nostr.publish(sealed, seq)
   if (nostr) nostr.publish(sealed, seq)
   dht.put({
     k: pk,

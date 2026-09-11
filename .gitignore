@@ -7,6 +7,9 @@ key/
 Thumbs.db
 .DS_Store
 
+# downloaded third-party binaries (sing-box, tun2proxy) — fetched with pinned checksums
+tools/
+
 # user configs contain PSKs
 magnetgate.config.json
 
