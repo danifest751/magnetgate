@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — 2026-09-11
+- M7: **SOCKS5 UDP ASSOCIATE + UDP relay through the tunnel** — QUIC/DNS/games now work in
+  VPN mode. Tunnel UDP payload format: `[atyp][addr][port][data]` in both directions.
+- M8: **system-wide VPN mode** — `scripts/vpn-windows.ps1` wires a tun2proxy TUN adapter to the
+  client's SOCKS5 port (all system traffic, DNS resolved at the exit).
+- Verified end-to-end: a raw DNS query to 1.1.1.1:53 through the tunnel from a filtered network
+  returns a valid answer relayed by the VPS exit.
+
 ## 0.4.0 — 2026-09-11
 - M6: **multi-exit client with failover** — a config file (`magnetgate.config.json`) lists several
   exits (each with its own PSK); the client discovers every offer, spreads SOCKS streams
