@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0 — 2026-09-12
+- **Credential rotation with a grace window (Track 3, phase 2).** `scripts/rotate-dp.mjs` (a systemd
+  timer, daily) rotates the Reality shortId+uuid and the hysteria2 password while keeping the
+  previous generation valid for one interval (grace); the stable Reality keypair, hy2 obfs and TLS
+  cert are preserved so a client's pinned key stays valid.
+- The exit watches the dp file and republishes within ~1s of a rotation, so clients pick up the new
+  credentials in seconds instead of the 5-minute cycle. The client's supervisor switches sing-box to
+  the new params cleanly (restarts serialized to avoid a SOCKS-port race) and falls back to the
+  native channel during any gap.
+- Verified in prod: rotation → exit republishes → client switches to the new generation with no race
+  and no downtime (HTTPS 200 throughout); the grace window keeps the previous generation working.
+
 ## 0.8.0 — 2026-09-12
 - **Reality + hysteria2 data planes (Track 3, phase 1).** The exit runs sing-box with VLESS+Reality
   (TCP/443, borrowed SNI) and hysteria2 (UDP/443) inbounds and advertises both in the offer `dp`
