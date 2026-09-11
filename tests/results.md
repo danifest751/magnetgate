@@ -43,6 +43,26 @@
 | TC-13 | Split tunneling by rules | **pass** | rules `direct:["amazonaws.com"]`: the target → **217.12.38.106** (direct via WG/Beget-RU); without rules the same target → **194.31.204.95** (the tunnel). Routing works, egress differs |
 | — | Keep-alive | added | SO_KEEPALIVE 15 s on both sides of the data channel; upstream timeout 20 s |
 
+## M5 results — multiplexed sessions, protocol v2 (2026-09-11)
+
+Protocol v2: frames gained a type byte and streamId (`OPEN/DATA/CLOSE/PING/PONG`),
+streamId 0 is session-level keep-alive (client PINGs every 20 s, session is dead after
+30 s without PONG). The exit demuxes streams onto upstream TCP connections. One session
+carries all SOCKS streams. Sessions idle >10 min are closed (exit side). Data arriving
+between the SOCKS handshake and stream open is buffered (fixes a request-loss race).
+
+| TC | Scenario | Result | Metrics/notes |
+|---|---|---|---|
+| TC-14 | Mux: single stream (local loop) | **pass** | hello-mux via SOCKS |
+| TC-15 | Mux: two parallel streams over ONE session to different ports | **pass** | r1=`hello-mux` (8000), r2=`hello-mux-8001` (8001) — correct demultiplexing |
+| TC-16 | Throughput: 3 MB through one session | **pass** | 285 ms ≈ **88 Mbit/s** (loopback) |
+| TC-17 | Real network: egress + parallel HTTPS streams | **pass** | egress = VPS IP; `youtube.com/robots.txt` → 200 in 0.67 s; parallel `youtube` + `google` → both 200 over the same session |
+| — | Autodeploy of the protocol change | **pass** | push `07244a5` → `systemctl start magnetgate-deploy` → VPS running v2 within seconds (`deployed 07244a5396ee`) |
+
+Deployment note: client and exit must be upgraded together — protocol v2 is incompatible
+with v1 framing (the autodeploy restarts both sides of the server; the client is restarted
+manually).
+
 ## Architecture after M4
 
 ```

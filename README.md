@@ -92,8 +92,9 @@ enforced by a `commit-msg` hook).
 
 ## Status and limitations
 
-M1–M4 are implemented and tested (see `tests/results.md`). Next: uTP/KCP data plane, stream
-multiplexing, client service-ization, multi-exit patching.
+M1–M5 are implemented and tested (see `tests/results.md`): BEP 44 rendezvous, SOCKS5 with remote
+DNS, split tunneling, and multiplexed sessions (one persistent encrypted session carries all
+streams, with keep-alive). Next: uTP/KCP data plane, multi-exit patching, client service-ization.
 
 Note: obfuscation is at PoC level — the data channel is only partially camouflaged as the
 BitTorrent family; the DHT platform sees put/get participants' IPs like any ordinary BT node.
