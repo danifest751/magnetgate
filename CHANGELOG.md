@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.0 — 2026-09-12
+- **Security audit remediation.** Data protocol bumped to **v3** — client and exit must be
+  upgraded together (v3 is incompatible with v2).
+- **fix(proto): DATA-frame padding corruption** — the pad length was written into a single byte,
+  but padding to the 512/1024/2048/4096 buckets exceeds 255, so it wrapped mod 256 and the receiver
+  stripped the wrong offset, corrupting every DATA frame ≥512 B. A TLS ClientHello (~517 B) always
+  landed in the first bad range, which broke **all HTTPS through the tunnel** while small HTTP
+  survived. Pad length is now a 2-byte prefix.
+- **feat(proto): forward-secret session handshake** — the static PSK-derived session keys are
+  replaced by an ephemeral X25519 exchange authenticated and encrypted under the PSK; session keys
+  are `BLAKE2b-512(dh ‖ cePk ‖ eePk ‖ boxKey)`. A later PSK compromise no longer decrypts past
+  recorded traffic (forward secrecy). The handshake carries a timestamp and the exit keeps a TTL
+  cache of client ephemeral keys, so stale or replayed openings are rejected.
+- **Hardening:** exit and DHT run as an unprivileged `magnetgate` user under a systemd sandbox; the
+  PSK is read from the environment (no longer on the argv/`ps` line); the exit blocks egress to
+  loopback / link-local (169.254.169.254 metadata) / RFC1918 (SSRF guard, `MAGNETGATE_ALLOW_PRIVATE=1`
+  to opt out) and caps concurrent sessions/streams; a malformed OPEN frame can no longer crash it.
+- **fix(client): SOCKS5 binds to `127.0.0.1`** (was `0.0.0.0` — an open no-auth LAN proxy);
+  override with `MAGNETGATE_SOCKS_HOST`.
+- **fix(dht): IPv4 bootstrap** — lead the bootstrap list with `router.bittorrent.com`; the other
+  public nodes resolve to IPv6-only on some hosts and bittorrent-dht is udp4, which caused
+  "No nodes to query". The exit also bootstraps off its own self-hosted node
+  (`DHT_BOOTSTRAP=127.0.0.1:20001,...`).
+- **fix(udp):** scoped the retransmit `seq` reference (crashed under `MAGNETGATE_DEBUG`), gated
+  debug logs behind the flag, and prune closed reliable-UDP streams (leak).
+- **Supply chain:** deploy uses `npm ci` (reproducible) and can require a signed commit
+  (`/opt/magnetgate/.deploy-verify`); `vpn-windows.ps1` verifies the tun2proxy download against a
+  pinned SHA-256.
+- Advisory weak-PSK warning at startup. Unit tests added (`npm test`, node:test).
+
 ## 0.5.0 — 2026-09-11
 - M7: **SOCKS5 UDP ASSOCIATE + UDP relay through the tunnel** — QUIC/DNS/games now work in
   VPN mode. Tunnel UDP payload format: `[atyp][addr][port][data]` in both directions.

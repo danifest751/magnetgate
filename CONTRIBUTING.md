@@ -85,5 +85,6 @@ docs: translate testing guide to english
 ```bash
 git config commit.template .gitmessage
 git config core.hooksPath .githooks
-npm install
+npm ci
+npm test   # crypto/codec/handshake unit tests (node:test)
 ```
