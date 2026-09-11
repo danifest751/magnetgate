@@ -21,7 +21,8 @@ let cfg = { localPort: 1080, rules: { direct: [], proxy: [] }, bootstrap: BOOTST
   const cfgArg = process.argv[2] ?? process.env.MAGNETGATE_CONFIG ?? null
   const isFile = cfgArg && cfgArg.endsWith('.json') && fs.existsSync(cfgArg)
   if (isFile) {
-    const c = JSON.parse(fs.readFileSync(cfgArg, 'utf8'))
+    // strip a BOM if present (PowerShell 5.1 writes utf8 with BOM)
+    const c = JSON.parse(fs.readFileSync(cfgArg, 'utf8').replace(/^\uFEFF/, ''))
     cfg = { ...cfg, ...c, rules: { direct: [], proxy: [], ...(c.rules ?? {}) } }
     if (c.bootstrap) cfg.bootstrap = c.bootstrap
     if (!cfg.exits?.length && c.psk) cfg.exits = [{ name: 'default', psk: c.psk }]
