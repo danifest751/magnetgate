@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- **App: WG/tunnel-aware system VPN + live stats.** The VPN toggle is gated while any other full
+  tunnel is up (WireGuard/OpenVPN/TAP/Wintun/commercial VPNs, detected by adapter description or
+  a default-route-with-on-link-nexthop), auto-stops if one appears, and auto-recovers when the
+  conflicting tunnel goes away. The TUN sing-box exposes a loopback Clash API; the app shows live
+  down/up speed, connection count and totals. Config editor collapsed into an Advanced section.
 - **sing-box TUN VPN field-validated.** With WireGuard off, the app's system VPN brings up the
   `magnetgate` TUN and routes all traffic through it: system egress becomes the exit IP, exit
   connections go direct (bypass works, no loop), real traffic flows over Reality to the exit. Note:

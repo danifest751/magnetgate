@@ -32,7 +32,10 @@ param(
   [string]$WintunDllSha256 = 'e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce',
   # where sing-box (vpn.log) and this launcher (vpn-launcher.log) write, so a field test is readable
   # afterwards. Defaults to the app's log folder (Electron userData for productName "magnetgate").
-  [string]$LogDir = (Join-Path $env:APPDATA 'magnetgate\logs')
+  [string]$LogDir = (Join-Path $env:APPDATA 'magnetgate\logs'),
+  # Clash API for live stats (connections / traffic), loopback-only. 0 disables it.
+  [int]$ClashPort = 0,
+  [string]$ClashSecret = ''
 )
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 try { Start-Transcript -Path (Join-Path $LogDir 'vpn-launcher.log') -Append | Out-Null } catch {}
@@ -128,6 +131,11 @@ Write-Host ("bypassing (kept off the tunnel): " + ($bypassIps -join ', '))
 # bypass rule is injected only when there is at least one IP to bypass.
 # sing-box logs to a file (forward slashes so no JSON escaping needed) so the field test is readable
 $logOut = ($LogDir -replace '\\', '/') + '/vpn.log'
+# optional Clash API block for live stats
+$clashBlock = ''
+if ($ClashPort -gt 0) {
+  $clashBlock = "`n  `"experimental`": { `"clash_api`": { `"external_controller`": `"127.0.0.1:$ClashPort`", `"secret`": `"$ClashSecret`" } },"
+}
 $bypassRule = ''
 if ($bypassIps.Count -gt 0) {
   $cidrJson = (($bypassIps | ForEach-Object { '"' + $_ + '/32"' }) -join ', ')
@@ -135,7 +143,7 @@ if ($bypassIps.Count -gt 0) {
 }
 $json = @"
 {
-  "log": { "level": "info", "timestamp": true, "output": "$logOut" },
+  "log": { "level": "info", "timestamp": true, "output": "$logOut" },$clashBlock
   "dns": {
     "servers": [ { "tag": "proxy-dns", "type": "https", "server": "$DohServer", "detour": "proxy" } ],
     "strategy": "ipv4_only"
