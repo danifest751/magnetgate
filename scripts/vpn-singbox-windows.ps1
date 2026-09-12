@@ -22,10 +22,14 @@ param(
   [string]$ConfigPath = (Join-Path (Split-Path $PSScriptRoot -Parent) 'magnetgate.config.json'),
   [int]$SocksPort = 1080,
   [string]$DohServer = '1.1.1.1',
-  # wintun.dll (required by sing-box TUN on Windows). If missing, either drop wintun.dll (amd64) into
-  # tools\sing-box\ yourself, or pass -WintunSha256 to auto-download the pinned build from wintun.net.
+  # wintun.dll (required by sing-box TUN on Windows). If missing, it is auto-downloaded from
+  # wintun.net and verified against the pinned zip hash below; the extracted amd64 dll is checked
+  # too. Pass -WintunSha256 for a different $WintunVersion, or drop wintun.dll (amd64) in by hand.
   [string]$WintunVersion = '0.14.1',
-  [string]$WintunSha256 = ''
+  # SHA-256 of wintun-0.14.1.zip (verified 2026-09-12).
+  [string]$WintunSha256 = '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51',
+  # SHA-256 of the extracted bin\amd64\wintun.dll for 0.14.1 (verified 2026-09-12).
+  [string]$WintunDllSha256 = 'e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce'
 )
 $ErrorActionPreference = 'Stop'
 $root  = Split-Path $PSScriptRoot -Parent
@@ -70,7 +74,16 @@ if (-not (Test-Path $wintun)) {
   $tmp = Join-Path $env:TEMP "wintun-$WintunVersion-extract"
   Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
   Expand-Archive $zip -DestinationPath $tmp -Force
-  Copy-Item (Join-Path $tmp 'wintun\bin\amd64\wintun.dll') $wintun -Force
+  $srcDll = Join-Path $tmp 'wintun\bin\amd64\wintun.dll'
+  if ($WintunDllSha256) {
+    $dllGot = (Get-FileHash -Algorithm SHA256 $srcDll).Hash.ToLower()
+    if ($dllGot -ne $WintunDllSha256.ToLower()) {
+      Remove-Item $zip, $tmp -Recurse -Force -ErrorAction SilentlyContinue
+      Write-Error "wintun.dll checksum mismatch: got $dllGot, expected $WintunDllSha256. Aborting."
+      exit 1
+    }
+  }
+  Copy-Item $srcDll $wintun -Force
   Remove-Item $zip, $tmp -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host "installed: $wintun"
 }
