@@ -35,6 +35,10 @@
     details > summary::-webkit-details-marker { display: none; }
     details > summary::before { content: '▸ '; }
     details[open] > summary::before { content: '▾ '; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 4px 6px 4px 10px; font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+    .chip button { border: none; background: transparent; color: var(--muted); cursor: pointer; padding: 0 4px; font-size: 14px; }
+    .chip button:hover { color: var(--err); }
     input, textarea { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font: inherit; width: 100%; }
     textarea { resize: vertical; min-height: 54px; font-family: ui-monospace, Consolas, monospace; }
     label { color: var(--muted); font-size: 11px; display: block; margin-bottom: 4px; }
@@ -74,6 +78,18 @@
       <p id="tunWarn" class="warnbox" hidden></p>
       <p id="stats" class="statsline" hidden></p>
       <p class="muted" style="margin:10px 0 0">System VPN routes all traffic through the tunnel (kill-switch, IPv6 blocked, DNS via tunnel) and asks for admin (UAC). Turn off any other full-tunnel VPN first.</p>
+    </section>
+
+    <section class="card">
+      <h2>Direct routing (bypass VPN)</h2>
+      <p class="muted" style="margin:0 0 10px">RU resources that reject datacenter/VPN IPs (Gosuslugi, MAX, banks) go <b>direct</b> on your real IP. A community "inside-Russia" list is applied and auto-updated; add your own domains below. Changes apply on the next VPN start.</p>
+      <div class="row">
+        <input id="directInput" placeholder="gosuslugi.ru" style="max-width:280px" />
+        <button id="btnAddDirect">Add</button>
+        <span class="spacer"></span>
+        <span id="directSaved" class="muted"></span>
+      </div>
+      <div id="directList" class="chips"></div>
     </section>
 
     <section class="card">

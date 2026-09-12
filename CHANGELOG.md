@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **Split tunnel for RU domestic resources.** RU sites that reject datacenter/VPN IPs (Gosuslugi,
+  MAX, banks) now go DIRECT on the real residential IP while everything else stays on magnetgate.
+  Base list = the community auto-updated `itdoginfo-inside-russia` sing-box rule-set (remote,
+  cached, downloaded through the tunnel); the app UI lets you add/remove your own direct domains;
+  direct-list domains also resolve via a RU resolver so the geo-answer is local. Server-published
+  overlay is the next step. See docs/ru-direct-list-research.md.
 - **App: WG/tunnel-aware system VPN + live stats.** The VPN toggle is gated while any other full
   tunnel is up (WireGuard/OpenVPN/TAP/Wintun/commercial VPNs, detected by adapter description or
   a default-route-with-on-link-nexthop), auto-stops if one appears, and auto-recovers when the
