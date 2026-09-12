@@ -177,8 +177,15 @@ function bypassIps() {
 // appears, and — the key UX — when the other tunnel goes away but ours is enabled-yet-not-up, restart
 // it so it starts working without the user re-toggling.
 function monitorTunnels() {
+  // broadly detect ANY other VPN/tunnel adapter (not just WireGuard): any UP adapter besides
+  // magnetgate whose description names a tunnel/VPN engine, or that carries a default route with an
+  // on-link next hop (the generic full-tunnel signature). Physical NICs (Ethernet/Wi-Fi) don't match.
+  const rx = 'WireGuard|OpenVPN|TAP|Wintun|WARP|Cloudflare|Amnezia|Outline|Hiddify|Nekoray|Xray|v2ray|Clash|Mihomo|Proton|Nord|ExpressVPN|Surfshark|sing-tun|VPN|Tunnel'
   const ps = "$mg=[bool](Get-NetAdapter -ea SilentlyContinue|?{$_.Name -eq 'magnetgate' -and $_.Status -eq 'Up'});" +
-    "$o=@(Get-NetAdapter -ea SilentlyContinue|?{$_.Status -eq 'Up' -and $_.Name -ne 'magnetgate' -and ($_.InterfaceDescription -match 'WireGuard|OpenVPN|TAP-Windows')}|%{$_.Name});" +
+    "$byDesc=@(Get-NetAdapter -ea SilentlyContinue|?{$_.Status -eq 'Up' -and $_.Name -ne 'magnetgate' -and ($_.InterfaceDescription -match '" + rx + "')}|%{$_.Name});" +
+    "$rtIdx=@(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ea SilentlyContinue|?{$_.NextHop -eq '0.0.0.0'}|%{$_.ifIndex});" +
+    "$byRoute=@(Get-NetAdapter -ea SilentlyContinue|?{$_.Status -eq 'Up' -and $_.Name -ne 'magnetgate' -and $rtIdx -contains $_.ifIndex}|%{$_.Name});" +
+    "$o=@($byDesc+$byRoute|Select-Object -Unique);" +
     "[pscustomobject]@{mg=$mg;others=$o}|ConvertTo-Json -Compress"
   const p = spawn('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true })
   let out = ''
