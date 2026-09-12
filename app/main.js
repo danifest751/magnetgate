@@ -323,7 +323,12 @@ function buildVpnConfig({ mode, dp, bypass, clashPort, clashSecret, directDomain
     log: { level: 'info', timestamp: true, ...(logOut ? { output: logOut } : {}) },
     ...(clashPort ? { experimental: { clash_api: { external_controller: `127.0.0.1:${clashPort}`, secret: clashSecret } } } : {}),
     dns: { servers: [{ tag: 'proxy-dns', type: 'https', server: '1.1.1.1', detour: 'proxy' }], strategy: 'ipv4_only' },
-    inbounds: [{ type: 'tun', tag: 'tun-in', interface_name: 'magnetgate', address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'], mtu: 1400, auto_route: true, strict_route: true, stack: 'system' }],
+    // gVisor userspace TCP/IP stack: on Windows the 'system' stack does not deliver TUN-inbound TCP
+    // to routing (UDP/QUIC and sing-box's own DoH work, but app TCP connections stall with no outbound
+    // — verified in the field), so TCP browsing fails. gVisor handles TCP in userspace and is the
+    // reliable choice on Windows (Hiddify/Nekoray default). The reality outbound itself carries TCP
+    // fine (verified via a SOCKS+reality probe: checkip returned the exit IP, HTTPS loaded).
+    inbounds: [{ type: 'tun', tag: 'tun-in', interface_name: 'magnetgate', address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'], mtu: 1400, auto_route: true, strict_route: true, stack: 'gvisor' }],
     outbounds: [...proxyOutbounds, { type: 'direct', tag: 'direct' }],
     route: { ...(ruleSets.length ? { rule_set: ruleSets } : {}), rules, final, auto_detect_interface: true, default_domain_resolver: 'proxy-dns' },
   }
