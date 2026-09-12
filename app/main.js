@@ -72,9 +72,6 @@ const state = { clientRunning: false, route: null, egress: null, vpnOn: false, l
   otherTunnel: null, vpnHealthy: false,
   stats: { conns: 0, up: 0, down: 0, upBps: 0, downBps: 0 } }
 let lastSample = null // { t, up, down } for speed calc
-let vpnEnabledAt = 0        // when the user last enabled the VPN (to tell "starting" from "stuck")
-let vpnRestarting = false   // guards the auto-recovery restart
-let vpnRestartCount = 0     // caps auto-recovery so a persistent failure doesn't loop the UAC window
 
 // ---------- config ----------
 const DEFAULT_CONFIG = {
@@ -219,10 +216,10 @@ function bypassIps() {
 // on "open interface"). So: refuse to start the VPN while another tunnel is up, auto-stop ours if one
 // appears, and — the key UX — when the other tunnel goes away but ours is enabled-yet-not-up, restart
 // it so it starts working without the user re-toggling.
-function monitorTunnels() {
-  // broadly detect ANY other VPN/tunnel adapter (not just WireGuard): any UP adapter besides
-  // magnetgate whose description names a tunnel/VPN engine, or that carries a default route with an
-  // on-link next hop (the generic full-tunnel signature). Physical NICs (Ethernet/Wi-Fi) don't match.
+// broadly detect ANY other VPN/tunnel adapter (not just WireGuard): any UP adapter besides
+// magnetgate whose description names a tunnel/VPN engine, or that carries a default route with an
+// on-link next hop (the generic full-tunnel signature). Physical NICs (Ethernet/Wi-Fi) don't match.
+function checkTunnels() {
   const rx = 'WireGuard|OpenVPN|TAP|Wintun|WARP|Cloudflare|Amnezia|Outline|Hiddify|Nekoray|Xray|v2ray|Clash|Mihomo|Proton|Nord|ExpressVPN|Surfshark|sing-tun|VPN|Tunnel'
   const ps = "$mg=[bool](Get-NetAdapter -ea SilentlyContinue|?{$_.Name -eq 'magnetgate' -and $_.Status -eq 'Up'});" +
     "$byDesc=@(Get-NetAdapter -ea SilentlyContinue|?{$_.Status -eq 'Up' -and $_.Name -ne 'magnetgate' -and ($_.InterfaceDescription -match '" + rx + "')}|%{$_.Name});" +
@@ -230,48 +227,52 @@ function monitorTunnels() {
     "$byRoute=@(Get-NetAdapter -ea SilentlyContinue|?{$_.Status -eq 'Up' -and $_.Name -ne 'magnetgate' -and $rtIdx -contains $_.ifIndex}|%{$_.Name});" +
     "$o=@($byDesc+$byRoute|Select-Object -Unique);" +
     "[pscustomobject]@{mg=$mg;others=$o}|ConvertTo-Json -Compress"
-  const p = spawn('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true })
-  let out = ''
-  p.stdout.on('data', (d) => { out += d.toString() })
-  p.on('error', () => {})
-  p.on('exit', () => {
-    let r; try { r = JSON.parse(out) } catch { return }
-    const others = Array.isArray(r.others) ? r.others : (r.others ? [r.others] : [])
-    const prevOther = state.otherTunnel
-    state.otherTunnel = others[0] || null
-    state.vpnHealthy = !!r.mg && state.vpnOn
-    if (r.mg) vpnRestartCount = 0 // came up fine → reset the recovery budget
-    // another full tunnel came up while ours is on → stop ours (they conflict)
-    if (state.otherTunnel && state.vpnOn) {
-      pushLog(`[app] ${state.otherTunnel} is up — stopping the system VPN (two full tunnels conflict)`)
-      runVpn(true)
-    } else if (state.vpnOn && !state.otherTunnel && !r.mg && !vpnRestarting && Date.now() - vpnEnabledAt > 15000) {
-      // enabled, no conflicting tunnel, but our adapter never came up (e.g. WG was on at start and is
-      // now off) — restart it so it recovers without a manual re-toggle, but only a couple of times
-      if (vpnRestartCount >= 2) {
-        state.lastError = 'system VPN failed to come up — check the logs (Open logs folder)'
-        state.vpnOn = false; pushStatus(); return
-      }
-      vpnRestartCount++
-      vpnRestarting = true
-      pushLog(`[app] system VPN did not come up — restarting (attempt ${vpnRestartCount})`)
-      runVpn(true)
-      setTimeout(() => { runVpn(false); vpnRestarting = false }, 3000)
-    }
-    if (prevOther !== state.otherTunnel) pushLog(`[app] other tunnel: ${state.otherTunnel || 'none'}`)
-    pushStatus()
+  return new Promise((resolve) => {
+    const p = spawn('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true })
+    let out = ''
+    p.stdout.on('data', (d) => { out += d.toString() })
+    p.on('error', () => resolve(null))
+    p.on('exit', () => {
+      let r; try { r = JSON.parse(out) } catch { return resolve(null) }
+      const others = Array.isArray(r.others) ? r.others : (r.others ? [r.others] : [])
+      resolve({ mg: !!r.mg, others })
+    })
   })
 }
 
-// ---------- system VPN (sing-box TUN), elevated on demand ----------
-function runVpn(off) {
-  if (!off && state.otherTunnel) {
-    state.lastError = `turn off ${state.otherTunnel} first — the system VPN can't share Wintun with another full tunnel`
-    pushLog(`[app] refusing to start VPN: ${state.otherTunnel} is active`)
-    pushStatus()
-    return
+async function monitorTunnels() {
+  const r = await checkTunnels()
+  if (!r) return
+  const prevOther = state.otherTunnel
+  state.otherTunnel = r.others[0] || null
+  state.vpnHealthy = r.mg && state.vpnOn
+  // if another full tunnel appears while ours is on, stop ours (they can't share Wintun). We do NOT
+  // auto-restart on a slow/absent adapter: Wintun creation can legitimately take many seconds, and
+  // killing it mid-open just loops. The pre-start check already blocks enabling while a tunnel is up.
+  if (state.otherTunnel && state.vpnOn) {
+    pushLog(`[app] ${state.otherTunnel} is up — stopping the system VPN (two full tunnels conflict)`)
+    runVpn(true)
   }
-  if (!off) { vpnEnabledAt = Date.now(); if (!vpnRestarting) vpnRestartCount = 0 }
+  if (prevOther !== state.otherTunnel) pushLog(`[app] other tunnel: ${state.otherTunnel || 'none'}`)
+  pushStatus()
+}
+
+// ---------- system VPN (sing-box TUN), elevated on demand ----------
+async function runVpn(off) {
+  if (!off) {
+    // fresh synchronous check right at click time (the 4s monitor can lag the first click)
+    const r = await checkTunnels()
+    const other = r && r.others[0]
+    if (other) {
+      state.otherTunnel = other
+      state.lastError = `turn off ${other} first — the system VPN can't share Wintun with another full tunnel`
+      pushLog(`[app] refusing to start VPN: ${other} is active`)
+      pushStatus()
+      return
+    }
+    state.otherTunnel = null
+    state.lastError = null
+  }
   const ips = off ? [] : bypassIps()
   const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
   const clashArg = off ? '' : ` -ClashPort ${CLASH_PORT} -ClashSecret ${CLASH_SECRET}`
@@ -353,8 +354,8 @@ ipcMain.handle('saveConfig', (_e, cfg) => saveConfig(cfg))
 ipcMain.handle('genPsk', () => genPsk())
 ipcMain.handle('startClient', () => { startClient() })
 ipcMain.handle('stopClient', async () => { await stopClient() })
-ipcMain.handle('vpnOn', () => { runVpn(false) })
-ipcMain.handle('vpnOff', () => { runVpn(true) })
+ipcMain.handle('vpnOn', async () => { await runVpn(false) })
+ipcMain.handle('vpnOff', async () => { await runVpn(true) })
 ipcMain.handle('openConfigDir', () => shell.openPath(path.dirname(CONFIG)))
 ipcMain.handle('openLogs', () => { ensureLogDir(); return shell.openPath(LOG_DIR) })
 ipcMain.handle('getLogPath', () => LOG_FILE)
