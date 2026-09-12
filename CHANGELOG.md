@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.10.0 — 2026-09-12
+- **hysteria2 cert-pinning (Track 3, Phase 3).** The exit now publishes two same-generation views of
+  the offer: the DHT offer stays compact and omits hy2 (its self-signed cert does not fit the
+  ~1000 B BEP44 limit), while the Nostr offer is a superset carrying the pinned hy2 endpoint with the
+  server cert (`dp.ca`) and its SAN hostname (`dp.sni`). `insecure` TLS is gone — Reality and hy2 are
+  now both fully server-authenticated.
+- The two offers are sealed under **disjoint nonces** (`seq` for the DHT, `'n'+seq` for Nostr) so the
+  differing plaintexts never reuse a nonce. The client merges same-generation offers from both
+  channels by data-plane type (`src/offer.mjs`), so the DHT poll no longer clobbers the hy2 entry
+  that only the Nostr channel carries.
+- The hy2 self-signed cert now carries a `subjectAltName` so Go's TLS verifier (which ignores the
+  legacy CN) accepts it under `server_name=magnetgate`; `rotate-dp.mjs` writes the cert into the dp
+  file each rotation, `setup-singbox.sh` generates it with the SAN on fresh installs.
+- Also fixed a duplicate Nostr publish (the offer was sent to the relay pool twice per cycle).
+- Verified in prod: a standalone sing-box built from the advertised pinned hy2 endpoint (cert
+  validated, no `insecure`) egresses through the exit with HTTPS 200; Reality stays the primary path.
+- Tests: 20/20 (added nonce-separation, `pickDp`, and `mergeOffer` merge/replace/ignore cases).
+
+
 ## 0.9.0 — 2026-09-12
 - **Credential rotation with a grace window (Track 3, phase 2).** `scripts/rotate-dp.mjs` (a systemd
   timer, daily) rotates the Reality shortId+uuid and the hysteria2 password while keeping the

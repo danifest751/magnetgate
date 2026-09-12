@@ -30,6 +30,8 @@ scale) is its enemy. Keep that boundary explicit in every design decision below.
 - **Phase 0** — offer schema v3 (`dp` list) + Nostr as a second rendezvous channel (0.7.0).
 - **Phase 1** — Reality + hysteria2 data planes via sing-box; client orchestrator + fail-over (0.8.0).
 - **Phase 2** — credential rotation with a grace window + ~1 s propagation (0.9.0).
+- **Phase 3 (partial)** — hysteria2 cert-pinning via the superset Nostr offer, dropping `insecure`
+  (0.10.0). Remaining Phase 3 item: sing-box TUN as the system-wide VPN.
 - Plus the security-audit remediation (forward-secret handshake, non-root sandbox, SSRF egress
   filter, SOCKS loopback bind, DHT IPv4 bootstrap, pinned binaries) — see [CHANGELOG.md](CHANGELOG.md).
 
@@ -38,11 +40,11 @@ scale) is its enemy. Keep that boundary explicit in every design decision below.
 - **sing-box TUN as the system-wide VPN**, replacing tun2proxy: one engine for both the data plane
   and the full-VPN layer, with a **kill-switch**, IPv6 handling and DNS-leak protection. Needs an
   elevated (admin) run to validate; the native channel stays the fallback under the TUN.
-- **hy2 cert-pinning** — carry the self-signed server cert via the size-unbounded Nostr offer (the
-  DHT 1000-byte limit is why hy2 currently uses `insecure`), dropping the `insecure` fallback.
-  Watch the nonce model: the DHT and Nostr offers must not seal *different* plaintext under the same
-  `seq` (nonce reuse) — either give the Nostr offer its own seq/nonce space, or make the DHT offer a
-  compact subset and the Nostr offer a superset sealed independently.
+- ✅ **hy2 cert-pinning (done, 0.10.0)** — the self-signed server cert now ships via the
+  size-unbounded Nostr offer, dropping the `insecure` fallback. Implemented as the compact-DHT /
+  superset-Nostr split: the DHT offer omits hy2, the Nostr offer carries it with the cert, and the
+  two are sealed under disjoint nonces (`seq` vs `'n'+seq`) so the differing plaintexts never reuse a
+  nonce. The cert carries a SAN so Go's TLS verifier accepts it under `server_name=magnetgate`.
 
 ## 4. The exit overlay — entry/egress split & control-plane mesh
 
