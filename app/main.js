@@ -32,6 +32,9 @@ const SEED_CANDIDATES = [
   path.join(RES, 'magnetgate.config.example.json'),
 ]
 const CONFIG = path.join(app.getPath('userData'), 'magnetgate.config.json')
+// the rendezvous client (spawned in rendezvous-only mode) writes the live data-plane endpoints here;
+// the app builds the TUN sing-box config directly from them — one engine, data path TUN->reality->exit.
+const DP_FILE = path.join(app.getPath('userData'), 'current-dp.json')
 // everything (app events + the client's stdout/stderr) is appended here so a field test can be read
 // back afterwards; the sing-box TUN logs into the same folder (see the VPN launcher's -LogDir).
 const LOG_DIR = path.join(app.getPath('userData'), 'logs')
@@ -46,9 +49,11 @@ let vpnProc = null // the sing-box TUN process (managed directly; app runs eleva
 let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
 const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null,
-  otherTunnel: null, vpnHealthy: false,
+  otherTunnel: null, vpnHealthy: false, rvReady: false,
   stats: { conns: 0, up: 0, down: 0, upBps: 0, downBps: 0 } }
 let lastSample = null // { t, up, down } for speed calc
+let curDpSig = null   // signature of the data-plane last applied to the TUN sing-box (rotation detection)
+let vpnChain = Promise.resolve() // serializes VPN (re)launches so a dp change can't race a start
 
 // ---------- config ----------
 const DEFAULT_CONFIG = {
@@ -122,8 +127,12 @@ function startClient() {
   state.lastError = null
   const cfg = loadConfig()
   if (!cfg.exits?.length) { state.lastError = 'no exits configured — add a PSK first'; pushStatus(); return }
-  // run the existing client on Electron's own Node runtime (no system Node needed)
-  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+  // start fresh: drop any stale endpoints from a previous run so the VPN waits for a live result
+  try { fs.unlinkSync(DP_FILE) } catch { /* none */ }
+  curDpSig = null; state.rvReady = false
+  // run the client in rendezvous-only mode on Electron's own Node runtime (no system Node needed):
+  // it only discovers exits and writes the data-plane endpoints to DP_FILE — no SOCKS, no 2nd sing-box.
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', MAGNETGATE_RENDEZVOUS_ONLY: '1', MAGNETGATE_DP_OUT: DP_FILE }
   try {
     clientProc = spawn(process.execPath, [CLIENT, CONFIG], { cwd: RES, env, windowsHide: true })
   } catch (e) { state.lastError = `failed to start client: ${e.message}`; pushStatus(); return }
@@ -173,16 +182,24 @@ async function stopClient() {
   pushStatus()
 }
 
-// the exit IP(s) that MUST bypass the TUN, or the client's own uplink to the exit is captured and
-// loops back into the SOCKS proxy and nothing connects — from the config bootstrap literals plus the
-// exit IP learned at runtime. The packaged launcher can't find the userData config on its own, so the
-// app passes these explicitly.
-function bypassIps() {
+// read the current data-plane endpoints the rendezvous client published (null until the first offer)
+function readDp() {
+  try {
+    const o = JSON.parse(fs.readFileSync(DP_FILE, 'utf8').replace(/^﻿/, ''))
+    return Array.isArray(o?.dp) ? o.dp : null
+  } catch { return null }
+}
+
+// the exit IP(s) that MUST bypass the TUN, or the reality/hy2 handshake to the exit is itself captured
+// by the TUN and loops — nothing connects. Sources: the data-plane endpoint hosts (the exit IP), the
+// config's IP-literal DHT bootstraps, and the exit IP seen in client logs.
+const IP_RE = /^\d{1,3}(\.\d{1,3}){3}$/
+function bypassIps(dp) {
   const ips = new Set()
-  const ipRe = /^\d{1,3}(\.\d{1,3}){3}$/
+  for (const d of (dp || [])) { if (d.host && IP_RE.test(d.host)) ips.add(d.host) }
   for (const b of (loadConfig().bootstrap || [])) {
     const h = String(b).split(':')[0]
-    if (ipRe.test(h)) ips.add(h)
+    if (IP_RE.test(h)) ips.add(h)
   }
   if (lastExitHost) ips.add(lastExitHost)
   return [...ips]
@@ -234,19 +251,51 @@ async function monitorTunnels() {
   pushStatus()
 }
 
+// Reality / hysteria2 outbounds built straight from an offer's data-plane endpoint (same schema the
+// standalone client's dp-supervisor uses — proven in prod). Tag is assigned by the caller.
+function realityOutbound(dp) {
+  return {
+    type: 'vless', server: dp.host, server_port: dp.port, uuid: dp.uuid, flow: 'xtls-rprx-vision',
+    tls: {
+      enabled: true, server_name: dp.sni,
+      utls: { enabled: true, fingerprint: dp.fp || 'chrome' },
+      reality: { enabled: true, public_key: dp.pbk, short_id: dp.sid },
+    },
+  }
+}
+function hy2Outbound(dp) {
+  const tls = { enabled: true, alpn: ['h3'] }
+  if (dp.ca) { tls.certificate = Array.isArray(dp.ca) ? dp.ca : [dp.ca]; if (dp.sni) tls.server_name = dp.sni }
+  else tls.insecure = true
+  return { type: 'hysteria2', server: dp.host, server_port: dp.port, password: dp.pw, obfs: { type: 'salamander', password: dp.obfs }, tls }
+}
+
 // Build the sing-box TUN config in-process (the app runs elevated, so it manages sing-box directly —
-// no PowerShell console, no per-toggle UAC). full: everything via the exit + a direct exception list;
-// split: direct by default + only the blocked/geo-restricted list via the exit.
-function buildVpnConfig({ mode, bypass, socksPort, clashPort, clashSecret, directDomains, tunnelDomains, logOut }) {
+// no PowerShell console, no per-toggle UAC). ONE engine: the TUN sing-box dials Reality/hysteria2 to
+// the exit itself (built from `dp`), so the data path is just TUN -> sing-box -> reality -> exit.
+// full: everything via the exit + a direct exception list; split: direct by default + only the
+// blocked/geo-restricted list via the exit.
+function buildVpnConfig({ mode, dp, bypass, clashPort, clashSecret, directDomains, tunnelDomains, logOut }) {
   const TOOLS = path.join(RES, 'tools', 'sing-box')
   const rs = (tag, file) => {
     const p = path.join(TOOLS, file)
     return fs.existsSync(p) ? { type: 'local', tag, format: 'binary', path: p.replace(/\\/g, '/') } : null
   }
+  // camouflage outbounds to the exit, in preference order; 'proxy' is the entry the route rules use.
+  const camo = []
+  const reality = (dp || []).find((d) => d.t === 'reality'); if (reality) camo.push({ tag: 'reality', ...realityOutbound(reality) })
+  const hy2 = (dp || []).find((d) => d.t === 'hy2'); if (hy2) camo.push({ tag: 'hy2', ...hy2Outbound(hy2) })
+  const proxyOutbounds = []
+  if (camo.length > 1) {
+    proxyOutbounds.push(...camo, { tag: 'proxy', type: 'urltest', outbounds: camo.map((c) => c.tag), url: 'https://www.gstatic.com/generate_204', interval: '3m' })
+  } else if (camo.length === 1) {
+    proxyOutbounds.push({ ...camo[0], tag: 'proxy' }) // single endpoint: tag it 'proxy' directly, no urltest
+  } // camo.length === 0 is guarded by the caller (applyVpn waits for a data plane)
+
   const ruleSets = []
   const rules = [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }]
-  // the magnetgate client (this app's own process) must bypass the TUN, or its rendezvous/DNS get
-  // captured and routed back through itself — a deadlock (no offer, reality dial fails, DNS hangs).
+  // the magnetgate client (this app's own process) must bypass the TUN so its rendezvous (DHT/Nostr)
+  // stays independent of tunnel health — the tunnel is now sing-box itself, not the client.
   rules.push({ process_name: ['magnetgate.exe'], action: 'route', outbound: 'direct' })
   if (bypass?.length) rules.push({ ip_cidr: bypass.map((i) => `${i}/32`), action: 'route', outbound: 'direct' })
   let final
@@ -271,7 +320,7 @@ function buildVpnConfig({ mode, bypass, socksPort, clashPort, clashSecret, direc
     ...(clashPort ? { experimental: { clash_api: { external_controller: `127.0.0.1:${clashPort}`, secret: clashSecret } } } : {}),
     dns: { servers: [{ tag: 'proxy-dns', type: 'https', server: '1.1.1.1', detour: 'proxy' }], strategy: 'ipv4_only' },
     inbounds: [{ type: 'tun', tag: 'tun-in', interface_name: 'magnetgate', address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'], mtu: 1400, auto_route: true, strict_route: true, stack: 'system' }],
-    outbounds: [{ type: 'socks', tag: 'proxy', server: '127.0.0.1', server_port: socksPort, version: '5' }, { type: 'direct', tag: 'direct' }],
+    outbounds: [...proxyOutbounds, { type: 'direct', tag: 'direct' }],
     route: { ...(ruleSets.length ? { rule_set: ruleSets } : {}), rules, final, auto_detect_interface: true, default_domain_resolver: 'proxy-dns' },
   }
 }
@@ -291,10 +340,13 @@ function sbCheck(cfgPath) {
   })
 }
 
+// User intent (the toggle). Turning on ensures the rendezvous client is running and records the
+// intent; the actual engine launch is applyVpn, which may have to wait for the first data plane.
 async function runVpn(off) {
   if (off) {
+    state.vpnOn = false
     if (vpnProc) { const pid = vpnProc.pid; vpnProc = null; await killTree(pid) }
-    state.vpnOn = false; state.vpnHealthy = false
+    state.vpnHealthy = false
     pushLog('[app] system VPN stopped')
     pushStatus()
     return
@@ -309,14 +361,40 @@ async function runVpn(off) {
     pushStatus(); return
   }
   state.otherTunnel = null
-  if (vpnProc) { pushLog('[app] VPN already running'); return }
+  // the data plane comes from the rendezvous client — make sure it's running to publish endpoints
+  if (!clientProc) { pushLog('[app] starting the rendezvous client for the VPN'); startClient() }
+  state.vpnOn = true; state.lastError = null
+  await applyVpn('user enabled')
+  pushStatus()
+}
+
+// (re)launch the TUN sing-box for the CURRENT data plane. Serialized on vpnChain so a rotation/dp
+// change can't race the initial start. No-op unless the user intent (state.vpnOn) is set; if no data
+// plane has been published yet it logs "waiting" and returns — the dp watcher calls it again once the
+// client publishes endpoints (or on rotation).
+function applyVpn(reason) {
+  vpnChain = vpnChain.then(() => _applyVpn(reason)).catch((e) => { pushLog(`[app] applyVpn error: ${e.message}`) })
+  return vpnChain
+}
+
+async function _applyVpn(reason) {
+  if (!state.vpnOn) return // turned off while queued
+  const dp = readDp()
+  const camo = (dp || []).filter((d) => d.t === 'reality' || d.t === 'hy2')
+  if (!camo.length) {
+    state.vpnHealthy = false
+    pushLog('[app] system VPN: waiting for rendezvous (no data plane yet)…')
+    pushStatus(); return
+  }
+  // tear down any running engine first (rotation / dp change / mode change all relaunch cleanly)
+  if (vpnProc) { const pid = vpnProc.pid; vpnProc = null; await killTree(pid) }
 
   const cfg = loadConfig()
   const mode = cfg.vpnMode === 'split' ? 'split' : 'full'
   const clean = (a) => [...new Set((a || []).map((d) => String(d).trim().toLowerCase()).filter(Boolean))]
-  const ips = bypassIps()
+  const ips = bypassIps(dp)
   const conf = buildVpnConfig({
-    mode, bypass: ips, socksPort: cfg.localPort || 1080,
+    mode, dp, bypass: ips,
     clashPort: CLASH_PORT, clashSecret: CLASH_SECRET,
     directDomains: clean(cfg.directDomains), tunnelDomains: clean(cfg.tunnelDomains),
     logOut: path.join(LOG_DIR, 'vpn.log').replace(/\\/g, '/'),
@@ -327,6 +405,7 @@ async function runVpn(off) {
   const bad = await sbCheck(VPN_CFG)
   if (bad) { state.lastError = `config invalid: ${bad}`; pushLog(`[app] sing-box check failed: ${bad}`); pushStatus(); return }
 
+  curDpSig = JSON.stringify(dp) // mark this data plane as applied (dedupes the watcher)
   let vpnRetried = false
   const launch = () => {
     let sawTunErr = false
@@ -345,7 +424,7 @@ async function runVpn(off) {
     proc.stderr.on('data', onOut)
     proc.on('error', (e) => { if (vpnProc !== proc) return; state.lastError = e.message; state.vpnOn = false; vpnProc = null; pushStatus() })
     proc.on('exit', (code) => {
-      if (vpnProc !== proc) return // intentional stop (runVpn(true) nulls vpnProc first)
+      if (vpnProc !== proc) return // intentional stop/relaunch (vpnProc nulled first)
       vpnProc = null
       pushLog(`[app] sing-box exited (code ${code})`)
       // a stale TUN adapter (from a hard-killed previous run) makes the first start fail with
@@ -360,17 +439,33 @@ async function runVpn(off) {
       state.vpnOn = false; state.vpnHealthy = false; pushStatus()
     })
   }
-  state.vpnOn = true; state.lastError = null
-  pushLog(`[app] system VPN starting [mode=${mode}, bypass=${ips.join(',') || 'none'}]`)
+  state.lastError = null
+  pushLog(`[app] system VPN ${reason ? `(${reason}) ` : ''}starting [mode=${mode}, dp=${camo.map((c) => c.t).join('+')}, bypass=${ips.join(',') || 'none'}]`)
   launch()
   pushStatus()
 }
 
-// ---------- egress status polling (through the client SOCKS) ----------
+// watch the rendezvous client's published endpoints; start/relaunch the engine on the first data
+// plane and on rotation (a creds change). Polling is robust against fs.watch's win32 rename quirks.
+function onDpTick() {
+  const dp = readDp()
+  if (!dp) return // nothing published yet, or briefly gone — keep any running tunnel as-is
+  const sig = JSON.stringify(dp)
+  if (sig === curDpSig) return
+  curDpSig = sig
+  state.rvReady = true
+  pushLog(`[app] rendezvous data plane: ${dp.map((d) => d.t).join('+')}`)
+  if (state.vpnOn) applyVpn('data plane changed')
+  pushStatus()
+}
+
+// ---------- egress status polling ----------
+// With one engine the app has no client SOCKS to probe, so we curl directly: curl.exe is not the
+// bypassed magnetgate.exe, so when the VPN is up its traffic rides the TUN and reports the EXIT IP —
+// a live confirmation the tunnel actually carries traffic. Only meaningful while the VPN is healthy.
 function pollEgress() {
-  if (!state.clientRunning) { if (state.egress) { state.egress = null; pushStatus() } return }
-  const { localPort } = loadConfig()
-  const c = spawn('curl.exe', ['-s', '--socks5-hostname', `127.0.0.1:${localPort}`, '--max-time', '8', 'http://checkip.amazonaws.com/'], { windowsHide: true })
+  if (!(state.vpnOn && state.vpnHealthy)) { if (state.egress) { state.egress = null; pushStatus() } return }
+  const c = spawn('curl.exe', ['-s', '--max-time', '8', 'http://checkip.amazonaws.com/'], { windowsHide: true })
   let out = ''
   c.stdout.on('data', (d) => { out += d.toString() })
   c.on('error', () => {})
@@ -443,6 +538,7 @@ app.whenReady().then(() => {
   timers.push(setInterval(pollEgress, 5000))
   monitorTunnels(); timers.push(setInterval(monitorTunnels, 4000))
   timers.push(setInterval(pollStats, 2000))
+  onDpTick(); timers.push(setInterval(onDpTick, 2000)) // watch rendezvous endpoints -> start/relaunch engine
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 

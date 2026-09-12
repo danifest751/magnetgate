@@ -16,6 +16,14 @@ import { pickDp, mergeOffer } from './offer.mjs'
 const OFFER_TTL_MS = 12 * 60 * 1000
 const ts = () => new Date().toISOString()
 
+// One-engine (desktop app) mode. When MAGNETGATE_RENDEZVOUS_ONLY=1 the client is a pure rendezvous
+// agent: it discovers exits over DHT/Nostr and writes the merged data-plane endpoints to
+// MAGNETGATE_DP_OUT (atomically) for an external sing-box (TUN) to consume directly, and does NOT run
+// a SOCKS server or its own sing-box supervisor. The data path then collapses from the 5-hop
+// TUN->sing-box->SOCKS->node->supervisor->sing-box->exit down to TUN->sing-box->reality->exit.
+const RENDEZVOUS_ONLY = process.env.MAGNETGATE_RENDEZVOUS_ONLY === '1'
+const DP_OUT = process.env.MAGNETGATE_DP_OUT || null
+
 // ---------- configuration ----------
 // Precedence: config file (arg ending in .json or MAGNETGATE_CONFIG) > CLI psk.
 // dataPlane: 'auto' prefers Reality/hysteria2 (via sing-box) then falls back to the native channel;
@@ -64,12 +72,30 @@ const fresh = (e) =>
   (e.offer && Date.now() - e.offer.ts < OFFER_TTL_MS && (!e.cooldownUntil || Date.now() > e.cooldownUntil))
     ? e.offer : null
 
-// data-plane engine (sing-box) for Reality/hysteria2; the native "mgt" channel is the fallback
-const supervisor = new DpSupervisor({ socksPort: cfg.singboxPort, log: (m) => console.log(ts(), m) })
-if (cfg.dataPlane !== 'mgt' && !supervisor.available())
+// data-plane engine (sing-box) for Reality/hysteria2; the native "mgt" channel is the fallback.
+// In rendezvous-only mode there is no local supervisor — the external TUN sing-box is the engine —
+// but Reality/hysteria2 are still the preferred data planes (they are what we write to DP_OUT).
+const supervisor = RENDEZVOUS_ONLY ? null : new DpSupervisor({ socksPort: cfg.singboxPort, log: (m) => console.log(ts(), m) })
+if (!RENDEZVOUS_ONLY && cfg.dataPlane !== 'mgt' && !supervisor.available())
   console.log(ts(), '[dp] sing-box not found (run scripts/get-singbox.ps1) — using the native channel only')
-const SB_OK = cfg.dataPlane !== 'mgt' && supervisor.available()
+const SB_OK = cfg.dataPlane !== 'mgt' && (RENDEZVOUS_ONLY || supervisor.available())
 const DP_PREFERENCE = SB_OK ? ['reality', 'hy2', 'mgt'] : ['mgt']
+
+// atomically publish the merged data-plane list for an external engine (write tmp + rename). Only
+// re-writes when the endpoints actually change, so the app doesn't restart sing-box on every poll.
+let lastDpSig = null
+const dpSig = (dp) => JSON.stringify([...dp].sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0)))
+function writeDpOut(merged) {
+  const sig = dpSig(merged.dp)
+  if (sig === lastDpSig) return
+  try {
+    const tmp = DP_OUT + '.tmp'
+    fs.writeFileSync(tmp, JSON.stringify({ v: 3, ts: merged.ts, dp: merged.dp }))
+    fs.renameSync(tmp, DP_OUT) // rename is atomic and replaces the target on win32 (libuv MOVEFILE_REPLACE_EXISTING)
+    lastDpSig = sig
+    console.log(ts(), `[dp-out] wrote ${merged.dp.map((d) => d.t).join('+')} -> ${DP_OUT}`)
+  } catch (e) { console.log(ts(), `[dp-out] write failed: ${e.message}`) }
+}
 
 // accept an offer from any rendezvous channel (DHT or Nostr). Same-generation offers are merged by
 // data-plane type (mergeOffer), so the pinned hy2 endpoint that only the Nostr channel carries is
@@ -85,8 +111,11 @@ function handleOffer(e, o) {
   e.offer = merged
   if (isNew) {
     console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port}`)
-    if (dp.t === 'reality' || dp.t === 'hy2') supervisor.ensure(dp).catch(() => {}) // warm-start the engine
+    if (!RENDEZVOUS_ONLY && (dp.t === 'reality' || dp.t === 'hy2')) supervisor.ensure(dp).catch(() => {}) // warm-start the engine
   }
+  // publish the merged endpoints for an external engine; fires on the first offer and whenever the
+  // set changes (a same-generation Nostr offer adding hy2, or a rotation changing creds).
+  if (DP_OUT) writeDpOut(merged)
 }
 
 dht.listen(() => console.log(ts(), `[dht] node on port ${dht.address().port}, bootstrap=${cfg.bootstrap.join(',')}`))
@@ -386,10 +415,16 @@ function udpFn(req, control, sendReply) {
   })
 }
 
-// bind to loopback only — a SOCKS5 server on 0.0.0.0 is an open no-auth proxy for the LAN
-const SOCKS_HOST = process.env.MAGNETGATE_SOCKS_HOST ?? '127.0.0.1'
-startSocks5Server(cfg.localPort, routeFn, udpFn)
-  .listen(cfg.localPort, SOCKS_HOST, () => console.log(ts(), `[socks5] listening on ${SOCKS_HOST}:${cfg.localPort}`))
+// bind to loopback only — a SOCKS5 server on 0.0.0.0 is an open no-auth proxy for the LAN.
+// Rendezvous-only mode skips the SOCKS server (and the whole native data path) entirely: the
+// external TUN sing-box carries the data, this process only discovers exits and publishes DP_OUT.
+if (RENDEZVOUS_ONLY) {
+  console.log(ts(), `[rv] rendezvous-only: no SOCKS server; discovery + dp-out${DP_OUT ? ` (${DP_OUT})` : ''} only`)
+} else {
+  const SOCKS_HOST = process.env.MAGNETGATE_SOCKS_HOST ?? '127.0.0.1'
+  startSocks5Server(cfg.localPort, routeFn, udpFn)
+    .listen(cfg.localPort, SOCKS_HOST, () => console.log(ts(), `[socks5] listening on ${SOCKS_HOST}:${cfg.localPort}`))
+}
 
 // optional periodic stats: MAGNETGATE_STATS=<seconds>
 if (process.env.MAGNETGATE_STATS) {
