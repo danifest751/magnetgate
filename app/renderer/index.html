@@ -87,7 +87,11 @@
     </section>
 
     <section class="card">
-      <h2>Log</h2>
+      <div class="row" style="justify-content:space-between; align-items:baseline">
+        <h2 style="margin:0">Log</h2>
+        <button id="btnLogs">Open logs folder</button>
+      </div>
+      <p class="muted" id="logPath" style="margin:6px 0 8px; font-family:ui-monospace,Consolas,monospace; font-size:11px; word-break:break-all"></p>
       <div id="log"></div>
     </section>
   </main>

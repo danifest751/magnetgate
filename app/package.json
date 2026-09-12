@@ -26,7 +26,8 @@
       { "from": "../tools/sing-box", "to": "tools/sing-box" },
       { "from": "../scripts/vpn-singbox-windows.ps1", "to": "scripts/vpn-singbox-windows.ps1" },
       { "from": "../magnetgate.config.example.json", "to": "magnetgate.config.example.json" },
-      { "from": "seed-config.json", "to": "seed-config.json" }
+      { "from": "seed-config.json", "to": "seed-config.json" },
+      { "from": "src-package.json", "to": "src/package.json" }
     ],
     "win": { "target": ["portable"] },
     "portable": { "artifactName": "magnetgate-${version}.exe" }
