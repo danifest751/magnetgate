@@ -127,7 +127,6 @@ function publish() {
   const sealed = seal(boxKey, Buffer.from(JSON.stringify(offer)), seq)
   if (sealed.length > 950) console.log(ts(), `[warn] offer ${sealed.length}B may exceed the DHT ~1000B limit`)
   if (nostr) nostr.publish(sealed, seq)
-  if (nostr) nostr.publish(sealed, seq)
   dht.put({
     k: pk,
     salt: SALT,
