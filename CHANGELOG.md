@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- **Desktop app (Electron, MVP).** `app/` wraps the client in a GUI: start/stop the client, a
+  system-VPN toggle (elevates the sing-box TUN launcher on demand), live status (route + egress IP)
+  and log, plus config/PSK management (exits, PSK generate, ports, bootstrap) stored in userData so
+  PSKs are never committed. Runs the existing client as a system-node child (no native-module ABI
+  fight); `electron-builder` packages a portable .exe. See [app/README.md](app/README.md).
 - **sing-box TUN launcher (Phase 3, in progress).** `scripts/vpn-singbox-windows.ps1` brings the
   system-wide VPN up on sing-box's own TUN inbound instead of tun2proxy: TUN -> the magnetgate SOCKS
   client (so reality>hy2>native fail-over and rendezvous stay in the client), with a fail-closed

@@ -79,6 +79,10 @@ curl.exe --socks5-hostname 127.0.0.1:1080 https://www.youtube.com/robots.txt
 Browser: SwitchyOmega / FoxyProxy → SOCKS5 `127.0.0.1:1080`. DNS is resolved at the exit (SOCKS5
 hostnames), so local resolver poisoning is excluded.
 
+**Desktop app (optional):** [`app/`](app/) is an Electron GUI that runs the client, toggles the
+system-wide VPN, shows status (route + egress IP), and manages the PSK/exits — build a portable `.exe`
+with `cd app && npm install && npm run dist`. See [app/README.md](app/README.md).
+
 ## Rendezvous (two channels)
 
 The exit publishes the same sealed offer to both channels, so discovery survives either being
