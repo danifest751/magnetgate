@@ -21,6 +21,9 @@ const STATE = `${DIR}/rotation-state.json`
 const DP = '/etc/magnetgate-dp.json'
 const EXIT_IP = process.env.MAGNETGATE_PUBLIC_HOST || '194.31.204.95'
 const SNI = process.env.MAGNETGATE_REALITY_SNI || 'www.microsoft.com'
+const HY2_CRT = `${DIR}/hy2.crt`
+// the hy2 self-signed cert's SAN (see setup-singbox.sh); clients pin the cert and verify this name
+const HY2_SNI = process.env.MAGNETGATE_HY2_SNI || 'magnetgate'
 
 const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'))
 const writeJson = (p, o) => fs.writeFileSync(p, JSON.stringify(o, null, 2))
@@ -79,10 +82,13 @@ const config = {
 }
 writeJson(CFG, config); chmodGrp(CFG, 'sing-box')
 
+// hy2 is advertised with its pinned self-signed cert (carried to clients over the Nostr channel,
+// which has no size limit) instead of `insecure`; the cert is stable across rotations.
+const hy2ca = fs.readFileSync(HY2_CRT, 'utf8').trim()
 writeJson(DP, {
   dp: [
     { t: 'reality', host: EXIT_IP, port: 443, uuid: gen.uuid, pbk: keep.rpub, sni: SNI, sid: gen.sid, fp: 'chrome' },
-    { t: 'hy2', host: EXIT_IP, port: 443, pw: gen.pw, obfs: keep.hy2obfs, insecure: 1 },
+    { t: 'hy2', host: EXIT_IP, port: 443, pw: gen.pw, obfs: keep.hy2obfs, sni: HY2_SNI, ca: hy2ca },
   ],
 })
 chmodGrp(DP, 'magnetgate')

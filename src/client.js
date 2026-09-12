@@ -11,6 +11,7 @@ import {
 import { startSocks5Server } from './socks5.mjs'
 import { createClientUdpStream } from './udpsess.mjs'
 import { DpSupervisor, socks5Connect } from './dp-supervisor.mjs'
+import { pickDp, mergeOffer } from './offer.mjs'
 
 const OFFER_TTL_MS = 12 * 60 * 1000
 const ts = () => new Date().toISOString()
@@ -70,20 +71,18 @@ if (cfg.dataPlane !== 'mgt' && !supervisor.available())
 const SB_OK = cfg.dataPlane !== 'mgt' && supervisor.available()
 const DP_PREFERENCE = SB_OK ? ['reality', 'hy2', 'mgt'] : ['mgt']
 
-// offer v3 carries a list of data-plane endpoints; pick the preferred one the client can use.
-function pickDp(o, pref = DP_PREFERENCE) {
-  for (const t of pref) { const d = o?.dp?.find((x) => x.t === t); if (d) return d }
-  return null
-}
-
-// accept an offer from any rendezvous channel (DHT or Nostr), dedup by ts
+// accept an offer from any rendezvous channel (DHT or Nostr). Same-generation offers are merged by
+// data-plane type (mergeOffer), so the pinned hy2 endpoint that only the Nostr channel carries is
+// not clobbered by the compact DHT offer.
 function handleOffer(e, o) {
   if (!o || o.v !== 3 || typeof o.ts !== 'number') return
   if (Date.now() - o.ts >= OFFER_TTL_MS) return
-  const dp = pickDp(o)
+  const merged = mergeOffer(e.offer, o)
+  if (!merged) return
+  const dp = pickDp(merged, DP_PREFERENCE)
   if (!dp) return
-  const isNew = !e.offer || e.offer.ts !== o.ts
-  e.offer = o
+  const isNew = !e.offer || e.offer.ts !== merged.ts
+  e.offer = merged
   if (isNew) {
     console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port}`)
     if (dp.t === 'reality' || dp.t === 'hy2') supervisor.ensure(dp).catch(() => {}) // warm-start the engine
@@ -334,7 +333,7 @@ function routeFn({ host, port }, app, firstData) {
     }
 
     // preferred: Reality/hysteria2 through the local sing-box SOCKS
-    const dp = pickDp(exit.offer)
+    const dp = pickDp(exit.offer, DP_PREFERENCE)
     if (dp && (dp.t === 'reality' || dp.t === 'hy2')) {
       const ok = await supervisor.ensure(dp).catch(() => false)
       if (ok) {

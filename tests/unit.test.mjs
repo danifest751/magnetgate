@@ -8,6 +8,7 @@ import {
   hsClientInit, hsExitRespond, hsClientFinish,
 } from '../src/common.mjs'
 import { nostrKeys, buildEvent } from '../src/nostr.mjs'
+import { pickDp, mergeOffer } from '../src/offer.mjs'
 import { schnorr } from '@noble/curves/secp256k1.js'
 
 const KEY = crypto.randomBytes(32)
@@ -185,4 +186,57 @@ test('sealed offer v3 survives the Nostr content path (base64 + seq tag, MAC-che
   assert.equal(got.v, 3)
   assert.equal(got.dp[0].host, '1.2.3.4')
   assert.equal(unseal(boxKey, ct, seq + 1), null, 'a tampered seq must fail the MAC')
+})
+
+// ---- Phase 3: rendezvous split (compact DHT offer + hy2-bearing Nostr offer) ----
+
+test('offer channels seal under disjoint nonces (DHT seq vs Nostr "n"+seq)', () => {
+  const { boxKey } = deriveKeys('psk-split')
+  const seq = 1757_000_000
+  const dhtPlain = Buffer.from(JSON.stringify({ v: 3, ts: 1, dp: [{ t: 'reality' }, { t: 'mgt' }] }))
+  const nostrPlain = Buffer.from(JSON.stringify({ v: 3, ts: 1, dp: [{ t: 'reality' }, { t: 'hy2', ca: 'PEM' }, { t: 'mgt' }] }))
+  const sDht = seal(boxKey, dhtPlain, seq)
+  const sNostr = seal(boxKey, nostrPlain, 'n' + seq)
+  // each opens only under its own seq domain
+  assert.ok(unseal(boxKey, sDht, seq).equals(dhtPlain))
+  assert.ok(unseal(boxKey, sNostr, 'n' + seq).equals(nostrPlain))
+  // the differing plaintexts never share a nonce: cross-domain open fails (no nonce reuse)
+  assert.equal(unseal(boxKey, sNostr, seq), null, 'Nostr offer must not open under the DHT seq')
+  assert.equal(unseal(boxKey, sDht, 'n' + seq), null, 'DHT offer must not open under the Nostr seq')
+})
+
+test('pickDp honours the preference order', () => {
+  const o = { v: 3, ts: 1, dp: [{ t: 'mgt' }, { t: 'hy2' }, { t: 'reality' }] }
+  assert.equal(pickDp(o, ['reality', 'hy2', 'mgt']).t, 'reality')
+  assert.equal(pickDp(o, ['hy2', 'mgt']).t, 'hy2')
+  assert.equal(pickDp(o, ['mgt']).t, 'mgt')
+  assert.equal(pickDp({ dp: [{ t: 'mgt' }] }, ['reality']), null)
+})
+
+test('mergeOffer unions same-generation offers so the Nostr-only hy2 survives the DHT offer', () => {
+  const ts = Date.now()
+  const dht = { v: 3, ts, dp: [{ t: 'reality', sid: 'a' }, { t: 'mgt', port: 49001 }] }
+  const nostr = { v: 3, ts, dp: [{ t: 'reality', sid: 'a' }, { t: 'hy2', ca: 'PEM', sni: 'magnetgate' }, { t: 'mgt', port: 49001 }] }
+  // DHT first, then the hy2-bearing Nostr offer of the same generation
+  let held = mergeOffer(null, dht)
+  assert.equal(pickDp(held, ['hy2']), null, 'DHT offer alone has no hy2')
+  held = mergeOffer(held, nostr)
+  assert.equal(pickDp(held, ['hy2']).ca, 'PEM', 'hy2 present after merge')
+  // a subsequent DHT re-arrival (polled every few seconds) must NOT clobber hy2
+  held = mergeOffer(held, dht)
+  assert.equal(pickDp(held, ['hy2']).ca, 'PEM', 'hy2 still present after DHT re-arrival')
+  assert.equal(pickDp(held, ['reality', 'hy2', 'mgt']).t, 'reality')
+})
+
+test('mergeOffer: newer generation replaces, older is ignored, invalid keeps prev', () => {
+  const t0 = 1_000_000
+  const prev = { v: 3, ts: t0, dp: [{ t: 'reality' }, { t: 'hy2', ca: 'X' }, { t: 'mgt' }] }
+  const newer = { v: 3, ts: t0 + 1, dp: [{ t: 'reality' }, { t: 'mgt' }] }
+  const replaced = mergeOffer(prev, newer)
+  assert.equal(replaced.ts, t0 + 1)
+  assert.equal(pickDp(replaced, ['hy2']), null, 'a new generation drops the stale hy2 until Nostr refreshes it')
+  const older = { v: 3, ts: t0 - 1, dp: [{ t: 'reality' }] }
+  assert.equal(mergeOffer(prev, older), prev, 'older generation is ignored')
+  assert.equal(mergeOffer(prev, { v: 2, ts: t0 + 5 }), null, 'invalid offer -> null (caller keeps prev)')
+  assert.equal(mergeOffer(prev, null), null)
 })

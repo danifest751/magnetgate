@@ -83,10 +83,11 @@ export function nostrSubscriber(psk, boxKey, onOffer) {
     if (m[0] !== 'EVENT' || m[1] !== subId || !m[2]) return
     const ev = m[2]
     const seqTag = (ev.tags?.find((t) => t[0] === 'mgt-seq') || [])[1]
-    const seq = parseInt(seqTag, 10)
-    if (!Number.isFinite(seq)) return
+    // the seq tag is used verbatim as the seal nonce domain; the exit publishes the Nostr offer
+    // under 'n'+seq (a nonce space disjoint from the DHT's numeric seq), so keep it as a string.
+    if (typeof seqTag !== 'string' || !seqTag) return
     let ct; try { ct = Buffer.from(ev.content, 'base64') } catch { return }
-    const plain = unseal(boxKey, ct, seq) // MAC-verified: a tampered seq/content is rejected
+    const plain = unseal(boxKey, ct, seqTag) // MAC-verified: a tampered seq/content is rejected
     if (!plain) return
     try { onOffer(JSON.parse(plain.toString())) } catch {}
   }
