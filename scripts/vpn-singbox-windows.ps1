@@ -36,12 +36,10 @@ param(
   # Clash API for live stats (connections / traffic), loopback-only. 0 disables it.
   [int]$ClashPort = 0,
   [string]$ClashSecret = '',
-  # split tunnel: the auto-updated community "inside-Russia" rule-set goes DIRECT (empty string
-  # disables it); -DirectDomains adds the user's own comma-separated domains; -DirectDns resolves the
-  # direct-list via a RU resolver so the geo-answer is local.
-  [string]$DirectListUrl = 'https://github.com/legiz-ru/sb-rule-sets/raw/main/itdoginfo-inside-russia.srs',
-  [string]$DirectDomains = '',
-  [string]$DirectDns = '77.88.8.8'
+  # split tunnel: a bundled community "inside-Russia" rule-set (local .srs) goes DIRECT; empty +
+  # missing file disables it. -DirectDomains adds the user's own comma-separated domains.
+  [string]$DirectListPath = '',
+  [string]$DirectDomains = ''
 )
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 try { Start-Transcript -Path (Join-Path $LogDir 'vpn-launcher.log') -Append | Out-Null } catch {}
@@ -147,37 +145,31 @@ if ($bypassIps.Count -gt 0) {
 # base list = the community auto-updated rule-set; plus any -DirectDomains the app passes (user list).
 # Direct-list domains also resolve via a direct RU resolver so the geo-answer is not "from the exit".
 $directDoms = @($DirectDomains -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-$useRuleSet = [bool]$DirectListUrl
-$ruleSetJson = ''; $directRouteJson = ''; $directDnsJson = ''
-$routeRules = @(); $dnsRules = @()
+if (-not $DirectListPath) { $cand = Join-Path $tools 'itdoginfo-inside-russia.srs'; if (Test-Path $cand) { $DirectListPath = $cand } }
+$useRuleSet = $DirectListPath -and (Test-Path $DirectListPath)
+$ruleSetJson = ''; $directRouteJson = ''
+$routeRules = @()
 if ($useRuleSet) {
-  $ruleSetJson = "`n    `"rule_set`": [ { `"type`": `"remote`", `"tag`": `"ru-inside`", `"format`": `"binary`", `"url`": `"$DirectListUrl`", `"download_detour`": `"proxy`", `"update_interval`": `"24h`" } ],"
+  $rsPath = ($DirectListPath -replace '\\', '/')
+  $ruleSetJson = "`n    `"rule_set`": [ { `"type`": `"local`", `"tag`": `"ru-inside`", `"format`": `"binary`", `"path`": `"$rsPath`" } ],"
   $routeRules += "{ `"rule_set`": [`"ru-inside`"], `"action`": `"route`", `"outbound`": `"direct`" }"
-  $dnsRules += "{ `"rule_set`": [`"ru-inside`"], `"server`": `"direct-dns`" }"
 }
 if ($directDoms.Count -gt 0) {
   $ds = (($directDoms | ForEach-Object { '"' + $_ + '"' }) -join ', ')
   $routeRules += "{ `"domain_suffix`": [ $ds ], `"action`": `"route`", `"outbound`": `"direct`" }"
-  $dnsRules += "{ `"domain_suffix`": [ $ds ], `"server`": `"direct-dns`" }"
 }
 if ($routeRules.Count) { $directRouteJson = "`n      " + (($routeRules | ForEach-Object { $_ + ',' }) -join "`n      ") }
-$directDnsJson = ($dnsRules -join ", ")
 
 # experimental: clash_api (live stats) + cache_file (persist the remote rule-set across restarts)
 $expParts = @()
 if ($ClashPort -gt 0) { $expParts += "`"clash_api`": { `"external_controller`": `"127.0.0.1:$ClashPort`", `"secret`": `"$ClashSecret`" }" }
-if ($useRuleSet) { $cacheOut = ($LogDir -replace '\\', '/') + '/cache.db'; $expParts += "`"cache_file`": { `"enabled`": true, `"path`": `"$cacheOut`" }" }
 $experimentalBlock = ''
 if ($expParts.Count) { $experimentalBlock = "`n  `"experimental`": { " + ($expParts -join ', ') + " }," }
 $json = @"
 {
   "log": { "level": "info", "timestamp": true, "output": "$logOut" },$experimentalBlock
   "dns": {
-    "servers": [
-      { "tag": "proxy-dns", "type": "https", "server": "$DohServer", "detour": "proxy" },
-      { "tag": "direct-dns", "type": "udp", "server": "$DirectDns", "detour": "direct" }
-    ],
-    "rules": [ $directDnsJson ],
+    "servers": [ { "tag": "proxy-dns", "type": "https", "server": "$DohServer", "detour": "proxy" } ],
     "strategy": "ipv4_only"
   },
   "inbounds": [

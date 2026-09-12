@@ -39,6 +39,8 @@ const LOG_FILE = path.join(LOG_DIR, 'magnetgate.log')
 const LOG_MAX = 500
 
 let win = null
+let quitting = false
+const timers = []
 let clientProc = null
 let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
@@ -48,6 +50,7 @@ const state = { clientRunning: false, route: null, egress: null, vpnOn: false, l
 let lastSample = null // { t, up, down } for speed calc
 let vpnEnabledAt = 0        // when the user last enabled the VPN (to tell "starting" from "stuck")
 let vpnRestarting = false   // guards the auto-recovery restart
+let vpnRestartCount = 0     // caps auto-recovery so a persistent failure doesn't loop the UAC window
 
 // ---------- config ----------
 const DEFAULT_CONFIG = {
@@ -97,15 +100,21 @@ function ensureLogDir() {
   if (logReady) return
   try { fs.mkdirSync(LOG_DIR, { recursive: true }); logReady = true } catch { /* keep going without a file */ }
 }
+// send to the renderer only if the window still exists — child-process exit handlers can fire after
+// the window is destroyed, and `win?.` guards null but not a destroyed webContents
+function safeSend(channel, payload) {
+  if (quitting || !win || win.isDestroyed()) return
+  try { win.webContents.send(channel, payload) } catch { /* window went away mid-send */ }
+}
 function pushLog(line) {
   const s = `${new Date().toISOString()} ${line}`
   logBuf.push(s)
   if (logBuf.length > LOG_MAX) logBuf.shift()
-  win?.webContents.send('log', s)
+  safeSend('log', s)
   ensureLogDir()
   try { fs.appendFileSync(LOG_FILE, s + '\n') } catch { /* file logging is best-effort */ }
 }
-function pushStatus() { win?.webContents.send('status', { ...state }) }
+function pushStatus() { safeSend('status', { ...state }) }
 
 // ---------- magnetgate client child ----------
 function startClient() {
@@ -205,15 +214,21 @@ function monitorTunnels() {
     const prevOther = state.otherTunnel
     state.otherTunnel = others[0] || null
     state.vpnHealthy = !!r.mg && state.vpnOn
+    if (r.mg) vpnRestartCount = 0 // came up fine → reset the recovery budget
     // another full tunnel came up while ours is on → stop ours (they conflict)
     if (state.otherTunnel && state.vpnOn) {
       pushLog(`[app] ${state.otherTunnel} is up — stopping the system VPN (two full tunnels conflict)`)
       runVpn(true)
     } else if (state.vpnOn && !state.otherTunnel && !r.mg && !vpnRestarting && Date.now() - vpnEnabledAt > 15000) {
       // enabled, no conflicting tunnel, but our adapter never came up (e.g. WG was on at start and is
-      // now off) — restart it so it recovers without a manual re-toggle
+      // now off) — restart it so it recovers without a manual re-toggle, but only a couple of times
+      if (vpnRestartCount >= 2) {
+        state.lastError = 'system VPN failed to come up — check the logs (Open logs folder)'
+        state.vpnOn = false; pushStatus(); return
+      }
+      vpnRestartCount++
       vpnRestarting = true
-      pushLog('[app] system VPN did not come up — restarting now that no other tunnel is active')
+      pushLog(`[app] system VPN did not come up — restarting (attempt ${vpnRestartCount})`)
       runVpn(true)
       setTimeout(() => { runVpn(false); vpnRestarting = false }, 3000)
     }
@@ -230,7 +245,7 @@ function runVpn(off) {
     pushStatus()
     return
   }
-  if (!off) vpnEnabledAt = Date.now()
+  if (!off) { vpnEnabledAt = Date.now(); if (!vpnRestarting) vpnRestartCount = 0 }
   const ips = off ? [] : bypassIps()
   const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
   const clashArg = off ? '' : ` -ClashPort ${CLASH_PORT} -ClashSecret ${CLASH_SECRET}`
@@ -316,18 +331,27 @@ function createWindow() {
   win.removeMenu()
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
   win.webContents.on('did-finish-load', () => { pushStatus() })
+  win.on('closed', () => { win = null })
 }
 
 app.whenReady().then(() => {
   pushLog(`[app] === magnetgate app ${app.getVersion()} started; logs -> ${LOG_FILE} ===`)
   createWindow()
-  setInterval(pollEgress, 5000)
-  monitorTunnels(); setInterval(monitorTunnels, 4000)
-  setInterval(pollStats, 2000)
+  timers.push(setInterval(pollEgress, 5000))
+  monitorTunnels(); timers.push(setInterval(monitorTunnels, 4000))
+  timers.push(setInterval(pollStats, 2000))
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 
+app.on('before-quit', () => { quitting = true; for (const t of timers) clearInterval(t) })
+
 app.on('window-all-closed', async () => {
+  quitting = true
+  for (const t of timers) clearInterval(t)
   await stopClient()
   app.quit()
 })
+
+// last-resort: never let a stray async error pop Electron's crash dialog; log it instead
+process.on('uncaughtException', (e) => { try { pushLog(`[app] uncaught: ${e && e.stack || e}`) } catch {} })
+process.on('unhandledRejection', (e) => { try { pushLog(`[app] unhandledRejection: ${e && e.stack || e}`) } catch {} })
