@@ -18,3 +18,6 @@ docs/
 
 # electron app build output
 app/dist/
+
+# app first-run seed (may contain the PSK)
+app/seed-config.json
