@@ -30,20 +30,22 @@ scale) is its enemy. Keep that boundary explicit in every design decision below.
 - **Phase 0** — offer schema v3 (`dp` list) + Nostr as a second rendezvous channel (0.7.0).
 - **Phase 1** — Reality + hysteria2 data planes via sing-box; client orchestrator + fail-over (0.8.0).
 - **Phase 2** — credential rotation with a grace window + ~1 s propagation (0.9.0).
-- **Phase 3 (partial)** — hysteria2 cert-pinning via the superset Nostr offer, dropping `insecure`
-  (0.10.0). Remaining Phase 3 item: sing-box TUN as the system-wide VPN.
+- **Phase 3** — hysteria2 cert-pinning via the superset Nostr offer, dropping `insecure` (0.10.0);
+  **sing-box TUN as the system-wide VPN, field-validated** (system egress = exit; needs the other
+  full tunnel off, since both use Wintun). Driven by the Electron app (`app/`).
 - Plus the security-audit remediation (forward-secret handshake, non-root sandbox, SSRF egress
   filter, SOCKS loopback bind, DHT IPv4 bootstrap, pinned binaries) — see [CHANGELOG.md](CHANGELOG.md).
 
 ## 3. Near-term — Phase 3
 
-- **sing-box TUN as the system-wide VPN**, replacing tun2proxy — with a fail-closed **kill-switch**
-  (`route.final = proxy` + `strict_route`), IPv6-leak block and DNS routed through the tunnel.
-  `scripts/vpn-singbox-windows.ps1` is written and its generated config is offline-validated
-  (`sing-box check`); it keeps the TUN → magnetgate SOCKS topology so reality>hy2>native fail-over and
-  rendezvous stay in the client. **Remaining:** an elevated field bring-up (blocked here: the dev box
-  is in a restricted-network region behind a WireGuard full tunnel, so validating with WG off risks
-  cutting remote access — must be done locally with a recovery path), pin the wintun.dll hash.
+- ✅ **sing-box TUN as the system-wide VPN (done, field-validated)** — replaces tun2proxy with a
+  fail-closed **kill-switch** (`route.final = proxy` + `strict_route`), IPv6-leak block and DNS routed
+  through the tunnel. `scripts/vpn-singbox-windows.ps1` keeps the TUN → magnetgate SOCKS topology so
+  reality>hy2>native fail-over and rendezvous stay in the client; the app passes the exit IP as
+  `-Bypass` so the uplink does not loop. Validated in the field: with WireGuard off, system egress
+  becomes the exit IP and real traffic flows over Reality. **Constraint:** it will not come up
+  alongside another active full tunnel — WireGuard also uses Wintun, and sing-box's TUN hangs opening
+  the interface until the other tunnel is off.
 - ✅ **hy2 cert-pinning (done, 0.10.0)** — the self-signed server cert now ships via the
   size-unbounded Nostr offer, dropping the `insecure` fallback. Implemented as the compact-DHT /
   superset-Nostr split: the DHT offer omits hy2, the Nostr offer carries it with the cert, and the
