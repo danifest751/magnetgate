@@ -363,34 +363,34 @@ function sbCheck(cfgPath) {
   })
 }
 
-// Clear stale TUN state before (re)starting sing-box. The "create adapter: Cannot create a file when
-// that file already exists | open existing adapter: Element not found" failure comes from a Wintun
-// adapter left behind by a hard-killed sing-box, OR from the Wintun driver still settling right after
-// another Wintun tunnel (e.g. WireGuard) was torn down. So: kill any orphan sing-box (releasing its
-// adapter), remove a lingering 'magnetgate' adapter outright (pnputil, we run elevated), and let the
-// driver settle briefly. Critically it now LOOPS removing the adapter until Get-NetAdapter no longer
-// sees it (or a timeout), so we never launch sing-box onto a zombie adapter — starting on a leftover
-// adapter is what makes routes fail to install (traffic leaks direct) or crashes it mid-run. Best-effort.
+// Clear stale TUN state before (re)starting sing-box. The "create adapter: already exists | open
+// existing adapter: Element not found" failure comes from a leftover Wintun device left behind by a
+// hard-killed sing-box. VERIFIED on the box: that leftover is a PnP Net device whose FriendlyName is
+// "sing-tun Tunnel" (InstanceId SWD\WINTUN\{...}), sitting Disconnected — and crucially it has NO
+// network-adapter name, so Get-NetAdapter -Name 'magnetgate' never finds it (that was the earlier
+// bug: cleanup looked for the wrong thing and the zombie kept accumulating). We must remove it as a
+// PnP device by friendly name via pnputil. WireGuard's own Wintun ("WireGuard Tunnel",
+// SWD\WIREGUARD\...) has a different name and is left untouched. Loop until none remain (or timeout)
+// so we never launch onto a zombie — launching on a leftover is what made routes fail to install
+// (traffic leaked out direct) or crashed sing-box mid-run.
 function cleanupStaleTun() {
   return new Promise((resolve) => {
     const ps = [
       "Get-Process sing-box -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;",
-      "$deadline = (Get-Date).AddSeconds(5);",
+      "$deadline = (Get-Date).AddSeconds(6);",
       "do {",
-      "  $a = @(Get-NetAdapter -Name 'magnetgate' -ErrorAction SilentlyContinue);",
-      "  if ($a.Count -gt 0) {",
-      "    foreach ($d in $a) { if ($d.PnPDeviceID) { try { & pnputil.exe /remove-device $d.PnPDeviceID | Out-Null } catch {} } }",
-      "    Start-Sleep -Milliseconds 400",
-      "  }",
-      "} while ($a.Count -gt 0 -and (Get-Date) -lt $deadline);",
-      "Start-Sleep -Milliseconds 500",
+      "  $d = @(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'sing-tun' });",
+      "  foreach ($x in $d) { try { & pnputil.exe /remove-device $x.InstanceId | Out-Null } catch {} }",
+      "  if ($d.Count -gt 0) { Start-Sleep -Milliseconds 400 }",
+      "} while ($d.Count -gt 0 -and (Get-Date) -lt $deadline);",
+      "Start-Sleep -Milliseconds 400",
     ].join(' ')
     const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true })
     let done = false
     const finish = () => { if (!done) { done = true; resolve() } }
     p.on('error', finish)
     p.on('exit', finish)
-    setTimeout(finish, 9000) // never block the launch indefinitely
+    setTimeout(finish, 10000) // never block the launch indefinitely
   })
 }
 
