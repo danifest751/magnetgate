@@ -27,6 +27,10 @@ const SEED_CANDIDATES = [
   path.join(RES, 'magnetgate.config.example.json'),
 ]
 const CONFIG = path.join(app.getPath('userData'), 'magnetgate.config.json')
+// everything (app events + the client's stdout/stderr) is appended here so a field test can be read
+// back afterwards; the sing-box TUN logs into the same folder (see the VPN launcher's -LogDir).
+const LOG_DIR = path.join(app.getPath('userData'), 'logs')
+const LOG_FILE = path.join(LOG_DIR, 'magnetgate.log')
 const LOG_MAX = 500
 
 let win = null
@@ -76,11 +80,18 @@ function saveConfig(cfg) {
 const genPsk = () => crypto.randomBytes(32).toString('hex') // 256-bit random PSK
 
 // ---------- logging / status push ----------
+let logReady = false
+function ensureLogDir() {
+  if (logReady) return
+  try { fs.mkdirSync(LOG_DIR, { recursive: true }); logReady = true } catch { /* keep going without a file */ }
+}
 function pushLog(line) {
   const s = `${new Date().toISOString()} ${line}`
   logBuf.push(s)
   if (logBuf.length > LOG_MAX) logBuf.shift()
   win?.webContents.send('log', s)
+  ensureLogDir()
+  try { fs.appendFileSync(LOG_FILE, s + '\n') } catch { /* file logging is best-effort */ }
 }
 function pushStatus() { win?.webContents.send('status', { ...state }) }
 
@@ -141,7 +152,7 @@ async function stopClient() {
 // ---------- system VPN (sing-box TUN), elevated on demand ----------
 function runVpn(off) {
   // elevate the TUN launcher via UAC; the app stays unprivileged
-  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}"` + (off ? ' -Off' : '')
+  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"` + (off ? ' -Off' : '')
   const inner = args.replace(/'/g, "''")
   const cmd = `Start-Process -Verb RunAs -FilePath 'powershell.exe' -ArgumentList '${inner}'`
   const p = spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { windowsHide: true })
@@ -176,6 +187,8 @@ ipcMain.handle('stopClient', async () => { await stopClient() })
 ipcMain.handle('vpnOn', () => { runVpn(false) })
 ipcMain.handle('vpnOff', () => { runVpn(true) })
 ipcMain.handle('openConfigDir', () => shell.openPath(path.dirname(CONFIG)))
+ipcMain.handle('openLogs', () => { ensureLogDir(); return shell.openPath(LOG_DIR) })
+ipcMain.handle('getLogPath', () => LOG_FILE)
 
 // ---------- window ----------
 function createWindow() {
@@ -190,6 +203,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  pushLog(`[app] === magnetgate app ${app.getVersion()} started; logs -> ${LOG_FILE} ===`)
   createWindow()
   setInterval(pollEgress, 5000)
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

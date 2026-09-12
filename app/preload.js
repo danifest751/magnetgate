@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('mg', {
   vpnOn: () => ipcRenderer.invoke('vpnOn'),
   vpnOff: () => ipcRenderer.invoke('vpnOff'),
   openConfigDir: () => ipcRenderer.invoke('openConfigDir'),
+  openLogs: () => ipcRenderer.invoke('openLogs'),
+  getLogPath: () => ipcRenderer.invoke('getLogPath'),
   onLog: (cb) => ipcRenderer.on('log', (_e, line) => cb(line)),
   onStatus: (cb) => ipcRenderer.on('status', (_e, s) => cb(s)),
 })

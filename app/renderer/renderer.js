@@ -89,6 +89,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     $('saved').textContent = 'saved ✓'; setTimeout(() => { $('saved').textContent = '' }, 2000)
   })
   $('btnOpenDir').addEventListener('click', () => window.mg.openConfigDir())
+  $('btnLogs').addEventListener('click', () => window.mg.openLogs())
+  try { $('logPath').textContent = 'log file: ' + await window.mg.getLogPath() } catch {}
 
   // delegated handlers for the dynamic exit rows
   $('exits').addEventListener('input', (e) => {

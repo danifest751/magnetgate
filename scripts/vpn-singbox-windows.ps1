@@ -29,8 +29,13 @@ param(
   # SHA-256 of wintun-0.14.1.zip (verified 2026-09-12).
   [string]$WintunSha256 = '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51',
   # SHA-256 of the extracted bin\amd64\wintun.dll for 0.14.1 (verified 2026-09-12).
-  [string]$WintunDllSha256 = 'e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce'
+  [string]$WintunDllSha256 = 'e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce',
+  # where sing-box (vpn.log) and this launcher (vpn-launcher.log) write, so a field test is readable
+  # afterwards. Defaults to the app's log folder (Electron userData for productName "magnetgate").
+  [string]$LogDir = (Join-Path $env:APPDATA 'magnetgate\logs')
 )
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+try { Start-Transcript -Path (Join-Path $LogDir 'vpn-launcher.log') -Append | Out-Null } catch {}
 $ErrorActionPreference = 'Stop'
 $root  = Split-Path $PSScriptRoot -Parent
 $tools = Join-Path $root 'tools\sing-box'
@@ -119,6 +124,8 @@ if ($bypassIps.Count -eq 0) {
 
 # build the sing-box config from a template (written to a file, so no arg-quoting issues). The
 # bypass rule is injected only when there is at least one IP to bypass.
+# sing-box logs to a file (forward slashes so no JSON escaping needed) so the field test is readable
+$logOut = ($LogDir -replace '\\', '/') + '/vpn.log'
 $bypassRule = ''
 if ($bypassIps.Count -gt 0) {
   $cidrJson = (($bypassIps | ForEach-Object { '"' + $_ + '/32"' }) -join ', ')
@@ -126,7 +133,7 @@ if ($bypassIps.Count -gt 0) {
 }
 $json = @"
 {
-  "log": { "level": "warn" },
+  "log": { "level": "info", "timestamp": true, "output": "$logOut" },
   "dns": {
     "servers": [ { "tag": "proxy-dns", "type": "https", "server": "$DohServer", "detour": "proxy" } ],
     "strategy": "ipv4_only"
