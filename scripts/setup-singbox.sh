@@ -24,10 +24,12 @@ sing-box version | head -1
 id -u sing-box >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin sing-box
 install -d -o root -g sing-box -m 750 /etc/sing-box
 
-# 3. hy2 self-signed EC cert (once)
+# 3. hy2 self-signed EC cert (once). Include a subjectAltName so clients can PIN it and still pass
+# Go's TLS hostname check (which ignores the legacy CN) with server_name=magnetgate.
 if [ ! -f /etc/sing-box/hy2.crt ]; then
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -keyout /etc/sing-box/hy2.key -out /etc/sing-box/hy2.crt -days 3650 -nodes -subj "/CN=magnetgate" >/dev/null 2>&1
+    -keyout /etc/sing-box/hy2.key -out /etc/sing-box/hy2.crt -days 3650 -nodes \
+    -subj "/CN=magnetgate" -addext "subjectAltName=DNS:magnetgate" >/dev/null 2>&1
   chgrp sing-box /etc/sing-box/hy2.key /etc/sing-box/hy2.crt; chmod 640 /etc/sing-box/hy2.key /etc/sing-box/hy2.crt
 fi
 

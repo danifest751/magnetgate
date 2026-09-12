@@ -119,14 +119,25 @@ function readExtraDp() {
 function publish() {
   seq += 1
   const udp = process.env.MAGNETGATE_TRANSPORT !== 'tcp' ? 1 : undefined
-  // offer v3: an extensible list of data-plane endpoints. Reality/hysteria2 (from the dp file)
-  // are preferred; the native channel ("mgt") is the fallback. Sealed once, shared by both
-  // rendezvous channels (same seq => same nonce => identical ciphertext, no nonce reuse).
-  const dp = [...readExtraDp(), { t: 'mgt', host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, udp }]
-  const offer = { v: 3, ts: Date.now(), dp }
-  const sealed = seal(boxKey, Buffer.from(JSON.stringify(offer)), seq)
-  if (sealed.length > 950) console.log(ts(), `[warn] offer ${sealed.length}B may exceed the DHT ~1000B limit`)
-  if (nostr) nostr.publish(sealed, seq)
+  const mgt = { t: 'mgt', host: PUBLIC_HOST ?? autoIp(), port: DATA_PORT, udp }
+  const extra = readExtraDp()
+  const now = Date.now()
+  // Offer v3: an extensible list of data-plane endpoints (Reality/hysteria2 from the dp file are
+  // preferred; the native "mgt" channel is the fallback). Two channel views of the SAME generation
+  // (same ts) — the client merges them by dp type:
+  //   - DHT: compact, omits hy2 (its pinned cert is too large for the ~1000 B BEP44 limit);
+  //   - Nostr: superset, includes the pinned hy2 endpoint (cert carried in dp.ca).
+  // Sealed under DIFFERENT nonces ('n'+seq vs seq) so the two differing plaintexts never reuse a
+  // nonce (see common.seal: nonce = H(key‖String(seq))).
+  const dhtDp = [...extra.filter((d) => d.t !== 'hy2'), mgt]
+  const sealed = seal(boxKey, Buffer.from(JSON.stringify({ v: 3, ts: now, dp: dhtDp })), seq)
+  if (sealed.length > 950) console.log(ts(), `[warn] DHT offer ${sealed.length}B may exceed the ~1000B limit`)
+  if (nostr) {
+    const nostrDp = [...extra, mgt]
+    const nseq = 'n' + seq
+    const sealedNostr = seal(boxKey, Buffer.from(JSON.stringify({ v: 3, ts: now, dp: nostrDp })), nseq)
+    nostr.publish(sealedNostr, nseq)
+  }
   dht.put({
     k: pk,
     salt: SALT,

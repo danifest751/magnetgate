@@ -25,10 +25,16 @@ function buildConfig(dp, socksPort) {
       },
     }
   } else if (dp.t === 'hy2') {
+    // Pin the exit's self-signed cert when the offer carries it (dp.ca, delivered over the
+    // size-unbounded Nostr channel); server_name must match the cert's SAN (dp.sni). Fall back to
+    // `insecure` only for a legacy offer that has no cert.
+    const tls = { enabled: true, alpn: ['h3'] }
+    if (dp.ca) { tls.certificate = Array.isArray(dp.ca) ? dp.ca : [dp.ca]; if (dp.sni) tls.server_name = dp.sni }
+    else tls.insecure = true
     out = {
       type: 'hysteria2', server: dp.host, server_port: dp.port, password: dp.pw,
       obfs: { type: 'salamander', password: dp.obfs },
-      tls: { enabled: true, insecure: !!dp.insecure, alpn: ['h3'] },
+      tls,
     }
   } else throw new Error(`unsupported data-plane type: ${dp.t}`)
   return { log: { level: 'warn' }, inbounds, outbounds: [out] }
