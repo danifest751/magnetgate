@@ -42,7 +42,7 @@ fails over on error:
 | Plane | Transport | Role | Notes |
 |---|---|---|---|
 | **Reality** | VLESS+Reality over TLS 1.3 (TCP/443) | primary | borrows a real site's TLS handshake (SNI); best against SNI/DPI |
-| **hysteria2** | QUIC (UDP/443) + salamander obfs | alternative | great on lossy/mobile links; currently `insecure` TLS (see limitations) |
+| **hysteria2** | QUIC (UDP/443) + salamander obfs | alternative | great on lossy/mobile links; server cert pinned via the Nostr offer |
 | **native `mgt`** | AEAD-framed mux over TCP (or reliable-UDP) on :49001 | fallback | forward-secret, no third-party binary, always available |
 
 Reality and hysteria2 are run by a **bundled sing-box** on the client (`scripts/get-singbox.ps1`,
@@ -222,10 +222,7 @@ Implemented and tested in production:
   and caps concurrent sessions/streams; the SOCKS listener is loopback-only; downloaded binaries are
   pinned by SHA-256; `npm ci` for reproducible installs.
 
-Known limitations: hysteria2 currently uses `insecure` TLS (traffic is encrypted and the client is
-authed via password + obfs, but the self-signed server cert is not validated) to keep the offer
-within the DHT 1000-byte limit — Reality is fully authenticated, and hy2 cert-pinning is a Phase 3
-item. Obfuscation of the native channel is at PoC level, and the DHT platform sees put/get
+Known limitations: obfuscation of the native channel is at PoC level, and the DHT platform sees put/get
 participants' IPs like any BitTorrent node. The rendezvous target is derived from the PSK, so anyone
 who holds — or brute-forces a weak — PSK can locate the exit: **use a ≥128-bit random PSK.**
 
@@ -233,11 +230,11 @@ who holds — or brute-forces a weak — PSK can locate the exit: **use a ≥128
 
 > Full detail, including the **exit-overlay (entry/egress split)** design, is in [ROADMAP.md](ROADMAP.md).
 
-**Phase 3 (next):**
-- **sing-box TUN as the system-wide VPN**, replacing tun2proxy — one engine for both the data plane
-  and the full-VPN layer, with a **kill-switch**, IPv6 handling and DNS-leak protection.
-- **hy2 cert-pinning** — ship the server cert via the size-unbounded Nostr offer, dropping the
-  `insecure` fallback for hysteria2.
+**Phase 3:**
+- ✅ **hy2 cert-pinning** — the server cert now ships via the size-unbounded Nostr offer (DHT offer
+  compact, both sealed under disjoint nonces), dropping the `insecure` fallback for hysteria2.
+- **sing-box TUN as the system-wide VPN** (next), replacing tun2proxy — one engine for both the data
+  plane and the full-VPN layer, with a **kill-switch**, IPv6 handling and DNS-leak protection.
 
 **After Phase 3:**
 - **WebRTC DataChannel data plane** (coturn on the exit; DTLS looks like a video call; built-in NAT
