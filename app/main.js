@@ -54,6 +54,7 @@ const state = { clientRunning: false, route: null, egress: null, vpnOn: false, l
 let lastSample = null // { t, up, down } for speed calc
 let curDpSig = null   // signature of the data-plane last applied to the TUN sing-box (rotation detection)
 let vpnChain = Promise.resolve() // serializes VPN (re)launches so a dp change can't race a start
+let otherTunnelClearedAt = 0 // when another Wintun tunnel (WG) last went away — we let Wintun settle after
 
 // ---------- config ----------
 const DEFAULT_CONFIG = {
@@ -247,7 +248,10 @@ async function monitorTunnels() {
     pushLog(`[app] ${state.otherTunnel} is up — stopping the system VPN (two full tunnels conflict)`)
     runVpn(true)
   }
-  if (prevOther !== state.otherTunnel) pushLog(`[app] other tunnel: ${state.otherTunnel || 'none'}`)
+  if (prevOther !== state.otherTunnel) {
+    if (prevOther && !state.otherTunnel) otherTunnelClearedAt = Date.now() // WG/other just torn down
+    pushLog(`[app] other tunnel: ${state.otherTunnel || 'none'}`)
+  }
   pushStatus()
 }
 
@@ -340,6 +344,29 @@ function sbCheck(cfgPath) {
   })
 }
 
+// Clear stale TUN state before (re)starting sing-box. The "create adapter: Cannot create a file when
+// that file already exists | open existing adapter: Element not found" failure comes from a Wintun
+// adapter left behind by a hard-killed sing-box, OR from the Wintun driver still settling right after
+// another Wintun tunnel (e.g. WireGuard) was torn down. So: kill any orphan sing-box (releasing its
+// adapter), remove a lingering 'magnetgate' adapter outright (pnputil, we run elevated), and let the
+// driver settle briefly. Best-effort and quick; never throws.
+function cleanupStaleTun() {
+  return new Promise((resolve) => {
+    const ps = [
+      "Get-Process sing-box -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;",
+      "$a = Get-NetAdapter -Name 'magnetgate' -ErrorAction SilentlyContinue;",
+      "foreach ($d in $a) { if ($d.PnPDeviceID) { try { & pnputil.exe /remove-device $d.PnPDeviceID | Out-Null } catch {} } }",
+      "Start-Sleep -Milliseconds 800",
+    ].join(' ')
+    const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true })
+    let done = false
+    const finish = () => { if (!done) { done = true; resolve() } }
+    p.on('error', finish)
+    p.on('exit', finish)
+    setTimeout(finish, 6000) // never block the launch for long
+  })
+}
+
 // User intent (the toggle). Turning on ensures the rendezvous client is running and records the
 // intent; the actual engine launch is applyVpn, which may have to wait for the first data plane.
 async function runVpn(off) {
@@ -364,6 +391,16 @@ async function runVpn(off) {
   // the data plane comes from the rendezvous client — make sure it's running to publish endpoints
   if (!clientProc) { pushLog('[app] starting the rendezvous client for the VPN'); startClient() }
   state.vpnOn = true; state.lastError = null
+  // if another Wintun tunnel (WireGuard) was just torn down, the driver needs a moment before it can
+  // create ours — otherwise the first start hangs ~16s and fails ("create adapter ... already exists").
+  const sinceCleared = Date.now() - otherTunnelClearedAt
+  if (otherTunnelClearedAt && sinceCleared < 6000) {
+    const waitMs = 6000 - sinceCleared
+    pushLog(`[app] letting Wintun settle after the previous tunnel (${Math.round(waitMs / 1000)}s)…`)
+    pushStatus()
+    await new Promise((r) => setTimeout(r, waitMs))
+    if (!state.vpnOn) return // turned off while waiting
+  }
   await applyVpn('user enabled')
   pushStatus()
 }
@@ -406,7 +443,8 @@ async function _applyVpn(reason) {
   if (bad) { state.lastError = `config invalid: ${bad}`; pushLog(`[app] sing-box check failed: ${bad}`); pushStatus(); return }
 
   curDpSig = JSON.stringify(dp) // mark this data plane as applied (dedupes the watcher)
-  let vpnRetried = false
+  const MAX_TUN_RETRIES = 3
+  let tunRetries = 0
   const launch = () => {
     let sawTunErr = false
     let proc
@@ -417,7 +455,7 @@ async function _applyVpn(reason) {
       for (const line of buf.toString().split(/\r?\n/)) {
         if (!line.trim()) continue
         pushLog(`[vpn] ${line}`)
-        if (/configure tun interface|initialization has already/i.test(line)) sawTunErr = true
+        if (/configure tun interface|initialization has already|create adapter|open.*adapter/i.test(line)) sawTunErr = true
       }
     }
     proc.stdout.on('data', onOut)
@@ -427,20 +465,25 @@ async function _applyVpn(reason) {
       if (vpnProc !== proc) return // intentional stop/relaunch (vpnProc nulled first)
       vpnProc = null
       pushLog(`[app] sing-box exited (code ${code})`)
-      // a stale TUN adapter (from a hard-killed previous run) makes the first start fail with
-      // "configure tun interface" — the exited process releases it, so one retry succeeds
-      if (code && sawTunErr && !vpnRetried && state.vpnOn) {
-        vpnRetried = true
-        pushLog('[app] TUN adapter was busy (stale) — retrying once')
-        setTimeout(() => { if (state.vpnOn) launch() }, 2500)
+      // the Wintun adapter can be busy/stale — from a hard-killed previous sing-box, or the driver
+      // still settling right after another Wintun tunnel (WireGuard) was torn down. It clears within
+      // a few seconds, so re-clean and retry a few times (keeping the UI in "starting") before giving up.
+      if (code && sawTunErr && tunRetries < MAX_TUN_RETRIES && state.vpnOn) {
+        tunRetries++
+        pushLog(`[app] TUN adapter busy — cleaning up and retrying (${tunRetries}/${MAX_TUN_RETRIES})`)
+        cleanupStaleTun().then(() => { if (state.vpnOn) launch() })
         return
       }
-      if (state.vpnOn && code) state.lastError = `VPN stopped (code ${code}) — see the log`
+      if (state.vpnOn && code) state.lastError = sawTunErr
+        ? 'could not create the TUN adapter — turn off any other VPN/WireGuard and try again'
+        : `VPN stopped (code ${code}) — see the log`
       state.vpnOn = false; state.vpnHealthy = false; pushStatus()
     })
   }
   state.lastError = null
   pushLog(`[app] system VPN ${reason ? `(${reason}) ` : ''}starting [mode=${mode}, dp=${camo.map((c) => c.t).join('+')}, bypass=${ips.join(',') || 'none'}]`)
+  await cleanupStaleTun() // clear any stale 'magnetgate' adapter so the first start succeeds cleanly
+  if (!state.vpnOn) return // turned off during cleanup
   launch()
   pushStatus()
 }
