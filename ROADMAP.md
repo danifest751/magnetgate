@@ -37,9 +37,13 @@ scale) is its enemy. Keep that boundary explicit in every design decision below.
 
 ## 3. Near-term — Phase 3
 
-- **sing-box TUN as the system-wide VPN**, replacing tun2proxy: one engine for both the data plane
-  and the full-VPN layer, with a **kill-switch**, IPv6 handling and DNS-leak protection. Needs an
-  elevated (admin) run to validate; the native channel stays the fallback under the TUN.
+- **sing-box TUN as the system-wide VPN**, replacing tun2proxy — with a fail-closed **kill-switch**
+  (`route.final = proxy` + `strict_route`), IPv6-leak block and DNS routed through the tunnel.
+  `scripts/vpn-singbox-windows.ps1` is written and its generated config is offline-validated
+  (`sing-box check`); it keeps the TUN → magnetgate SOCKS topology so reality>hy2>native fail-over and
+  rendezvous stay in the client. **Remaining:** an elevated field bring-up (blocked here: the dev box
+  is in a restricted-network region behind a WireGuard full tunnel, so validating with WG off risks
+  cutting remote access — must be done locally with a recovery path), pin the wintun.dll hash.
 - ✅ **hy2 cert-pinning (done, 0.10.0)** — the self-signed server cert now ships via the
   size-unbounded Nostr offer, dropping the `insecure` fallback. Implemented as the compact-DHT /
   superset-Nostr split: the DHT offer omits hy2, the Nostr offer carries it with the cert, and the

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+- **sing-box TUN launcher (Phase 3, in progress).** `scripts/vpn-singbox-windows.ps1` brings the
+  system-wide VPN up on sing-box's own TUN inbound instead of tun2proxy: TUN -> the magnetgate SOCKS
+  client (so reality>hy2>native fail-over and rendezvous stay in the client), with a fail-closed
+  kill-switch (`route.final = proxy` + `strict_route`), IPv6-leak block (v6 rejected), and DNS routed
+  through the tunnel via DoH. Same `-Off`/`-Bypass` interface as `vpn-windows.ps1`; the generated
+  config is validated with `sing-box check` before the network is touched. Offline-validated only —
+  the elevated field bring-up (with any other full tunnel off) and pinning the wintun.dll hash are
+  still pending.
+
 ## 0.10.0 — 2026-09-12
 - **hysteria2 cert-pinning (Track 3, Phase 3).** The exit now publishes two same-generation views of
   the offer: the DHT offer stays compact and omits hy2 (its self-signed cert does not fit the
@@ -17,7 +27,6 @@
 - Verified in prod: a standalone sing-box built from the advertised pinned hy2 endpoint (cert
   validated, no `insecure`) egresses through the exit with HTTPS 200; Reality stays the primary path.
 - Tests: 20/20 (added nonce-separation, `pickDp`, and `mergeOffer` merge/replace/ignore cases).
-
 
 ## 0.9.0 — 2026-09-12
 - **Credential rotation with a grace window (Track 3, phase 2).** `scripts/rotate-dp.mjs` (a systemd
