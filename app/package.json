@@ -3,6 +3,7 @@
   "productName": "magnetgate",
   "version": "0.1.0",
   "description": "Desktop UI for the magnetgate censorship-resistant tunnel client",
+  "author": "magnetgate",
   "private": true,
   "main": "main.js",
   "scripts": {
