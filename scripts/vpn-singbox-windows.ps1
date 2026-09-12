@@ -117,10 +117,12 @@ if (Test-Path $ConfigPath) {
 }
 $bypassIps = @($bypassIps | Select-Object -Unique)
 if ($bypassIps.Count -eq 0) {
-  Write-Warning 'No exit/DHT IP to bypass found (config bootstrap has no IP literal). Re-run with -Bypass <exit-ip>, or the client uplink loops through the TUN and nothing connects.'
-} else {
-  Write-Host ("bypassing (kept off the tunnel): " + ($bypassIps -join ', '))
+  # abort instead of bringing up a TUN that is guaranteed to loop: with no exit IP bypassed, the
+  # client's own uplink to the exit is captured by the TUN and fed back into the SOCKS proxy.
+  Write-Error 'No exit/DHT IP to bypass. Pass -Bypass <exit-ip> (or put the exit IP as an IP literal in the config bootstrap). Refusing to start — without it the tunnel loops and nothing connects.'
+  exit 1
 }
+Write-Host ("bypassing (kept off the tunnel): " + ($bypassIps -join ', '))
 
 # build the sing-box config from a template (written to a file, so no arg-quoting issues). The
 # bypass rule is injected only when there is at least one IP to bypass.

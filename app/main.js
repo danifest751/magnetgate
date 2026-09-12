@@ -35,6 +35,7 @@ const LOG_MAX = 500
 
 let win = null
 let clientProc = null
+let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
 const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null }
 
@@ -117,6 +118,9 @@ function startClient() {
       pushLog(line)
       const m = line.match(/via (reality|hy2|mgt)\b/) || line.match(/\]\s*(reality|hy2|mgt)\b/)
       if (m) { state.route = m[1]; pushStatus() }
+      // learn the exit's IP so the VPN can bypass it (else the client uplink loops through the TUN)
+      const mh = line.match(/via (?:reality|hy2|mgt): (\d{1,3}(?:\.\d{1,3}){3}):/)
+      if (mh) lastExitHost = mh[1]
     }
   }
   clientProc.stdout.on('data', onData)
@@ -149,16 +153,34 @@ async function stopClient() {
   pushStatus()
 }
 
+// the exit IP(s) that MUST bypass the TUN, or the client's own uplink to the exit is captured and
+// loops back into the SOCKS proxy and nothing connects — from the config bootstrap literals plus the
+// exit IP learned at runtime. The packaged launcher can't find the userData config on its own, so the
+// app passes these explicitly.
+function bypassIps() {
+  const ips = new Set()
+  const ipRe = /^\d{1,3}(\.\d{1,3}){3}$/
+  for (const b of (loadConfig().bootstrap || [])) {
+    const h = String(b).split(':')[0]
+    if (ipRe.test(h)) ips.add(h)
+  }
+  if (lastExitHost) ips.add(lastExitHost)
+  return [...ips]
+}
+
 // ---------- system VPN (sing-box TUN), elevated on demand ----------
 function runVpn(off) {
+  const ips = off ? [] : bypassIps()
+  const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
   // elevate the TUN launcher via UAC; the app stays unprivileged
-  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"` + (off ? ' -Off' : '')
+  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"${bypassArg}` + (off ? ' -Off' : '')
   const inner = args.replace(/'/g, "''")
   const cmd = `Start-Process -Verb RunAs -FilePath 'powershell.exe' -ArgumentList '${inner}'`
   const p = spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { windowsHide: true })
   p.on('error', (e) => { state.lastError = `VPN launch failed: ${e.message}`; pushStatus() })
   state.vpnOn = !off
-  pushLog(`[app] system VPN ${off ? 'stopping' : 'starting'} (elevated) — approve the UAC prompt`)
+  if (!off && !ips.length) state.lastError = 'no exit IP to bypass yet — start the client and wait for a route first'
+  pushLog(`[app] system VPN ${off ? 'stopping' : `starting (bypass: ${ips.join(', ') || 'NONE!'})`} — approve UAC if prompted`)
   pushStatus()
 }
 
