@@ -1,11 +1,14 @@
 // magnetgate desktop app — Electron main process.
 //
 // UI-only Electron shell around the existing magnetgate client:
-//  - the rendezvous/SOCKS/fail-over client (../src/client.js) runs as a separate system `node`
-//    process (not electron-as-node) to avoid native-module ABI mismatches (sodium-native etc.);
+//  - the rendezvous/SOCKS/fail-over client (../src/client.js) runs on Electron's own Node runtime
+//    (process.execPath + ELECTRON_RUN_AS_NODE=1), so the app is self-contained — no system Node
+//    needed. This is safe because the only native dep (sodium-native) ships N-API prebuilds, which
+//    are ABI-stable across Node/Electron versions;
 //  - the system-wide VPN (sing-box TUN) is brought up via scripts/vpn-singbox-windows.ps1, elevated
 //    on demand (UAC only when the user enables it) — the app itself stays unprivileged;
-//  - config/PSK management reads and writes a magnetgate.config.json kept in userData.
+//  - config/PSK management reads and writes a magnetgate.config.json kept in userData, seeded on
+//    first run from the bundled seed-config.json so testing needs no manual key entry.
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const crypto = require('node:crypto')
@@ -16,7 +19,13 @@ const fs = require('node:fs')
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
 const CLIENT = path.join(RES, 'src', 'client.js')
 const VPN_PS1 = path.join(RES, 'scripts', 'vpn-singbox-windows.ps1')
-const NODE_MODULES = path.join(RES, 'node_modules')
+// first-run seed for the user config: the bundled seed-config.json (real PSK/exits) if present,
+// else the repo config in dev, else the PSK-less example.
+const SEED_CANDIDATES = [
+  path.join(RES, 'seed-config.json'),
+  path.join(RES, 'magnetgate.config.json'),
+  path.join(RES, 'magnetgate.config.example.json'),
+]
 const CONFIG = path.join(app.getPath('userData'), 'magnetgate.config.json')
 const LOG_MAX = 500
 
@@ -34,17 +43,27 @@ const DEFAULT_CONFIG = {
   rules: { direct: [], proxy: [] },
 }
 
-function loadConfig() {
-  try {
-    const raw = fs.readFileSync(CONFIG, 'utf8').replace(/^﻿/, '')
-    return { ...DEFAULT_CONFIG, ...JSON.parse(raw) }
-  } catch {
-    // seed from the example that ships with the app, if any
+function readJson(p) { return JSON.parse(fs.readFileSync(p, 'utf8').replace(/^﻿/, '')) }
+
+// on first run, seed the userData config from the first seed candidate that exists, so the user does
+// not have to paste a PSK to start testing
+function seedConfigIfMissing() {
+  if (fs.existsSync(CONFIG)) return
+  for (const src of SEED_CANDIDATES) {
     try {
-      const ex = fs.readFileSync(path.join(RES, 'magnetgate.config.example.json'), 'utf8').replace(/^﻿/, '')
-      return { ...DEFAULT_CONFIG, ...JSON.parse(ex) }
-    } catch { return { ...DEFAULT_CONFIG } }
+      const cfg = { ...DEFAULT_CONFIG, ...readJson(src) }
+      fs.mkdirSync(path.dirname(CONFIG), { recursive: true })
+      fs.writeFileSync(CONFIG, JSON.stringify(cfg, null, 2))
+      pushLog(`[app] seeded config from ${path.basename(src)}`)
+      return
+    } catch { /* try the next candidate */ }
   }
+}
+
+function loadConfig() {
+  seedConfigIfMissing()
+  try { return { ...DEFAULT_CONFIG, ...readJson(CONFIG) } }
+  catch { return { ...DEFAULT_CONFIG } }
 }
 
 function saveConfig(cfg) {
@@ -71,14 +90,14 @@ function startClient() {
   state.lastError = null
   const cfg = loadConfig()
   if (!cfg.exits?.length) { state.lastError = 'no exits configured — add a PSK first'; pushStatus(); return }
-  // run the existing client with the system node; NODE_PATH lets it find the bundled deps
-  const env = { ...process.env, NODE_PATH: NODE_MODULES }
+  // run the existing client on Electron's own Node runtime (no system Node needed)
+  const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
   try {
-    clientProc = spawn('node', [CLIENT, CONFIG], { cwd: RES, env, windowsHide: true })
-  } catch (e) { state.lastError = `failed to start node: ${e.message}`; pushStatus(); return }
+    clientProc = spawn(process.execPath, [CLIENT, CONFIG], { cwd: RES, env, windowsHide: true })
+  } catch (e) { state.lastError = `failed to start client: ${e.message}`; pushStatus(); return }
 
   clientProc.on('error', (e) => {
-    state.lastError = e.code === 'ENOENT' ? 'node.exe not found in PATH — install Node.js' : e.message
+    state.lastError = e.message
     state.clientRunning = false; clientProc = null; pushStatus()
   })
   const onData = (buf) => {

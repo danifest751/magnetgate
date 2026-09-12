@@ -7,7 +7,9 @@
   "private": true,
   "main": "main.js",
   "scripts": {
+    "prestart": "node prepare-seed.js",
     "start": "electron .",
+    "predist": "node prepare-seed.js",
     "dist": "electron-builder --win portable"
   },
   "devDependencies": {
@@ -23,7 +25,8 @@
       { "from": "../node_modules", "to": "node_modules" },
       { "from": "../tools/sing-box", "to": "tools/sing-box" },
       { "from": "../scripts/vpn-singbox-windows.ps1", "to": "scripts/vpn-singbox-windows.ps1" },
-      { "from": "../magnetgate.config.example.json", "to": "magnetgate.config.example.json" }
+      { "from": "../magnetgate.config.example.json", "to": "magnetgate.config.example.json" },
+      { "from": "seed-config.json", "to": "seed-config.json" }
     ],
     "win": { "target": ["portable"] },
     "portable": { "artifactName": "magnetgate-${version}.exe" }
