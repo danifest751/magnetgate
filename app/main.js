@@ -240,7 +240,7 @@ async function monitorTunnels() {
   if (!r) return
   const prevOther = state.otherTunnel
   state.otherTunnel = r.others[0] || null
-  state.vpnHealthy = r.mg && state.vpnOn
+  // vpnHealthy is driven by the egress probe (actual connectivity), not adapter-name detection here
   // if another full tunnel appears while ours is on, stop ours (they can't share Wintun). We do NOT
   // auto-restart on a slow/absent adapter: Wintun creation can legitimately take many seconds, and
   // killing it mid-open just loops. The pre-start check already blocks enabling while a tunnel is up.
@@ -508,18 +508,29 @@ function onDpTick() {
 }
 
 // ---------- egress status polling ----------
-// With one engine the app has no client SOCKS to probe, so we curl directly: curl.exe is not the
-// bypassed magnetgate.exe, so when the VPN is up its traffic rides the TUN and reports the EXIT IP —
-// a live confirmation the tunnel actually carries traffic. Only meaningful while the VPN is healthy.
+// The one-engine app has no client SOCKS to probe, so we curl checkip directly: curl.exe is not the
+// bypassed magnetgate.exe, so when the VPN is up its traffic rides the TUN and reports the EXIT IP.
+// This probe is now the AUTHORITATIVE health signal: it runs whenever the sing-box process is alive
+// (not gated on adapter-name detection, which is fragile — 'magnetgate' may not be the adapter's
+// Get-NetAdapter Name), and a successful result both fills the egress IP and marks the VPN healthy.
+// So the egress IP appears exactly when the tunnel actually carries TCP — no dependency on how Windows
+// names the Wintun adapter.
 function pollEgress() {
-  if (!(state.vpnOn && state.vpnHealthy)) { if (state.egress) { state.egress = null; pushStatus() } return }
+  if (!(state.vpnOn && vpnProc)) {
+    if (state.egress || state.vpnHealthy) { state.egress = null; state.vpnHealthy = false; pushStatus() }
+    return
+  }
   const c = spawn('curl.exe', ['-s', '--max-time', '8', 'http://checkip.amazonaws.com/'], { windowsHide: true })
   let out = ''
   c.stdout.on('data', (d) => { out += d.toString() })
   c.on('error', () => {})
   c.on('exit', () => {
     const ip = (out.match(/\d{1,3}(\.\d{1,3}){3}/) || [])[0] || null
-    if (ip !== state.egress) { state.egress = ip; pushStatus() }
+    const healthy = !!ip
+    if (ip !== state.egress || healthy !== state.vpnHealthy) {
+      if (healthy && !state.vpnHealthy) pushLog(`[app] VPN connected — egress ${ip}`)
+      state.egress = ip; state.vpnHealthy = healthy; pushStatus()
+    }
   })
 }
 
