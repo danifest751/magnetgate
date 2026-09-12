@@ -227,6 +227,8 @@ MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
 
 ## Роадмап
 
+> Подробно, включая дизайн **overlay-сети (entry/egress split)**, — в [ROADMAP.md](ROADMAP.md).
+
 **Фаза 3 (следующая):**
 - **sing-box TUN как системный VPN** вместо tun2proxy — один движок и для дата-плоскости, и для полного
   VPN, с **kill-switch**, обработкой IPv6 и защитой от DNS-leak.

@@ -231,6 +231,8 @@ who holds — or brute-forces a weak — PSK can locate the exit: **use a ≥128
 
 ## Roadmap
 
+> Full detail, including the **exit-overlay (entry/egress split)** design, is in [ROADMAP.md](ROADMAP.md).
+
 **Phase 3 (next):**
 - **sing-box TUN as the system-wide VPN**, replacing tun2proxy — one engine for both the data plane
   and the full-VPN layer, with a **kill-switch**, IPv6 handling and DNS-leak protection.
