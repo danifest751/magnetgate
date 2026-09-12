@@ -35,6 +35,27 @@ function renderExits() {
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])) }
 
+// normalize a user entry to a bare domain (strip scheme/path/port)
+function normDomain(s) {
+  return String(s).trim().toLowerCase()
+    .replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/^\*\./, '')
+}
+
+function renderDirect() {
+  const box = $('directList'); if (!box) return
+  cfg.directDomains = cfg.directDomains || []
+  box.innerHTML = ''
+  if (!cfg.directDomains.length) {
+    const p = document.createElement('span'); p.className = 'muted'; p.textContent = 'No custom direct domains yet.'
+    box.appendChild(p); return
+  }
+  cfg.directDomains.forEach((d, i) => {
+    const c = document.createElement('span'); c.className = 'chip'
+    c.innerHTML = `${escapeHtml(d)} <button data-del-direct="${i}" title="remove">✕</button>`
+    box.appendChild(c)
+  })
+}
+
 function readForm() {
   cfg.localPort = parseInt($('localPort').value, 10) || 1080
   cfg.singboxPort = parseInt($('singboxPort').value, 10) || 1081
@@ -88,6 +109,7 @@ function appendLog(line) {
 window.addEventListener('DOMContentLoaded', async () => {
   cfg = await window.mg.getConfig()
   fillForm()
+  renderDirect()
   st = await window.mg.getState()
   renderStatus()
   for (const l of await window.mg.getLog()) appendLog(l)
@@ -109,6 +131,25 @@ window.addEventListener('DOMContentLoaded', async () => {
   })
   $('btnOpenDir').addEventListener('click', () => window.mg.openConfigDir())
   $('btnLogs').addEventListener('click', () => window.mg.openLogs())
+
+  // direct-routing (bypass-VPN) domain list
+  const addDirect = async () => {
+    const d = normDomain($('directInput').value)
+    if (!d) return
+    cfg.directDomains = cfg.directDomains || []
+    if (!cfg.directDomains.includes(d)) cfg.directDomains.push(d)
+    $('directInput').value = ''
+    cfg = await window.mg.saveConfig(cfg); renderDirect()
+    $('directSaved').textContent = 'saved ✓'; setTimeout(() => { $('directSaved').textContent = '' }, 2000)
+  }
+  $('btnAddDirect').addEventListener('click', addDirect)
+  $('directInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addDirect() })
+  $('directList').addEventListener('click', async (e) => {
+    const i = e.target.dataset.delDirect
+    if (i === undefined) return
+    cfg.directDomains.splice(+i, 1)
+    cfg = await window.mg.saveConfig(cfg); renderDirect()
+  })
   try { $('logPath').textContent = 'log file: ' + await window.mg.getLogPath() } catch {}
 
   // delegated handlers for the dynamic exit rows
