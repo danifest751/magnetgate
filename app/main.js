@@ -20,6 +20,30 @@ const fs = require('node:fs')
 const CLASH_PORT = 19090
 const CLASH_SECRET = crypto.randomBytes(16).toString('hex')
 
+// Well-known RU resources that reject datacenter/VPN IPs ("turn off VPN") — always routed DIRECT on
+// the real residential IP, on top of the community rule-set and the user's own additions. RU-domestic
+// majors are included too (they don't need the tunnel and often block it).
+const DEFAULT_DIRECT = [
+  // marketplaces
+  'ozon.ru', 'ozone.ru', 'wildberries.ru', 'wb.ru', 'wbbasket.ru', 'avito.ru', 'avito.st',
+  'megamarket.ru', 'sbermegamarket.ru', 'lamoda.ru', 'dns-shop.ru', 'mvideo.ru', 'eldorado.ru',
+  'citilink.ru', 'market.yandex.ru',
+  // banks
+  'sber.ru', 'sberbank.ru', 'alfabank.ru', 'tinkoff.ru', 'tbank.ru', 'vtb.ru', 'gazprombank.ru',
+  'gpb.ru', 'raiffeisen.ru', 'psbank.ru', 'pochtabank.ru', 'sovcombank.ru', 'mkb.ru', 'open.ru',
+  'rshb.ru', 'rosbank.ru',
+  // gov
+  'gosuslugi.ru', 'gov.ru', 'mos.ru', 'nalog.ru', 'nalog.gov.ru', 'pfr.gov.ru', 'sfr.gov.ru',
+  'fss.ru', 'mvd.ru', 'rosreestr.gov.ru', 'rkn.gov.ru', 'mchs.gov.ru',
+  // telecom
+  'mts.ru', 'megafon.ru', 'beeline.ru', 'tele2.ru', 't2.ru', 'rt.ru',
+  // streaming / cinema
+  'kinopoisk.ru', 'okko.tv', 'wink.ru', 'ivi.ru', 'premier.one', 'start.ru', 'more.tv', 'kion.ru',
+  'rutube.ru', 'smotrim.ru',
+  // services / messengers
+  'vk.com', 'vk.ru', 'vkontakte.ru', 'userapi.com', 'mail.ru', 'ok.ru', 'dzen.ru', 'max.ru', 'pochta.ru',
+]
+
 // resource root: repo root in dev, the packaged resources dir otherwise
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
 const CLIENT = path.join(RES, 'src', 'client.js')
@@ -249,7 +273,8 @@ function runVpn(off) {
   const ips = off ? [] : bypassIps()
   const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
   const clashArg = off ? '' : ` -ClashPort ${CLASH_PORT} -ClashSecret ${CLASH_SECRET}`
-  const doms = off ? [] : (loadConfig().directDomains || []).map((d) => String(d).trim()).filter(Boolean)
+  const userDoms = off ? [] : (loadConfig().directDomains || []).map((d) => String(d).trim()).filter(Boolean)
+  const doms = off ? [] : [...new Set([...DEFAULT_DIRECT, ...userDoms])]
   const directArg = doms.length ? ` -DirectDomains ${doms.join(',')}` : ''
   // elevate the TUN launcher via UAC; the app stays unprivileged
   const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"${bypassArg}${clashArg}${directArg}` + (off ? ' -Off' : '')
