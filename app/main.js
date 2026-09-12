@@ -245,6 +245,9 @@ function buildVpnConfig({ mode, bypass, socksPort, clashPort, clashSecret, direc
   }
   const ruleSets = []
   const rules = [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }]
+  // the magnetgate client (this app's own process) must bypass the TUN, or its rendezvous/DNS get
+  // captured and routed back through itself — a deadlock (no offer, reality dial fails, DNS hangs).
+  rules.push({ process_name: ['magnetgate.exe'], action: 'route', outbound: 'direct' })
   if (bypass?.length) rules.push({ ip_cidr: bypass.map((i) => `${i}/32`), action: 'route', outbound: 'direct' })
   let final
   if (mode === 'split') {
@@ -324,20 +327,42 @@ async function runVpn(off) {
   const bad = await sbCheck(VPN_CFG)
   if (bad) { state.lastError = `config invalid: ${bad}`; pushLog(`[app] sing-box check failed: ${bad}`); pushStatus(); return }
 
-  try {
-    vpnProc = spawn(SB_EXE, ['run', '-c', VPN_CFG], { cwd: SB_DIR, windowsHide: true })
-  } catch (e) { state.lastError = `VPN start failed: ${e.message}`; vpnProc = null; pushStatus(); return }
-  const onOut = (buf) => { for (const line of buf.toString().split(/\r?\n/)) if (line.trim()) pushLog(`[vpn] ${line}`) }
-  vpnProc.stdout.on('data', onOut)
-  vpnProc.stderr.on('data', onOut)
-  vpnProc.on('error', (e) => { state.lastError = e.message; state.vpnOn = false; vpnProc = null; pushStatus() })
-  vpnProc.on('exit', (code) => {
-    pushLog(`[app] sing-box exited (code ${code})`)
-    if (state.vpnOn && code) state.lastError = `VPN stopped (code ${code}) — see the log`
-    state.vpnOn = false; state.vpnHealthy = false; vpnProc = null; pushStatus()
-  })
+  let vpnRetried = false
+  const launch = () => {
+    let sawTunErr = false
+    let proc
+    try { proc = spawn(SB_EXE, ['run', '-c', VPN_CFG], { cwd: SB_DIR, windowsHide: true }) }
+    catch (e) { state.lastError = `VPN start failed: ${e.message}`; state.vpnOn = false; vpnProc = null; pushStatus(); return }
+    vpnProc = proc
+    const onOut = (buf) => {
+      for (const line of buf.toString().split(/\r?\n/)) {
+        if (!line.trim()) continue
+        pushLog(`[vpn] ${line}`)
+        if (/configure tun interface|initialization has already/i.test(line)) sawTunErr = true
+      }
+    }
+    proc.stdout.on('data', onOut)
+    proc.stderr.on('data', onOut)
+    proc.on('error', (e) => { if (vpnProc !== proc) return; state.lastError = e.message; state.vpnOn = false; vpnProc = null; pushStatus() })
+    proc.on('exit', (code) => {
+      if (vpnProc !== proc) return // intentional stop (runVpn(true) nulls vpnProc first)
+      vpnProc = null
+      pushLog(`[app] sing-box exited (code ${code})`)
+      // a stale TUN adapter (from a hard-killed previous run) makes the first start fail with
+      // "configure tun interface" — the exited process releases it, so one retry succeeds
+      if (code && sawTunErr && !vpnRetried && state.vpnOn) {
+        vpnRetried = true
+        pushLog('[app] TUN adapter was busy (stale) — retrying once')
+        setTimeout(() => { if (state.vpnOn) launch() }, 2500)
+        return
+      }
+      if (state.vpnOn && code) state.lastError = `VPN stopped (code ${code}) — see the log`
+      state.vpnOn = false; state.vpnHealthy = false; pushStatus()
+    })
+  }
   state.vpnOn = true; state.lastError = null
   pushLog(`[app] system VPN starting [mode=${mode}, bypass=${ips.join(',') || 'none'}]`)
+  launch()
   pushStatus()
 }
 
