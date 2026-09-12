@@ -49,7 +49,7 @@ let vpnProc = null // the sing-box TUN process (managed directly; app runs eleva
 let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
 const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null,
-  otherTunnel: null, vpnHealthy: false, rvReady: false,
+  otherTunnel: null, vpnHealthy: false, rvReady: false, phase: 'idle',
   stats: { conns: 0, up: 0, down: 0, upBps: 0, downBps: 0 } }
 let lastSample = null // { t, up, down } for speed calc
 let curDpSig = null   // signature of the data-plane last applied to the TUN sing-box (rotation detection)
@@ -120,7 +120,19 @@ function pushLog(line) {
   ensureLogDir()
   try { fs.appendFileSync(LOG_FILE, s + '\n') } catch { /* file logging is best-effort */ }
 }
-function pushStatus() { safeSend('status', { ...state }) }
+// One coarse connection phase for the UI, derived from the internal state so it is always accurate:
+//  blocked   — another full tunnel (WireGuard) is up; can't connect until it's off
+//  idle      — not connecting
+//  rendezvous— connecting: rendezvous client up, still finding the exit / waiting for a data plane
+//  starting  — connecting: the tunnel engine (sing-box) is up, waiting for it to carry traffic
+//  connected — traffic confirmed flowing through the exit (egress probe succeeded)
+function computePhase() {
+  if (!state.vpnOn) return state.otherTunnel ? 'blocked' : 'idle'
+  if (state.vpnHealthy) return 'connected'
+  if (vpnProc) return 'starting'
+  return 'rendezvous'
+}
+function pushStatus() { state.phase = computePhase(); safeSend('status', { ...state }) }
 
 // ---------- magnetgate client child ----------
 function startClient() {
@@ -574,6 +586,9 @@ ipcMain.handle('startClient', () => { startClient() })
 ipcMain.handle('stopClient', async () => { await stopClient() })
 ipcMain.handle('vpnOn', async () => { await runVpn(false) })
 ipcMain.handle('vpnOff', async () => { await runVpn(true) })
+// one-click: Connect brings up everything (client rendezvous + VPN tunnel); Disconnect tears it all down
+ipcMain.handle('connect', async () => { await runVpn(false) })
+ipcMain.handle('disconnect', async () => { await runVpn(true); await stopClient() })
 ipcMain.handle('openConfigDir', () => shell.openPath(path.dirname(CONFIG)))
 ipcMain.handle('openLogs', () => { ensureLogDir(); return shell.openPath(LOG_DIR) })
 ipcMain.handle('getLogPath', () => LOG_FILE)
