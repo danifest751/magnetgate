@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- **sing-box TUN VPN field-validated.** With WireGuard off, the app's system VPN brings up the
+  `magnetgate` TUN and routes all traffic through it: system egress becomes the exit IP, exit
+  connections go direct (bypass works, no loop), real traffic flows over Reality to the exit. Note:
+  it will not come up alongside an active WireGuard full tunnel (both use Wintun) — turn the other
+  full tunnel off first.
 - **App is self-contained + logs to disk.** The client runs on Electron's own Node (no system Node
   needed; `sodium-native` N-API is ABI-stable), the config is seeded on first run so testing needs no
   PSK entry (the built exe then holds the PSK — keep it private), and everything is written to
