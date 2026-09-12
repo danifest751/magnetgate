@@ -1,0 +1,30 @@
+{
+  "name": "magnetgate-app",
+  "productName": "magnetgate",
+  "version": "0.1.0",
+  "description": "Desktop UI for the magnetgate censorship-resistant tunnel client",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^31.7.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "org.magnetgate.app",
+    "productName": "magnetgate",
+    "files": ["main.js", "preload.js", "renderer/**"],
+    "extraResources": [
+      { "from": "../src", "to": "src" },
+      { "from": "../node_modules", "to": "node_modules" },
+      { "from": "../tools/sing-box", "to": "tools/sing-box" },
+      { "from": "../scripts/vpn-singbox-windows.ps1", "to": "scripts/vpn-singbox-windows.ps1" },
+      { "from": "../magnetgate.config.example.json", "to": "magnetgate.config.example.json" }
+    ],
+    "win": { "target": ["portable"] },
+    "portable": { "artifactName": "magnetgate-${version}.exe" }
+  }
+}
