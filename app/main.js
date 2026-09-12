@@ -83,7 +83,9 @@ const DEFAULT_CONFIG = {
   bootstrap: ['router.bittorrent.com:6881', 'dht.transmissionbt.com:6881', 'router.utorrent.com:6881'],
   exits: [],
   rules: { direct: [], proxy: [] },
-  directDomains: [], // user domains that bypass the VPN (go direct on the real RU IP)
+  vpnMode: 'full',   // 'full' = all via exit (direct exceptions); 'split' = direct default, list via exit
+  directDomains: [], // full mode: user domains that bypass the VPN (direct on the real IP)
+  tunnelDomains: [], // split mode: user domains forced THROUGH the exit
 }
 
 function readJson(p) { return JSON.parse(fs.readFileSync(p, 'utf8').replace(/^﻿/, '')) }
@@ -273,11 +275,22 @@ function runVpn(off) {
   const ips = off ? [] : bypassIps()
   const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
   const clashArg = off ? '' : ` -ClashPort ${CLASH_PORT} -ClashSecret ${CLASH_SECRET}`
-  const userDoms = off ? [] : (loadConfig().directDomains || []).map((d) => String(d).trim()).filter(Boolean)
-  const doms = off ? [] : [...new Set([...DEFAULT_DIRECT, ...userDoms])]
-  const directArg = doms.length ? ` -DirectDomains ${doms.join(',')}` : ''
+  const cfg = off ? {} : loadConfig()
+  const mode = cfg.vpnMode === 'split' ? 'split' : 'full'
+  const clean = (a) => [...new Set((a || []).map((d) => String(d).trim()).filter(Boolean))]
+  let modeArg = ''
+  if (!off) {
+    modeArg = ` -Mode ${mode}`
+    if (mode === 'full') {
+      const doms = clean([...DEFAULT_DIRECT, ...(cfg.directDomains || [])])
+      if (doms.length) modeArg += ` -DirectDomains ${doms.join(',')}`
+    } else {
+      const doms = clean(cfg.tunnelDomains)
+      if (doms.length) modeArg += ` -TunnelDomains ${doms.join(',')}`
+    }
+  }
   // elevate the TUN launcher via UAC; the app stays unprivileged
-  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"${bypassArg}${clashArg}${directArg}` + (off ? ' -Off' : '')
+  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"${bypassArg}${clashArg}${modeArg}` + (off ? ' -Off' : '')
   const inner = args.replace(/'/g, "''")
   const cmd = `Start-Process -Verb RunAs -FilePath 'powershell.exe' -ArgumentList '${inner}'`
   const p = spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { windowsHide: true })

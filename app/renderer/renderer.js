@@ -41,15 +41,36 @@ function normDomain(s) {
     .replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/^\*\./, '')
 }
 
+const isSplit = () => cfg.vpnMode === 'split'
+const listKey = () => (isSplit() ? 'tunnelDomains' : 'directDomains')
+
+function renderMode() {
+  const full = !isSplit()
+  $('btnModeFull').classList.toggle('active', full)
+  $('btnModeSplit').classList.toggle('active', !full)
+  $('modeHint').textContent = full ? 'everything via the exit' : 'only the list via the exit; rest direct'
+  const title = $('routeCardTitle'), hint = $('routeCardHint')
+  if (full) {
+    title.textContent = 'Direct routing (bypass VPN)'
+    hint.innerHTML = 'Common RU resources that reject VPN (Ozon, WB, Gosuslugi, banks, VK/MAX, …) are already <b>direct</b> on your real IP, plus a community list. Add any others below.'
+  } else {
+    title.textContent = 'Tunneled resources (via exit)'
+    hint.innerHTML = 'Blocked / geo-restricted resources go <b>through the exit</b> (re:filter blocklist + your bundled IP list are applied). Add domains that must use the exit below. Everything else stays direct.'
+  }
+  renderDirect()
+}
+
 function renderDirect() {
   const box = $('directList'); if (!box) return
-  cfg.directDomains = cfg.directDomains || []
+  const key = listKey()
+  cfg[key] = cfg[key] || []
   box.innerHTML = ''
-  if (!cfg.directDomains.length) {
-    const p = document.createElement('span'); p.className = 'muted'; p.textContent = 'No custom direct domains yet.'
+  if (!cfg[key].length) {
+    const p = document.createElement('span'); p.className = 'muted'
+    p.textContent = isSplit() ? 'No custom tunneled domains yet.' : 'No custom direct domains yet.'
     box.appendChild(p); return
   }
-  cfg.directDomains.forEach((d, i) => {
+  cfg[key].forEach((d, i) => {
     const c = document.createElement('span'); c.className = 'chip'
     c.innerHTML = `${escapeHtml(d)} <button data-del-direct="${i}" title="remove">✕</button>`
     box.appendChild(c)
@@ -109,7 +130,7 @@ function appendLog(line) {
 window.addEventListener('DOMContentLoaded', async () => {
   cfg = await window.mg.getConfig()
   fillForm()
-  renderDirect()
+  renderMode()
   st = await window.mg.getState()
   renderStatus()
   for (const l of await window.mg.getLog()) appendLog(l)
@@ -132,12 +153,23 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('btnOpenDir').addEventListener('click', () => window.mg.openConfigDir())
   $('btnLogs').addEventListener('click', () => window.mg.openLogs())
 
-  // direct-routing (bypass-VPN) domain list
+  // mode toggle (Full VPN <-> Split); applies on the next VPN start
+  const setMode = async (m) => {
+    if (cfg.vpnMode === m) return
+    cfg.vpnMode = m
+    cfg = await window.mg.saveConfig(cfg); renderMode()
+    $('directSaved').textContent = 'mode saved — restart VPN to apply'; setTimeout(() => { $('directSaved').textContent = '' }, 3000)
+  }
+  $('btnModeFull').addEventListener('click', () => setMode('full'))
+  $('btnModeSplit').addEventListener('click', () => setMode('split'))
+
+  // routing-list add/remove (edits the active mode's list: direct for full, tunneled for split)
   const addDirect = async () => {
     const d = normDomain($('directInput').value)
     if (!d) return
-    cfg.directDomains = cfg.directDomains || []
-    if (!cfg.directDomains.includes(d)) cfg.directDomains.push(d)
+    const key = listKey()
+    cfg[key] = cfg[key] || []
+    if (!cfg[key].includes(d)) cfg[key].push(d)
     $('directInput').value = ''
     cfg = await window.mg.saveConfig(cfg); renderDirect()
     $('directSaved').textContent = 'saved ✓'; setTimeout(() => { $('directSaved').textContent = '' }, 2000)
@@ -147,7 +179,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('directList').addEventListener('click', async (e) => {
     const i = e.target.dataset.delDirect
     if (i === undefined) return
-    cfg.directDomains.splice(+i, 1)
+    cfg[listKey()].splice(+i, 1)
     cfg = await window.mg.saveConfig(cfg); renderDirect()
   })
   try { $('logPath').textContent = 'log file: ' + await window.mg.getLogPath() } catch {}

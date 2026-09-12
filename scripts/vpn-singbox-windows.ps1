@@ -36,10 +36,15 @@ param(
   # Clash API for live stats (connections / traffic), loopback-only. 0 disables it.
   [int]$ClashPort = 0,
   [string]$ClashSecret = '',
-  # split tunnel: a bundled community "inside-Russia" rule-set (local .srs) goes DIRECT; empty +
-  # missing file disables it. -DirectDomains adds the user's own comma-separated domains.
+  # routing mode: 'full' = everything via the exit, with a DIRECT exception list (RU inside-only +
+  # -DirectDomains); 'split' = direct by default, with only the blocked/geo-restricted list routed via
+  # the exit (bundled re:filter + user list + -TunnelDomains).
+  [ValidateSet('full', 'split')] [string]$Mode = 'full',
   [string]$DirectListPath = '',
-  [string]$DirectDomains = ''
+  [string]$DirectDomains = '',
+  [string]$TunnelDomains = '',
+  # generate the config, validate it with `sing-box check`, and exit (no admin, no TUN) — a preflight
+  [switch]$DryRun
 )
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 try { Start-Transcript -Path (Join-Path $LogDir 'vpn-launcher.log') -Append | Out-Null } catch {}
@@ -62,12 +67,12 @@ if ($Off) {
   exit 0
 }
 
-if (-not (Test-Admin)) { Write-Error 'Run from an elevated (Administrator) PowerShell - the TUN adapter needs admin rights.'; exit 1 }
+if (-not $DryRun -and -not (Test-Admin)) { Write-Error 'Run from an elevated (Administrator) PowerShell - the TUN adapter needs admin rights.'; exit 1 }
 if (-not (Test-Path $exe)) { Write-Error "sing-box not found at $exe - run scripts\get-singbox.ps1 first."; exit 1 }
 
 # wintun.dll is required by sing-box for the TUN inbound on Windows
 $wintun = Join-Path $tools 'wintun.dll'
-if (-not (Test-Path $wintun)) {
+if (-not $DryRun -and -not (Test-Path $wintun)) {
   if (-not $WintunSha256) {
     Write-Error "wintun.dll is missing from $tools. Place wintun.dll (amd64) there manually, or re-run with -WintunSha256 <sha256 of wintun-$WintunVersion.zip> to auto-download from wintun.net."
     exit 1
@@ -107,8 +112,10 @@ $upVpn = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
 if ($upVpn) { Write-Warning ("Another tunnel adapter is UP: " + (($upVpn.Name) -join ', ') + ". Two full tunnels will conflict - turn it off before continuing.") }
 
 # sanity: is the magnetgate client listening?
-$socks = Test-NetConnection -ComputerName 127.0.0.1 -Port $SocksPort -InformationLevel Quiet -WarningAction SilentlyContinue
-if (-not $socks) { Write-Error "magnetgate client is not listening on 127.0.0.1:$SocksPort - start it first."; exit 1 }
+if (-not $DryRun) {
+  $socks = Test-NetConnection -ComputerName 127.0.0.1 -Port $SocksPort -InformationLevel Quiet -WarningAction SilentlyContinue
+  if (-not $socks) { Write-Error "magnetgate client is not listening on 127.0.0.1:$SocksPort - start it first."; exit 1 }
+}
 
 # bypass list: the client's own uplink to the exit must stay off the TUN
 $bypassIps = [System.Collections.Generic.List[string]]::new()
@@ -141,24 +148,37 @@ if ($bypassIps.Count -gt 0) {
   $bypassRule = "`n      { `"ip_cidr`": [ $cidrJson ], `"action`": `"route`", `"outbound`": `"direct`" },"
 }
 
-# --- split tunnel: RU "inside-only" resources go DIRECT (real residential IP), the rest via proxy ---
-# base list = the community auto-updated rule-set; plus any -DirectDomains the app passes (user list).
-# Direct-list domains also resolve via a direct RU resolver so the geo-answer is not "from the exit".
+# --- routing per mode. full: route the DIRECT exception list to `direct`, final proxy. split: route
+#     the blocked/geo-restricted list to `proxy`, final direct. Same DNS (proxy DoH) either way so
+#     blocked domains are not RU-DNS-poisoned; RU sites resolve to their RU IPs and go direct anyway. ---
+$tunnelDoms = @($TunnelDomains -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $directDoms = @($DirectDomains -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if (-not $DirectListPath) { $cand = Join-Path $tools 'itdoginfo-inside-russia.srs'; if (Test-Path $cand) { $DirectListPath = $cand } }
-$useRuleSet = $DirectListPath -and (Test-Path $DirectListPath)
-$ruleSetJson = ''; $directRouteJson = ''
-$routeRules = @()
-if ($useRuleSet) {
-  $rsPath = ($DirectListPath -replace '\\', '/')
-  $ruleSetJson = "`n    `"rule_set`": [ { `"type`": `"local`", `"tag`": `"ru-inside`", `"format`": `"binary`", `"path`": `"$rsPath`" } ],"
-  $routeRules += "{ `"rule_set`": [`"ru-inside`"], `"action`": `"route`", `"outbound`": `"direct`" }"
+$ruleSets = @()
+$modeRules = @()
+function RsJson($tag, $file) {
+  $p = Join-Path $tools $file
+  if (Test-Path $p) { return "{ `"type`": `"local`", `"tag`": `"$tag`", `"format`": `"binary`", `"path`": `"$($p -replace '\\','/')`" }" }
+  return $null
 }
-if ($directDoms.Count -gt 0) {
-  $ds = (($directDoms | ForEach-Object { '"' + $_ + '"' }) -join ', ')
-  $routeRules += "{ `"domain_suffix`": [ $ds ], `"action`": `"route`", `"outbound`": `"direct`" }"
+if ($Mode -eq 'split') {
+  $finalOut = 'direct'
+  $tags = @()
+  foreach ($rs in @(@('blk-dom', 'refilter-domains.srs'), @('blk-ip', 'refilter-ip.srs'), @('usr', 'tunnel-userlist.srs'))) {
+    $j = RsJson $rs[0] $rs[1]; if ($j) { $ruleSets += $j; $tags += $rs[0] }
+  }
+  if ($tags.Count) { $modeRules += "{ `"rule_set`": [ $((($tags | ForEach-Object { '"' + $_ + '"' }) -join ', ')) ], `"action`": `"route`", `"outbound`": `"proxy`" }" }
+  if ($tunnelDoms.Count) { $ds = (($tunnelDoms | ForEach-Object { '"' + $_ + '"' }) -join ', '); $modeRules += "{ `"domain_suffix`": [ $ds ], `"action`": `"route`", `"outbound`": `"proxy`" }" }
+} else {
+  $finalOut = 'proxy'
+  if (-not $DirectListPath) { $cand = Join-Path $tools 'itdoginfo-inside-russia.srs'; if (Test-Path $cand) { $DirectListPath = $cand } }
+  $j = if ($DirectListPath -and (Test-Path $DirectListPath)) { "{ `"type`": `"local`", `"tag`": `"ru-inside`", `"format`": `"binary`", `"path`": `"$($DirectListPath -replace '\\','/')`" }" } else { $null }
+  if ($j) { $ruleSets += $j; $modeRules += "{ `"rule_set`": [`"ru-inside`"], `"action`": `"route`", `"outbound`": `"direct`" }" }
+  if ($directDoms.Count) { $ds = (($directDoms | ForEach-Object { '"' + $_ + '"' }) -join ', '); $modeRules += "{ `"domain_suffix`": [ $ds ], `"action`": `"route`", `"outbound`": `"direct`" }" }
 }
-if ($routeRules.Count) { $directRouteJson = "`n      " + (($routeRules | ForEach-Object { $_ + ',' }) -join "`n      ") }
+$ruleSetJson = ''
+if ($ruleSets.Count) { $ruleSetJson = "`n    `"rule_set`": [ " + ($ruleSets -join ', ') + " ]," }
+$directRouteJson = ''
+if ($modeRules.Count) { $directRouteJson = "`n      " + (($modeRules | ForEach-Object { $_ + ',' }) -join "`n      ") }
 
 # experimental: clash_api (live stats) + cache_file (persist the remote rule-set across restarts)
 $expParts = @()
@@ -190,7 +210,7 @@ $json = @"
       { "ip_is_private": true, "action": "route", "outbound": "direct" },
       { "ip_version": 6, "action": "reject" }
     ],
-    "final": "proxy",
+    "final": "$finalOut",
     "auto_detect_interface": true,
     "default_domain_resolver": "proxy-dns"
   }
@@ -203,8 +223,9 @@ $json = @"
 & $exe check -c $cfgOut
 if ($LASTEXITCODE -ne 0) { Write-Error "the generated config failed 'sing-box check' - aborting."; exit 1 }
 Write-Host "config OK: $cfgOut"
+if ($DryRun) { Write-Host "[dry-run] mode=$Mode - config generated and validated, not starting."; exit 0 }
 
-Write-Host 'starting sing-box TUN: all traffic -> magnetgate SOCKS -> exit.'
+Write-Host ("starting sing-box TUN [mode=$Mode]: " + $(if ($Mode -eq 'split') { 'blocked/geo-restricted list -> exit, everything else direct.' } else { 'all traffic -> exit, direct-list stays local.' }))
 Write-Host '  kill-switch: ON (fail-closed)   IPv6: blocked   DNS: via tunnel (DoH)'
 Write-Host 'stop with: powershell -ExecutionPolicy Bypass -File scripts\vpn-singbox-windows.ps1 -Off   (or Ctrl+C here)'
 & $exe run -c $cfgOut
