@@ -1,5 +1,11 @@
 /* renderer: talks to the main process only through window.mg (see preload.js). */
 const $ = (id) => document.getElementById(id)
+const fmtBytes = (n) => {
+  n = n || 0; const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++ }
+  return `${n.toFixed(i ? 1 : 0)} ${u[i]}`
+}
+const fmtSpeed = (bps) => `${fmtBytes(bps)}/s`
 let cfg = { exits: [], localPort: 1080, singboxPort: 1081, bootstrap: [] }
 let st = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null }
 
@@ -62,6 +68,13 @@ function renderStatus() {
   $('err').textContent = st.lastError || ''
   const warn = $('tunWarn')
   if (warn) { warn.hidden = !other; warn.textContent = other ? `Another full tunnel is active (${other}). Turn it off to use the system VPN — they can't share Wintun.` : '' }
+  const s = st.stats || {}
+  const statsEl = $('stats')
+  const showStats = st.vpnOn && st.vpnHealthy
+  if (statsEl) {
+    statsEl.hidden = !showStats
+    if (showStats) statsEl.innerHTML = `↓ <b>${fmtSpeed(s.downBps)}</b>&nbsp;&nbsp; ↑ <b>${fmtSpeed(s.upBps)}</b>&nbsp;&nbsp; · &nbsp;<b>${s.conns || 0}</b> conns &nbsp; · &nbsp; ${fmtBytes(s.down)} down / ${fmtBytes(s.up)} up`
+  }
 }
 
 function appendLog(line) {

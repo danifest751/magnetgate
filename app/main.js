@@ -12,8 +12,13 @@
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const crypto = require('node:crypto')
+const http = require('node:http')
 const path = require('node:path')
 const fs = require('node:fs')
+
+// Clash API (loopback) that the TUN sing-box exposes for live stats
+const CLASH_PORT = 19090
+const CLASH_SECRET = crypto.randomBytes(16).toString('hex')
 
 // resource root: repo root in dev, the packaged resources dir otherwise
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
@@ -38,7 +43,9 @@ let clientProc = null
 let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
 const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null,
-  otherTunnel: null, vpnHealthy: false }
+  otherTunnel: null, vpnHealthy: false,
+  stats: { conns: 0, up: 0, down: 0, upBps: 0, downBps: 0 } }
+let lastSample = null // { t, up, down } for speed calc
 let vpnEnabledAt = 0        // when the user last enabled the VPN (to tell "starting" from "stuck")
 let vpnRestarting = false   // guards the auto-recovery restart
 
@@ -225,8 +232,9 @@ function runVpn(off) {
   if (!off) vpnEnabledAt = Date.now()
   const ips = off ? [] : bypassIps()
   const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
+  const clashArg = off ? '' : ` -ClashPort ${CLASH_PORT} -ClashSecret ${CLASH_SECRET}`
   // elevate the TUN launcher via UAC; the app stays unprivileged
-  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"${bypassArg}` + (off ? ' -Off' : '')
+  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"${bypassArg}${clashArg}` + (off ? ' -Off' : '')
   const inner = args.replace(/'/g, "''")
   const cmd = `Start-Process -Verb RunAs -FilePath 'powershell.exe' -ArgumentList '${inner}'`
   const p = spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { windowsHide: true })
@@ -249,6 +257,36 @@ function pollEgress() {
     const ip = (out.match(/\d{1,3}(\.\d{1,3}){3}/) || [])[0] || null
     if (ip !== state.egress) { state.egress = ip; pushStatus() }
   })
+}
+
+// ---------- live stats via the TUN sing-box Clash API ----------
+function pollStats() {
+  if (!(state.vpnOn && state.vpnHealthy)) {
+    if (state.stats.conns || state.stats.up || state.stats.down) {
+      state.stats = { conns: 0, up: 0, down: 0, upBps: 0, downBps: 0 }; lastSample = null; pushStatus()
+    }
+    return
+  }
+  const req = http.get({ host: '127.0.0.1', port: CLASH_PORT, path: '/connections',
+    headers: { Authorization: `Bearer ${CLASH_SECRET}` }, timeout: 2500 }, (res) => {
+    let body = ''
+    res.on('data', (d) => { body += d })
+    res.on('end', () => {
+      let j; try { j = JSON.parse(body) } catch { return }
+      const up = j.uploadTotal || 0, down = j.downloadTotal || 0
+      const conns = Array.isArray(j.connections) ? j.connections.length : 0
+      const now = Date.now()
+      if (lastSample) {
+        const dt = (now - lastSample.t) / 1000
+        if (dt > 0) { state.stats.upBps = Math.max(0, (up - lastSample.up) / dt); state.stats.downBps = Math.max(0, (down - lastSample.down) / dt) }
+      }
+      lastSample = { t: now, up, down }
+      state.stats.up = up; state.stats.down = down; state.stats.conns = conns
+      pushStatus()
+    })
+  })
+  req.on('error', () => {})
+  req.on('timeout', () => req.destroy())
 }
 
 // ---------- IPC ----------
@@ -282,6 +320,7 @@ app.whenReady().then(() => {
   createWindow()
   setInterval(pollEgress, 5000)
   monitorTunnels(); setInterval(monitorTunnels, 4000)
+  setInterval(pollStats, 2000)
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 
