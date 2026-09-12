@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('mg', {
   stopClient: () => ipcRenderer.invoke('stopClient'),
   vpnOn: () => ipcRenderer.invoke('vpnOn'),
   vpnOff: () => ipcRenderer.invoke('vpnOff'),
+  connect: () => ipcRenderer.invoke('connect'),
+  disconnect: () => ipcRenderer.invoke('disconnect'),
   openConfigDir: () => ipcRenderer.invoke('openConfigDir'),
   openLogs: () => ipcRenderer.invoke('openLogs'),
   getLogPath: () => ipcRenderer.invoke('getLogPath'),

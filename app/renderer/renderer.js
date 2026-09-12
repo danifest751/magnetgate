@@ -7,7 +7,7 @@ const fmtBytes = (n) => {
 }
 const fmtSpeed = (bps) => `${fmtBytes(bps)}/s`
 let cfg = { exits: [], localPort: 1080, singboxPort: 1081, bootstrap: [] }
-let st = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null }
+let st = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null, phase: 'idle' }
 
 // ---------- config form ----------
 function renderExits() {
@@ -91,28 +91,49 @@ function fillForm() {
 }
 
 // ---------- status ----------
+const PHASE_LABEL = {
+  idle: 'Disconnected',
+  blocked: 'Turn off WireGuard to connect',
+  rendezvous: 'Finding exit…',
+  starting: 'Starting tunnel…',
+  connected: 'Connected',
+}
 function renderStatus() {
-  $('sClient').textContent = st.clientRunning ? 'running' : 'stopped'
+  const phase = st.phase || (st.vpnOn ? (st.vpnHealthy ? 'connected' : 'starting') : 'idle')
+  const connecting = phase === 'rendezvous' || phase === 'starting'
+  const other = st.otherTunnel
+
+  // secondary detail grid
+  $('sClient').textContent = connecting ? 'connecting' : (phase === 'connected' ? 'connected' : (st.clientRunning ? 'running' : 'stopped'))
   $('sRoute').textContent = st.route || '—'
   $('sEgress').textContent = st.egress || '—'
-  $('dot').classList.toggle('on', !!(st.clientRunning && st.egress))
-  $('btnClient').textContent = st.clientRunning ? 'Stop client' : 'Start client'
-  $('btnClient').classList.toggle('primary', !st.clientRunning)
-  $('btnClient').classList.toggle('danger', st.clientRunning)
-  const other = st.otherTunnel
-  const vpnBtn = $('btnVpn')
-  if (st.vpnOn) { vpnBtn.textContent = 'Disable system VPN'; vpnBtn.disabled = false }
-  else if (other) { vpnBtn.textContent = `Turn off ${other} first`; vpnBtn.disabled = true }
-  else { vpnBtn.textContent = 'Enable system VPN'; vpnBtn.disabled = false }
+  $('dot').classList.toggle('on', phase === 'connected')
+
+  // one button: Connect / Cancel (while connecting) / Disconnect / blocked
+  const btn = $('btnConnect')
+  if (phase === 'blocked') { btn.textContent = 'Connect'; btn.disabled = true; btn.className = 'primary' }
+  else if (st.vpnOn) { btn.textContent = connecting ? 'Cancel' : 'Disconnect'; btn.disabled = false; btn.className = 'danger' }
+  else { btn.textContent = 'Connect'; btn.disabled = false; btn.className = 'primary' }
+
+  // prominent phase text (the feedback that was missing)
+  let ptxt = PHASE_LABEL[phase] || ''
+  if (phase === 'connected' && st.egress) ptxt = `Connected · egress ${st.egress}`
+  const ph = $('phase')
+  ph.textContent = ptxt
+  ph.style.color = phase === 'connected' ? 'var(--ok)' : phase === 'blocked' ? 'var(--warn)' : 'var(--muted)'
+
   const pill = $('vpnPill')
-  pill.textContent = st.vpnOn ? (st.vpnHealthy ? 'VPN on' : 'VPN starting…') : (other ? `${other} active` : 'VPN off')
-  pill.classList.toggle('on', st.vpnOn && st.vpnHealthy)
-  $('err').textContent = st.lastError || ''
+  pill.textContent = phase === 'connected' ? 'Connected' : connecting ? 'Connecting…' : (phase === 'blocked' ? 'WireGuard on' : 'Disconnected')
+  pill.classList.toggle('on', phase === 'connected')
+
+  // show an error only when it actually blocks us (not once connected)
+  $('err').textContent = (phase !== 'connected' && st.lastError) ? st.lastError : ''
   const warn = $('tunWarn')
-  if (warn) { warn.hidden = !other; warn.textContent = other ? `Another full tunnel is active (${other}). Turn it off to use the system VPN — they can't share Wintun.` : '' }
+  if (warn) { warn.hidden = !other; warn.textContent = other ? `Another full tunnel is active (${other}). Turn it off to connect — they can't share Wintun.` : '' }
+
   const s = st.stats || {}
   const statsEl = $('stats')
-  const showStats = st.vpnOn && st.vpnHealthy
+  const showStats = phase === 'connected'
   if (statsEl) {
     statsEl.hidden = !showStats
     if (showStats) statsEl.innerHTML = `↓ <b>${fmtSpeed(s.downBps)}</b>&nbsp;&nbsp; ↑ <b>${fmtSpeed(s.upBps)}</b>&nbsp;&nbsp; · &nbsp;<b>${s.conns || 0}</b> conns &nbsp; · &nbsp; ${fmtBytes(s.down)} down / ${fmtBytes(s.up)} up`
@@ -138,12 +159,10 @@ window.addEventListener('DOMContentLoaded', async () => {
   window.mg.onStatus((s) => { st = s; renderStatus() })
   window.mg.onLog((l) => appendLog(l))
 
-  $('btnClient').addEventListener('click', async () => {
-    if (st.clientRunning) await window.mg.stopClient()
-    else { readForm(); await window.mg.saveConfig(cfg); await window.mg.startClient() }
-  })
-  $('btnVpn').addEventListener('click', async () => {
-    if (st.vpnOn) await window.mg.vpnOff(); else await window.mg.vpnOn()
+  // one button drives the whole flow: Connect brings up rendezvous + tunnel, Disconnect/Cancel tears down
+  $('btnConnect').addEventListener('click', async () => {
+    if (st.vpnOn) { await window.mg.disconnect() }
+    else { readForm(); await window.mg.saveConfig(cfg); await window.mg.connect() }
   })
   $('btnAddExit').addEventListener('click', () => { cfg.exits.push({ name: '', psk: '' }); renderExits() })
   $('btnSave').addEventListener('click', async () => {
