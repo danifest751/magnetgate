@@ -27,6 +27,8 @@
     button:hover { border-color: var(--accent); }
     button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
     button.danger { border-color: var(--err); color: #ffb4b4; }
+    button:disabled { opacity: .5; cursor: not-allowed; border-color: var(--line); }
+    .warnbox { margin: 10px 0 0; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn); background: rgba(245,165,36,.08); font-size: 12px; }
     input, textarea { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font: inherit; width: 100%; }
     textarea { resize: vertical; min-height: 54px; font-family: ui-monospace, Consolas, monospace; }
     label { color: var(--muted); font-size: 11px; display: block; margin-bottom: 4px; }
@@ -63,6 +65,7 @@
         <span class="spacer"></span>
         <span id="err" class="err"></span>
       </div>
+      <p id="tunWarn" class="warnbox" hidden></p>
       <p class="muted" style="margin:10px 0 0">System VPN routes all traffic through the tunnel (kill-switch, IPv6 blocked, DNS via tunnel) and asks for admin (UAC). Turn off any other full-tunnel VPN first.</p>
     </section>
 

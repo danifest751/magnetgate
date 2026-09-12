@@ -37,7 +37,10 @@ let win = null
 let clientProc = null
 let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
-const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null }
+const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null,
+  otherTunnel: null, vpnHealthy: false }
+let vpnEnabledAt = 0        // when the user last enabled the VPN (to tell "starting" from "stuck")
+let vpnRestarting = false   // guards the auto-recovery restart
 
 // ---------- config ----------
 const DEFAULT_CONFIG = {
@@ -168,8 +171,51 @@ function bypassIps() {
   return [...ips]
 }
 
+// ---------- tunnel monitoring (WG conflict + health/auto-recovery) ----------
+// sing-box's TUN cannot come up alongside another full tunnel (WireGuard also uses Wintun — it hangs
+// on "open interface"). So: refuse to start the VPN while another tunnel is up, auto-stop ours if one
+// appears, and — the key UX — when the other tunnel goes away but ours is enabled-yet-not-up, restart
+// it so it starts working without the user re-toggling.
+function monitorTunnels() {
+  const ps = "$mg=[bool](Get-NetAdapter -ea SilentlyContinue|?{$_.Name -eq 'magnetgate' -and $_.Status -eq 'Up'});" +
+    "$o=@(Get-NetAdapter -ea SilentlyContinue|?{$_.Status -eq 'Up' -and $_.Name -ne 'magnetgate' -and ($_.InterfaceDescription -match 'WireGuard|OpenVPN|TAP-Windows')}|%{$_.Name});" +
+    "[pscustomobject]@{mg=$mg;others=$o}|ConvertTo-Json -Compress"
+  const p = spawn('powershell.exe', ['-NoProfile', '-Command', ps], { windowsHide: true })
+  let out = ''
+  p.stdout.on('data', (d) => { out += d.toString() })
+  p.on('error', () => {})
+  p.on('exit', () => {
+    let r; try { r = JSON.parse(out) } catch { return }
+    const others = Array.isArray(r.others) ? r.others : (r.others ? [r.others] : [])
+    const prevOther = state.otherTunnel
+    state.otherTunnel = others[0] || null
+    state.vpnHealthy = !!r.mg && state.vpnOn
+    // another full tunnel came up while ours is on → stop ours (they conflict)
+    if (state.otherTunnel && state.vpnOn) {
+      pushLog(`[app] ${state.otherTunnel} is up — stopping the system VPN (two full tunnels conflict)`)
+      runVpn(true)
+    } else if (state.vpnOn && !state.otherTunnel && !r.mg && !vpnRestarting && Date.now() - vpnEnabledAt > 15000) {
+      // enabled, no conflicting tunnel, but our adapter never came up (e.g. WG was on at start and is
+      // now off) — restart it so it recovers without a manual re-toggle
+      vpnRestarting = true
+      pushLog('[app] system VPN did not come up — restarting now that no other tunnel is active')
+      runVpn(true)
+      setTimeout(() => { runVpn(false); vpnRestarting = false }, 3000)
+    }
+    if (prevOther !== state.otherTunnel) pushLog(`[app] other tunnel: ${state.otherTunnel || 'none'}`)
+    pushStatus()
+  })
+}
+
 // ---------- system VPN (sing-box TUN), elevated on demand ----------
 function runVpn(off) {
+  if (!off && state.otherTunnel) {
+    state.lastError = `turn off ${state.otherTunnel} first — the system VPN can't share Wintun with another full tunnel`
+    pushLog(`[app] refusing to start VPN: ${state.otherTunnel} is active`)
+    pushStatus()
+    return
+  }
+  if (!off) vpnEnabledAt = Date.now()
   const ips = off ? [] : bypassIps()
   const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
   // elevate the TUN launcher via UAC; the app stays unprivileged
@@ -228,6 +274,7 @@ app.whenReady().then(() => {
   pushLog(`[app] === magnetgate app ${app.getVersion()} started; logs -> ${LOG_FILE} ===`)
   createWindow()
   setInterval(pollEgress, 5000)
+  monitorTunnels(); setInterval(monitorTunnels, 4000)
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })
 })
 

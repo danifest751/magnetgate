@@ -51,11 +51,17 @@ function renderStatus() {
   $('btnClient').textContent = st.clientRunning ? 'Stop client' : 'Start client'
   $('btnClient').classList.toggle('primary', !st.clientRunning)
   $('btnClient').classList.toggle('danger', st.clientRunning)
-  $('btnVpn').textContent = st.vpnOn ? 'Disable system VPN' : 'Enable system VPN'
+  const other = st.otherTunnel
+  const vpnBtn = $('btnVpn')
+  if (st.vpnOn) { vpnBtn.textContent = 'Disable system VPN'; vpnBtn.disabled = false }
+  else if (other) { vpnBtn.textContent = `Turn off ${other} first`; vpnBtn.disabled = true }
+  else { vpnBtn.textContent = 'Enable system VPN'; vpnBtn.disabled = false }
   const pill = $('vpnPill')
-  pill.textContent = st.vpnOn ? 'VPN on' : 'VPN off'
-  pill.classList.toggle('on', st.vpnOn)
+  pill.textContent = st.vpnOn ? (st.vpnHealthy ? 'VPN on' : 'VPN starting…') : (other ? `${other} active` : 'VPN off')
+  pill.classList.toggle('on', st.vpnOn && st.vpnHealthy)
   $('err').textContent = st.lastError || ''
+  const warn = $('tunWarn')
+  if (warn) { warn.hidden = !other; warn.textContent = other ? `Another full tunnel is active (${other}). Turn it off to use the system VPN — they can't share Wintun.` : '' }
 }
 
 function appendLog(line) {
