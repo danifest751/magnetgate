@@ -29,7 +29,7 @@
       { "from": "seed-config.json", "to": "seed-config.json" },
       { "from": "src-package.json", "to": "src/package.json" }
     ],
-    "win": { "target": ["portable"] },
+    "win": { "target": ["portable"], "requestedExecutionLevel": "requireAdministrator" },
     "portable": { "artifactName": "magnetgate-${version}.exe" }
   }
 }

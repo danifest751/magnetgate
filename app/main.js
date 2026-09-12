@@ -5,8 +5,9 @@
 //    (process.execPath + ELECTRON_RUN_AS_NODE=1), so the app is self-contained — no system Node
 //    needed. This is safe because the only native dep (sodium-native) ships N-API prebuilds, which
 //    are ABI-stable across Node/Electron versions;
-//  - the system-wide VPN (sing-box TUN) is brought up via scripts/vpn-singbox-windows.ps1, elevated
-//    on demand (UAC only when the user enables it) — the app itself stays unprivileged;
+//  - the app runs elevated (requireAdministrator manifest — one UAC at launch) and manages the
+//    sing-box TUN directly as a hidden child process: no per-toggle UAC, no console windows, instant
+//    clean start/stop, and its config is generated in-process (buildVpnConfig);
 //  - config/PSK management reads and writes a magnetgate.config.json kept in userData, seeded on
 //    first run from the bundled seed-config.json so testing needs no manual key entry.
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
@@ -20,34 +21,9 @@ const fs = require('node:fs')
 const CLASH_PORT = 19090
 const CLASH_SECRET = crypto.randomBytes(16).toString('hex')
 
-// Well-known RU resources that reject datacenter/VPN IPs ("turn off VPN") — always routed DIRECT on
-// the real residential IP, on top of the community rule-set and the user's own additions. RU-domestic
-// majors are included too (they don't need the tunnel and often block it).
-const DEFAULT_DIRECT = [
-  // marketplaces
-  'ozon.ru', 'ozone.ru', 'wildberries.ru', 'wb.ru', 'wbbasket.ru', 'avito.ru', 'avito.st',
-  'megamarket.ru', 'sbermegamarket.ru', 'lamoda.ru', 'dns-shop.ru', 'mvideo.ru', 'eldorado.ru',
-  'citilink.ru', 'market.yandex.ru',
-  // banks
-  'sber.ru', 'sberbank.ru', 'alfabank.ru', 'tinkoff.ru', 'tbank.ru', 'vtb.ru', 'gazprombank.ru',
-  'gpb.ru', 'raiffeisen.ru', 'psbank.ru', 'pochtabank.ru', 'sovcombank.ru', 'mkb.ru', 'open.ru',
-  'rshb.ru', 'rosbank.ru',
-  // gov
-  'gosuslugi.ru', 'gov.ru', 'mos.ru', 'nalog.ru', 'nalog.gov.ru', 'pfr.gov.ru', 'sfr.gov.ru',
-  'fss.ru', 'mvd.ru', 'rosreestr.gov.ru', 'rkn.gov.ru', 'mchs.gov.ru',
-  // telecom
-  'mts.ru', 'megafon.ru', 'beeline.ru', 'tele2.ru', 't2.ru', 'rt.ru',
-  // streaming / cinema
-  'kinopoisk.ru', 'okko.tv', 'wink.ru', 'ivi.ru', 'premier.one', 'start.ru', 'more.tv', 'kion.ru',
-  'rutube.ru', 'smotrim.ru',
-  // services / messengers
-  'vk.com', 'vk.ru', 'vkontakte.ru', 'userapi.com', 'mail.ru', 'ok.ru', 'dzen.ru', 'max.ru', 'pochta.ru',
-]
-
 // resource root: repo root in dev, the packaged resources dir otherwise
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
 const CLIENT = path.join(RES, 'src', 'client.js')
-const VPN_PS1 = path.join(RES, 'scripts', 'vpn-singbox-windows.ps1')
 // first-run seed for the user config: the bundled seed-config.json (real PSK/exits) if present,
 // else the repo config in dev, else the PSK-less example.
 const SEED_CANDIDATES = [
@@ -66,6 +42,7 @@ let win = null
 let quitting = false
 const timers = []
 let clientProc = null
+let vpnProc = null // the sing-box TUN process (managed directly; app runs elevated)
 let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
 const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null,
@@ -257,48 +234,110 @@ async function monitorTunnels() {
   pushStatus()
 }
 
-// ---------- system VPN (sing-box TUN), elevated on demand ----------
+// Build the sing-box TUN config in-process (the app runs elevated, so it manages sing-box directly —
+// no PowerShell console, no per-toggle UAC). full: everything via the exit + a direct exception list;
+// split: direct by default + only the blocked/geo-restricted list via the exit.
+function buildVpnConfig({ mode, bypass, socksPort, clashPort, clashSecret, directDomains, tunnelDomains, logOut }) {
+  const TOOLS = path.join(RES, 'tools', 'sing-box')
+  const rs = (tag, file) => {
+    const p = path.join(TOOLS, file)
+    return fs.existsSync(p) ? { type: 'local', tag, format: 'binary', path: p.replace(/\\/g, '/') } : null
+  }
+  const ruleSets = []
+  const rules = [{ action: 'sniff' }, { protocol: 'dns', action: 'hijack-dns' }]
+  if (bypass?.length) rules.push({ ip_cidr: bypass.map((i) => `${i}/32`), action: 'route', outbound: 'direct' })
+  let final
+  if (mode === 'split') {
+    final = 'direct'
+    const tags = []
+    for (const [tag, file] of [['blk-dom', 'refilter-domains.srs'], ['blk-ip', 'refilter-ip.srs'], ['usr', 'tunnel-userlist.srs']]) {
+      const r = rs(tag, file); if (r) { ruleSets.push(r); tags.push(tag) }
+    }
+    if (tags.length) rules.push({ rule_set: tags, action: 'route', outbound: 'proxy' })
+    if (tunnelDomains?.length) rules.push({ domain_suffix: tunnelDomains, action: 'route', outbound: 'proxy' })
+  } else {
+    final = 'proxy'
+    const r = rs('ru-inside', 'itdoginfo-inside-russia.srs')
+    if (r) { ruleSets.push(r); rules.push({ rule_set: ['ru-inside'], action: 'route', outbound: 'direct' }) }
+    if (directDomains?.length) rules.push({ domain_suffix: directDomains, action: 'route', outbound: 'direct' })
+  }
+  rules.push({ ip_is_private: true, action: 'route', outbound: 'direct' })
+  rules.push({ ip_version: 6, action: 'reject' })
+  return {
+    log: { level: 'info', timestamp: true, ...(logOut ? { output: logOut } : {}) },
+    ...(clashPort ? { experimental: { clash_api: { external_controller: `127.0.0.1:${clashPort}`, secret: clashSecret } } } : {}),
+    dns: { servers: [{ tag: 'proxy-dns', type: 'https', server: '1.1.1.1', detour: 'proxy' }], strategy: 'ipv4_only' },
+    inbounds: [{ type: 'tun', tag: 'tun-in', interface_name: 'magnetgate', address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'], mtu: 1400, auto_route: true, strict_route: true, stack: 'system' }],
+    outbounds: [{ type: 'socks', tag: 'proxy', server: '127.0.0.1', server_port: socksPort, version: '5' }, { type: 'direct', tag: 'direct' }],
+    route: { ...(ruleSets.length ? { rule_set: ruleSets } : {}), rules, final, auto_detect_interface: true, default_domain_resolver: 'proxy-dns' },
+  }
+}
+
+// ---------- system VPN (sing-box TUN), managed directly (app runs elevated) ----------
+const SB_DIR = path.join(RES, 'tools', 'sing-box')
+const SB_EXE = path.join(SB_DIR, 'sing-box.exe')
+const VPN_CFG = path.join(LOG_DIR, 'vpn-config.json')
+
+function sbCheck(cfgPath) {
+  return new Promise((resolve) => {
+    const c = spawn(SB_EXE, ['check', '-c', cfgPath], { cwd: SB_DIR, windowsHide: true })
+    let err = ''
+    c.stderr.on('data', (d) => { err += d })
+    c.on('error', (e) => resolve(`check spawn failed: ${e.message}`))
+    c.on('exit', (code) => resolve(code ? (err.trim().split(/\r?\n/).pop() || 'invalid config') : null))
+  })
+}
+
 async function runVpn(off) {
-  if (!off) {
-    // fresh synchronous check right at click time (the 4s monitor can lag the first click)
-    const r = await checkTunnels()
-    const other = r && r.others[0]
-    if (other) {
-      state.otherTunnel = other
-      state.lastError = `turn off ${other} first — the system VPN can't share Wintun with another full tunnel`
-      pushLog(`[app] refusing to start VPN: ${other} is active`)
-      pushStatus()
-      return
-    }
-    state.otherTunnel = null
-    state.lastError = null
+  if (off) {
+    if (vpnProc) { const pid = vpnProc.pid; vpnProc = null; await killTree(pid) }
+    state.vpnOn = false; state.vpnHealthy = false
+    pushLog('[app] system VPN stopped')
+    pushStatus()
+    return
   }
-  const ips = off ? [] : bypassIps()
-  const bypassArg = ips.length ? ` -Bypass ${ips.join(',')}` : ''
-  const clashArg = off ? '' : ` -ClashPort ${CLASH_PORT} -ClashSecret ${CLASH_SECRET}`
-  const cfg = off ? {} : loadConfig()
+  // block if another full tunnel is up (they can't share Wintun) — checked synchronously at click
+  const r = await checkTunnels()
+  const other = r && r.others[0]
+  if (other) {
+    state.otherTunnel = other
+    state.lastError = `turn off ${other} first — the system VPN can't share Wintun with another full tunnel`
+    pushLog(`[app] refusing to start VPN: ${other} is active`)
+    pushStatus(); return
+  }
+  state.otherTunnel = null
+  if (vpnProc) { pushLog('[app] VPN already running'); return }
+
+  const cfg = loadConfig()
   const mode = cfg.vpnMode === 'split' ? 'split' : 'full'
-  const clean = (a) => [...new Set((a || []).map((d) => String(d).trim()).filter(Boolean))]
-  let modeArg = ''
-  if (!off) {
-    modeArg = ` -Mode ${mode}`
-    if (mode === 'full') {
-      const doms = clean([...DEFAULT_DIRECT, ...(cfg.directDomains || [])])
-      if (doms.length) modeArg += ` -DirectDomains ${doms.join(',')}`
-    } else {
-      const doms = clean(cfg.tunnelDomains)
-      if (doms.length) modeArg += ` -TunnelDomains ${doms.join(',')}`
-    }
-  }
-  // elevate the TUN launcher via UAC; the app stays unprivileged
-  const args = `-NoProfile -ExecutionPolicy Bypass -File "${VPN_PS1}" -LogDir "${LOG_DIR}"${bypassArg}${clashArg}${modeArg}` + (off ? ' -Off' : '')
-  const inner = args.replace(/'/g, "''")
-  const cmd = `Start-Process -Verb RunAs -FilePath 'powershell.exe' -ArgumentList '${inner}'`
-  const p = spawn('powershell.exe', ['-NoProfile', '-Command', cmd], { windowsHide: true })
-  p.on('error', (e) => { state.lastError = `VPN launch failed: ${e.message}`; pushStatus() })
-  state.vpnOn = !off
-  if (!off && !ips.length) state.lastError = 'no exit IP to bypass yet — start the client and wait for a route first'
-  pushLog(`[app] system VPN ${off ? 'stopping' : `starting (bypass: ${ips.join(', ') || 'NONE!'})`} — approve UAC if prompted`)
+  const clean = (a) => [...new Set((a || []).map((d) => String(d).trim().toLowerCase()).filter(Boolean))]
+  const ips = bypassIps()
+  const conf = buildVpnConfig({
+    mode, bypass: ips, socksPort: cfg.localPort || 1080,
+    clashPort: CLASH_PORT, clashSecret: CLASH_SECRET,
+    directDomains: clean(cfg.directDomains), tunnelDomains: clean(cfg.tunnelDomains),
+    logOut: path.join(LOG_DIR, 'vpn.log').replace(/\\/g, '/'),
+  })
+  ensureLogDir()
+  try { fs.writeFileSync(VPN_CFG, JSON.stringify(conf, null, 2)) } catch (e) { state.lastError = `config write failed: ${e.message}`; pushStatus(); return }
+
+  const bad = await sbCheck(VPN_CFG)
+  if (bad) { state.lastError = `config invalid: ${bad}`; pushLog(`[app] sing-box check failed: ${bad}`); pushStatus(); return }
+
+  try {
+    vpnProc = spawn(SB_EXE, ['run', '-c', VPN_CFG], { cwd: SB_DIR, windowsHide: true })
+  } catch (e) { state.lastError = `VPN start failed: ${e.message}`; vpnProc = null; pushStatus(); return }
+  const onOut = (buf) => { for (const line of buf.toString().split(/\r?\n/)) if (line.trim()) pushLog(`[vpn] ${line}`) }
+  vpnProc.stdout.on('data', onOut)
+  vpnProc.stderr.on('data', onOut)
+  vpnProc.on('error', (e) => { state.lastError = e.message; state.vpnOn = false; vpnProc = null; pushStatus() })
+  vpnProc.on('exit', (code) => {
+    pushLog(`[app] sing-box exited (code ${code})`)
+    if (state.vpnOn && code) state.lastError = `VPN stopped (code ${code}) — see the log`
+    state.vpnOn = false; state.vpnHealthy = false; vpnProc = null; pushStatus()
+  })
+  state.vpnOn = true; state.lastError = null
+  pushLog(`[app] system VPN starting [mode=${mode}, bypass=${ips.join(',') || 'none'}]`)
   pushStatus()
 }
 
@@ -387,6 +426,7 @@ app.on('before-quit', () => { quitting = true; for (const t of timers) clearInte
 app.on('window-all-closed', async () => {
   quitting = true
   for (const t of timers) clearInterval(t)
+  if (vpnProc) { const pid = vpnProc.pid; vpnProc = null; await killTree(pid) } // remove the TUN on exit
   await stopClient()
   app.quit()
 })

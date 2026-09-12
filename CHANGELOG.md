@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **Reworked the system-VPN plumbing (elevated app, no consoles).** The app now runs elevated
+  (requireAdministrator — one UAC at launch) and manages the sing-box TUN directly as a hidden
+  child process, with the config generated in-process: no per-toggle UAC, no PowerShell console
+  windows, instant clean start/stop, sing-box output captured into the in-app log. Fixes the
+  flickering/lingering consoles and the start-on-2nd-try glitches. Full mode no longer force-
+  directs a built-in RU list (Full = everything via the exit; use Split for RU-direct).
 - **Two routing modes (Full VPN / Split).** Split mode inverts the model: direct by default,
   only the blocked/geo-restricted list routed through the exit (bundled re:filter RKN blocklists
   + the operator tunnel_manager IP list + user domains), so all RU-domestic sites work on the real
