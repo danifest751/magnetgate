@@ -1,6 +1,11 @@
 # Changelog
 
 ## Unreleased
+- **App is self-contained + logs to disk.** The client runs on Electron's own Node (no system Node
+  needed; `sodium-native` N-API is ABI-stable), the config is seeded on first run so testing needs no
+  PSK entry (the built exe then holds the PSK — keep it private), and everything is written to
+  `%APPDATA%/magnetgate/logs/` (`magnetgate.log`, and `vpn.log`/`vpn-launcher.log` for the TUN) so a
+  field test can be read back.
 - **Desktop app (Electron, MVP).** `app/` wraps the client in a GUI: start/stop the client, a
   system-VPN toggle (elevates the sing-box TUN launcher on demand), live status (route + egress IP)
   and log, plus config/PSK management (exits, PSK generate, ports, bootstrap) stored in userData so
