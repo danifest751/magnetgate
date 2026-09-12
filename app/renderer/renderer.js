@@ -96,15 +96,16 @@ const PHASE_LABEL = {
   blocked: 'Turn off WireGuard to connect',
   rendezvous: 'Finding exit…',
   starting: 'Starting tunnel…',
+  leaking: 'Traffic bypassed the exit — reconnecting…',
   connected: 'Connected',
 }
 function renderStatus() {
   const phase = st.phase || (st.vpnOn ? (st.vpnHealthy ? 'connected' : 'starting') : 'idle')
-  const connecting = phase === 'rendezvous' || phase === 'starting'
+  const busy = phase === 'rendezvous' || phase === 'starting' || phase === 'leaking'
   const other = st.otherTunnel
 
   // secondary detail grid
-  $('sClient').textContent = connecting ? 'connecting' : (phase === 'connected' ? 'connected' : (st.clientRunning ? 'running' : 'stopped'))
+  $('sClient').textContent = busy ? 'connecting' : (phase === 'connected' ? 'connected' : (st.clientRunning ? 'running' : 'stopped'))
   $('sRoute').textContent = st.route || '—'
   $('sEgress').textContent = st.egress || '—'
   $('dot').classList.toggle('on', phase === 'connected')
@@ -112,18 +113,18 @@ function renderStatus() {
   // one button: Connect / Cancel (while connecting) / Disconnect / blocked
   const btn = $('btnConnect')
   if (phase === 'blocked') { btn.textContent = 'Connect'; btn.disabled = true; btn.className = 'primary' }
-  else if (st.vpnOn) { btn.textContent = connecting ? 'Cancel' : 'Disconnect'; btn.disabled = false; btn.className = 'danger' }
+  else if (st.vpnOn) { btn.textContent = busy ? 'Cancel' : 'Disconnect'; btn.disabled = false; btn.className = 'danger' }
   else { btn.textContent = 'Connect'; btn.disabled = false; btn.className = 'primary' }
 
-  // prominent phase text (the feedback that was missing)
+  // prominent phase text (the feedback that was missing) — honest about whether traffic goes via exit
   let ptxt = PHASE_LABEL[phase] || ''
-  if (phase === 'connected' && st.egress) ptxt = `Connected · egress ${st.egress}`
+  if (phase === 'connected') ptxt = st.viaExit ? `Connected · egress ${st.egress}` : `Connected (split)${st.egress ? ' · ' + st.egress : ''}`
   const ph = $('phase')
   ph.textContent = ptxt
-  ph.style.color = phase === 'connected' ? 'var(--ok)' : phase === 'blocked' ? 'var(--warn)' : 'var(--muted)'
+  ph.style.color = phase === 'connected' ? 'var(--ok)' : (phase === 'blocked' || phase === 'leaking') ? 'var(--warn)' : 'var(--muted)'
 
   const pill = $('vpnPill')
-  pill.textContent = phase === 'connected' ? 'Connected' : connecting ? 'Connecting…' : (phase === 'blocked' ? 'WireGuard on' : 'Disconnected')
+  pill.textContent = phase === 'connected' ? 'Connected' : phase === 'leaking' ? 'Reconnecting…' : busy ? 'Connecting…' : (phase === 'blocked' ? 'WireGuard on' : 'Disconnected')
   pill.classList.toggle('on', phase === 'connected')
 
   // show an error only when it actually blocks us (not once connected)

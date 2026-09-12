@@ -49,12 +49,14 @@ let vpnProc = null // the sing-box TUN process (managed directly; app runs eleva
 let lastExitHost = null // exit IP learned from client logs, bypassed by the VPN
 const logBuf = []
 const state = { clientRunning: false, route: null, egress: null, vpnOn: false, lastError: null,
-  otherTunnel: null, vpnHealthy: false, rvReady: false, phase: 'idle',
+  otherTunnel: null, vpnHealthy: false, rvReady: false, phase: 'idle', viaExit: false,
   stats: { conns: 0, up: 0, down: 0, upBps: 0, downBps: 0 } }
 let lastSample = null // { t, up, down } for speed calc
 let curDpSig = null   // signature of the data-plane last applied to the TUN sing-box (rotation detection)
 let vpnChain = Promise.resolve() // serializes VPN (re)launches so a dp change can't race a start
 let otherTunnelClearedAt = 0 // when another Wintun tunnel (WG) last went away — we let Wintun settle after
+let leakSince = 0        // when full-mode traffic was first seen NOT going through the exit (leak detection)
+let leakRelaunches = 0   // capped self-heal relaunches for a persistent leak
 
 // ---------- config ----------
 const DEFAULT_CONFIG = {
@@ -129,7 +131,7 @@ function pushLog(line) {
 function computePhase() {
   if (!state.vpnOn) return state.otherTunnel ? 'blocked' : 'idle'
   if (state.vpnHealthy) return 'connected'
-  if (vpnProc) return 'starting'
+  if (vpnProc) return state.egress ? 'leaking' : 'starting' // egress seen but not via exit = leaking
   return 'rendezvous'
 }
 function pushStatus() { state.phase = computePhase(); safeSend('status', { ...state }) }
@@ -366,21 +368,29 @@ function sbCheck(cfgPath) {
 // adapter left behind by a hard-killed sing-box, OR from the Wintun driver still settling right after
 // another Wintun tunnel (e.g. WireGuard) was torn down. So: kill any orphan sing-box (releasing its
 // adapter), remove a lingering 'magnetgate' adapter outright (pnputil, we run elevated), and let the
-// driver settle briefly. Best-effort and quick; never throws.
+// driver settle briefly. Critically it now LOOPS removing the adapter until Get-NetAdapter no longer
+// sees it (or a timeout), so we never launch sing-box onto a zombie adapter — starting on a leftover
+// adapter is what makes routes fail to install (traffic leaks direct) or crashes it mid-run. Best-effort.
 function cleanupStaleTun() {
   return new Promise((resolve) => {
     const ps = [
       "Get-Process sing-box -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue;",
-      "$a = Get-NetAdapter -Name 'magnetgate' -ErrorAction SilentlyContinue;",
-      "foreach ($d in $a) { if ($d.PnPDeviceID) { try { & pnputil.exe /remove-device $d.PnPDeviceID | Out-Null } catch {} } }",
-      "Start-Sleep -Milliseconds 800",
+      "$deadline = (Get-Date).AddSeconds(5);",
+      "do {",
+      "  $a = @(Get-NetAdapter -Name 'magnetgate' -ErrorAction SilentlyContinue);",
+      "  if ($a.Count -gt 0) {",
+      "    foreach ($d in $a) { if ($d.PnPDeviceID) { try { & pnputil.exe /remove-device $d.PnPDeviceID | Out-Null } catch {} } }",
+      "    Start-Sleep -Milliseconds 400",
+      "  }",
+      "} while ($a.Count -gt 0 -and (Get-Date) -lt $deadline);",
+      "Start-Sleep -Milliseconds 500",
     ].join(' ')
     const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true })
     let done = false
     const finish = () => { if (!done) { done = true; resolve() } }
     p.on('error', finish)
     p.on('exit', finish)
-    setTimeout(finish, 6000) // never block the launch for long
+    setTimeout(finish, 9000) // never block the launch indefinitely
   })
 }
 
@@ -529,7 +539,8 @@ function onDpTick() {
 // names the Wintun adapter.
 function pollEgress() {
   if (!(state.vpnOn && vpnProc)) {
-    if (state.egress || state.vpnHealthy) { state.egress = null; state.vpnHealthy = false; pushStatus() }
+    leakSince = 0
+    if (state.egress || state.vpnHealthy || state.viaExit) { state.egress = null; state.vpnHealthy = false; state.viaExit = false; pushStatus() }
     return
   }
   const c = spawn('curl.exe', ['-s', '--max-time', '8', 'http://checkip.amazonaws.com/'], { windowsHide: true })
@@ -538,10 +549,30 @@ function pollEgress() {
   c.on('error', () => {})
   c.on('exit', () => {
     const ip = (out.match(/\d{1,3}(\.\d{1,3}){3}/) || [])[0] || null
-    const healthy = !!ip
-    if (ip !== state.egress || healthy !== state.vpnHealthy) {
-      if (healthy && !state.vpnHealthy) pushLog(`[app] VPN connected — egress ${ip}`)
-      state.egress = ip; state.vpnHealthy = healthy; pushStatus()
+    const dp = readDp() || []
+    const exitIp = ((dp.find((d) => d.t === 'reality') || dp.find((d) => d.t === 'hy2') || {}).host) || null
+    const full = loadConfig().vpnMode !== 'split'
+    const viaExit = !!(ip && exitIp && ip === exitIp)
+    // Full mode: healthy ONLY when egress is actually the exit IP (not a direct-leaked real IP).
+    // Split mode: checkip is not a blocked site so it egresses direct by design — a reply means the
+    // TUN engine is working, so treat traffic-flowing as healthy there.
+    const healthy = full ? viaExit : !!ip
+
+    // Full-mode leak self-heal: the tunnel process is up and traffic flows, but NOT through the exit —
+    // routes didn't take (usually a zombie Wintun adapter). Reconnect on a freshly cleaned adapter.
+    if (full && ip && !viaExit) {
+      if (!leakSince) leakSince = Date.now()
+      if (Date.now() - leakSince > 12000 && leakRelaunches < 2 && state.vpnOn) {
+        leakRelaunches++; leakSince = 0
+        pushLog(`[app] traffic is NOT going through the exit (egress ${ip}) — reconnecting on a clean adapter (${leakRelaunches}/2)`)
+        applyVpn('recovering: traffic bypassed the exit')
+      }
+    } else { leakSince = 0 }
+    if (viaExit) leakRelaunches = 0
+
+    if (ip !== state.egress || healthy !== state.vpnHealthy || viaExit !== state.viaExit) {
+      if (viaExit && !state.viaExit) pushLog(`[app] connected — traffic via exit ${ip}`)
+      state.egress = ip; state.vpnHealthy = healthy; state.viaExit = viaExit; pushStatus()
     }
   })
 }
