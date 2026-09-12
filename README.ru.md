@@ -161,8 +161,10 @@ SOCKS5-клиент — это дата-плоскость; чтобы заве�
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1        # подключить (скачает tun2proxy, pinned)
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off   # отключить
 ```
-> В Фазе 3 tun2proxy заменит собственный TUN sing-box (один движок и для дата-плоскости, и для
-> полного VPN — с kill-switch, обработкой IPv6 и защитой от DNS-leak) — см. роадмап.
+> Фаза 3 (в процессе) заменяет tun2proxy собственным TUN sing-box — fail-closed kill-switch, блок
+> IPv6-утечки и DNS через туннель — скриптом `scripts\vpn-singbox-windows.ps1` (тот же интерфейс
+> `-Off`/`-Bypass`). Конфиг провалидирован офлайн; полевой запуск (с админ-правами, при выключенном
+> другом full-tunnel) ещё предстоит — см. роадмап.
 
 ## Деплой (pull-based автодеплой)
 

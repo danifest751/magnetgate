@@ -163,8 +163,10 @@ is not captured:
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1        # connect (downloads tun2proxy, pinned)
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off   # disconnect
 ```
-> Phase 3 will replace tun2proxy with sing-box's own TUN (one engine for both the data plane and the
-> full-VPN layer, with a kill-switch, IPv6 handling and DNS-leak protection) — see the roadmap.
+> Phase 3 (in progress) replaces tun2proxy with sing-box's own TUN — a fail-closed kill-switch,
+> IPv6-leak block and DNS routed through the tunnel — via `scripts\vpn-singbox-windows.ps1` (same
+> `-Off`/`-Bypass` interface). The config is offline-validated; field bring-up (elevated, with the
+> other full tunnel off) is pending — see the roadmap.
 
 ## Deployment (pull-based autodeploy)
 
