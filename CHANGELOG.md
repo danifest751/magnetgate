@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- **Two routing modes (Full VPN / Split).** Split mode inverts the model: direct by default,
+  only the blocked/geo-restricted list routed through the exit (bundled re:filter RKN blocklists
+  + the operator tunnel_manager IP list + user domains), so all RU-domestic sites work on the real
+  IP with no RU-direct list to maintain. Full mode keeps everything via the exit with a direct
+  exception list. UI has a Full/Split toggle and a mode-aware routing list; the launcher gained a
+  -DryRun preflight that generates+validates the config without admin/TUN.
 - **Split tunnel for RU domestic resources.** RU sites that reject datacenter/VPN IPs (Gosuslugi,
   MAX, banks) now go DIRECT on the real residential IP while everything else stays on magnetgate.
   Base list = the community `itdoginfo-inside-russia` sing-box rule-set, bundled as a local .srs

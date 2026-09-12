@@ -10,12 +10,21 @@ $ErrorActionPreference = 'Stop'
 $tools = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\sing-box'
 $exe = Join-Path $tools 'sing-box.exe'
 New-Item -ItemType Directory -Force -Path $tools | Out-Null
-# community "inside-Russia" direct-list for the split tunnel (bundled into the app; upstream updates ~6h)
-$srs = Join-Path $tools 'itdoginfo-inside-russia.srs'
-if (-not (Test-Path $srs)) {
-  try { Invoke-WebRequest -Uri 'https://github.com/legiz-ru/sb-rule-sets/raw/main/itdoginfo-inside-russia.srs' -OutFile $srs; Write-Host "fetched inside-russia rule-set" }
-  catch { Write-Warning "inside-russia rule-set fetch failed: $($_.Exception.Message)" }
+# routing rule-sets bundled into the app (upstream auto-updates; refreshable by deleting the file):
+#   full mode  -> itdoginfo-inside-russia (RU inside-only) goes DIRECT
+#   split mode -> re:filter blocklists (domains + IPs) go THROUGH the exit
+$ruleSets = @{
+  'itdoginfo-inside-russia.srs' = 'https://github.com/legiz-ru/sb-rule-sets/raw/main/itdoginfo-inside-russia.srs'
+  'refilter-domains.srs'        = 'https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-domain-refilter_domains.srs'
+  'refilter-ip.srs'             = 'https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-ip-refilter_ipsum.srs'
 }
+foreach ($name in $ruleSets.Keys) {
+  $p = Join-Path $tools $name
+  if (Test-Path $p) { continue }
+  try { Invoke-WebRequest -Uri $ruleSets[$name] -OutFile $p; Write-Host "fetched $name" }
+  catch { Write-Warning "$name fetch failed: $($_.Exception.Message)" }
+}
+# note: tunnel-userlist.srs (the operator's curated IP list) is provided/bundled separately.
 if (Test-Path $exe) { Write-Host "sing-box already present: $exe"; exit 0 }
 $zip = Join-Path $env:TEMP "sing-box-$Version.zip"
 $asset = "https://github.com/SagerNet/sing-box/releases/download/v$Version/sing-box-$Version-windows-amd64.zip"

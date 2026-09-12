@@ -28,6 +28,8 @@
     button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
     button.danger { border-color: var(--err); color: #ffb4b4; }
     button:disabled { opacity: .5; cursor: not-allowed; border-color: var(--line); }
+    button.seg { padding: 5px 12px; }
+    button.seg.active { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
     .warnbox { margin: 10px 0 0; padding: 8px 10px; border: 1px solid var(--warn); border-radius: 8px; color: var(--warn); background: rgba(245,165,36,.08); font-size: 12px; }
     .statsline { margin: 10px 0 0; font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--fg); }
     .statsline b { color: var(--accent); font-weight: 600; }
@@ -70,6 +72,12 @@
         <div class="stat"><div class="k">Egress IP</div><div class="v" id="sEgress">—</div></div>
       </div>
       <div class="row" style="margin-top:12px">
+        <span class="muted" style="font-size:11px; text-transform:uppercase; letter-spacing:.5px">Mode</span>
+        <button id="btnModeFull" class="seg">Full VPN</button>
+        <button id="btnModeSplit" class="seg">Split</button>
+        <span class="muted" id="modeHint" style="font-size:11px"></span>
+      </div>
+      <div class="row" style="margin-top:12px">
         <button id="btnClient" class="primary">Start client</button>
         <button id="btnVpn">Enable system VPN</button>
         <span class="spacer"></span>
@@ -81,10 +89,10 @@
     </section>
 
     <section class="card">
-      <h2>Direct routing (bypass VPN)</h2>
-      <p class="muted" style="margin:0 0 10px">Common RU resources that reject datacenter/VPN IPs — marketplaces (Ozon, WB, Avito), banks, Gosuslugi/gov, telecom, cinemas, VK/MAX — are already routed <b>direct</b> on your real IP, plus a community list. Add any others below. Changes apply on the next VPN start.</p>
+      <h2 id="routeCardTitle">Routing list</h2>
+      <p class="muted" id="routeCardHint" style="margin:0 0 10px"></p>
       <div class="row">
-        <input id="directInput" placeholder="gosuslugi.ru" style="max-width:280px" />
+        <input id="directInput" placeholder="example.com" style="max-width:280px" />
         <button id="btnAddDirect">Add</button>
         <span class="spacer"></span>
         <span id="directSaved" class="muted"></span>
