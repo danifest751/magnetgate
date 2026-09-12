@@ -153,12 +153,26 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('btnOpenDir').addEventListener('click', () => window.mg.openConfigDir())
   $('btnLogs').addEventListener('click', () => window.mg.openLogs())
 
-  // mode toggle (Full VPN <-> Split); applies on the next VPN start
+  // apply config changes: if the VPN is running, restart it (debounced) so changes take effect now,
+  // with clear feedback; if it's off, nothing to do.
+  let applyTimer = null
+  const scheduleApply = (label) => {
+    if (!st.vpnOn) { $('modeMsg').textContent = 'saved'; setTimeout(() => { $('modeMsg').textContent = '' }, 1500); return }
+    $('modeMsg').textContent = `${label}…`
+    clearTimeout(applyTimer)
+    applyTimer = setTimeout(async () => {
+      try { await window.mg.vpnOff(); await window.mg.vpnOn(); $('modeMsg').textContent = 'applied ✓' }
+      catch { $('modeMsg').textContent = 'apply failed' }
+      setTimeout(() => { $('modeMsg').textContent = '' }, 2500)
+    }, 900)
+  }
+
+  // mode toggle (Full VPN <-> Split); auto-applies if the VPN is running
   const setMode = async (m) => {
     if (cfg.vpnMode === m) return
     cfg.vpnMode = m
     cfg = await window.mg.saveConfig(cfg); renderMode()
-    $('directSaved').textContent = 'mode saved — restart VPN to apply'; setTimeout(() => { $('directSaved').textContent = '' }, 3000)
+    scheduleApply(`switching to ${m}`)
   }
   $('btnModeFull').addEventListener('click', () => setMode('full'))
   $('btnModeSplit').addEventListener('click', () => setMode('split'))
@@ -173,6 +187,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     $('directInput').value = ''
     cfg = await window.mg.saveConfig(cfg); renderDirect()
     $('directSaved').textContent = 'saved ✓'; setTimeout(() => { $('directSaved').textContent = '' }, 2000)
+    scheduleApply('applying list')
   }
   $('btnAddDirect').addEventListener('click', addDirect)
   $('directInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') addDirect() })
@@ -181,6 +196,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (i === undefined) return
     cfg[listKey()].splice(+i, 1)
     cfg = await window.mg.saveConfig(cfg); renderDirect()
+    scheduleApply('applying list')
   })
   try { $('logPath').textContent = 'log file: ' + await window.mg.getLogPath() } catch {}
 
