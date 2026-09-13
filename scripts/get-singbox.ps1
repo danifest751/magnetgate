@@ -11,10 +11,9 @@ $tools = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\sing-box'
 $exe = Join-Path $tools 'sing-box.exe'
 New-Item -ItemType Directory -Force -Path $tools | Out-Null
 # routing rule-sets bundled into the app (upstream auto-updates; refreshable by deleting the file):
-#   full mode  -> itdoginfo-inside-russia (RU inside-only) goes DIRECT
+#   full mode  -> only explicitly configured domain exceptions go DIRECT
 #   split mode -> re:filter blocklists (domains + IPs) go THROUGH the exit
 $ruleSets = @{
-  'itdoginfo-inside-russia.srs' = 'https://github.com/legiz-ru/sb-rule-sets/raw/main/itdoginfo-inside-russia.srs'
   'refilter-domains.srs'        = 'https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-domain-refilter_domains.srs'
   'refilter-ip.srs'             = 'https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-ip-refilter_ipsum.srs'
 }

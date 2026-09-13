@@ -170,7 +170,7 @@ if ($Mode -eq 'split') {
   if ($tunnelDoms.Count) { $ds = (($tunnelDoms | ForEach-Object { '"' + $_ + '"' }) -join ', '); $modeRules += "{ `"domain_suffix`": [ $ds ], `"action`": `"route`", `"outbound`": `"proxy`" }" }
 } else {
   $finalOut = 'proxy'
-  if (-not $DirectListPath) { $cand = Join-Path $tools 'itdoginfo-inside-russia.srs'; if (Test-Path $cand) { $DirectListPath = $cand } }
+  # Direct rule sets are opt-in through -DirectListPath; never infer them from bundled files.
   $j = if ($DirectListPath -and (Test-Path $DirectListPath)) { "{ `"type`": `"local`", `"tag`": `"ru-inside`", `"format`": `"binary`", `"path`": `"$($DirectListPath -replace '\\','/')`" }" } else { $null }
   if ($j) { $ruleSets += $j; $modeRules += "{ `"rule_set`": [`"ru-inside`"], `"action`": `"route`", `"outbound`": `"direct`" }" }
   if ($directDoms.Count) { $ds = (($directDoms | ForEach-Object { '"' + $_ + '"' }) -join ', '); $modeRules += "{ `"domain_suffix`": [ $ds ], `"action`": `"route`", `"outbound`": `"direct`" }" }

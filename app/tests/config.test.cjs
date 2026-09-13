@@ -1,6 +1,8 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
+const fs = require('node:fs')
+const os = require('node:os')
 const { validateConfig, freshEndpoints } = require('../../src/config.cjs')
 const { buildVpnConfig } = require('../vpn-config.cjs')
 const root = path.resolve(__dirname, '../..')
@@ -51,6 +53,46 @@ test('strict full mode has no domain or private direct exceptions', () => {
   )
   assert.equal(cfg.route.rules[0].outbound, 'proxy')
   assert.equal(cfg.outbounds.find((o) => o.tag === 'proxy').type, 'socks')
+})
+
+test('bundled lists cannot add hidden direct exceptions to Full', (t) => {
+  const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'magnetgate-rule-policy-'))
+  t.after(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }))
+  fs.mkdirSync(path.join(fixtureRoot, 'src'))
+  fs.mkdirSync(path.join(fixtureRoot, 'tools/sing-box'), { recursive: true })
+  fs.copyFileSync(
+    path.join(root, 'src/transport-config.cjs'),
+    path.join(fixtureRoot, 'src/transport-config.cjs')
+  )
+  // The builder must ignore this file even when a previous install left it behind.
+  fs.writeFileSync(
+    path.join(fixtureRoot, 'tools/sing-box/itdoginfo-inside-russia.srs'),
+    'fixture'
+  )
+  for (const vpnMode of ['full', 'split']) {
+    const cfg = buildVpnConfig({
+      root: fixtureRoot,
+      cfg: validateConfig({ vpnMode, directDomains: ['chosen.test'] }),
+      dp: [native],
+      bypass: [],
+      clashPort: 19090,
+      clashSecret: 'fixture',
+      clientPath: 'fixture.exe'
+    })
+    const directRules = cfg.route.rules.filter((r) => r.outbound === 'direct')
+    assert.equal(
+      directRules.some((r) => r.rule_set),
+      false
+    )
+    assert.deepEqual(
+      directRules.filter((r) => r.domain_suffix).map((r) => r.domain_suffix),
+      [['chosen.test']]
+    )
+    assert.equal(
+      cfg.route.rule_set.some((r) => r.tag === 'ru-inside'),
+      false
+    )
+  }
 })
 test('split mode retains domain exceptions and native fallback across multiple exits', () => {
   const reality = {

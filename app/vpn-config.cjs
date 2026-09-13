@@ -75,7 +75,8 @@ function buildVpnConfig({
       rules.push({ ...mode, domain_suffix: cfg.tunnelDomains, action: 'route', outbound: 'proxy' })
   }
   if (live || (!strict && cfg.vpnMode === 'full')) {
-    addSet('ru-inside', 'itdoginfo-inside-russia.srs', 'direct', live ? 'Global' : null)
+    // Full has only explicit user exceptions. A bundled domain list must
+    // never silently bypass the tunnel, regardless of its file name.
     if (cfg.directDomains.length)
       rules.push({
         ...(live ? { clash_mode: 'Global' } : {}),

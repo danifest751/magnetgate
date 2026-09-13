@@ -152,6 +152,12 @@ function renderRules() {
       : 'Сайты для режима «Только выбранное».'
   )
   $('listWarning').hidden = list !== 'directDomains' || !cfg.killSwitch
+  text(
+    'builtInNote',
+    list === 'directDomains'
+      ? 'В режиме «Весь интернет» сайты для прямого доступа добавляете вы. Изменения сохраняются автоматически.'
+      : 'Встроенные списки дополняют выбранные сайты в режиме «Только выбранное». Изменения сохраняются автоматически.'
+  )
   $('killSwitch').checked = cfg.killSwitch
   $('guardNote').hidden = !cfg.killSwitch
   const box = $('siteList')
