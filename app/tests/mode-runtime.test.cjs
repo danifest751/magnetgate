@@ -64,7 +64,11 @@ async function routedSocket(port, domain) {
     const name = Buffer.from(domain)
     // Send SOCKS greeting + CONNECT together to exercise actual relay buffering too.
     socket.write(
-      Buffer.concat([Buffer.from([5, 1, 0, 5, 1, 0, 3, name.length]), name, Buffer.from([0, 80])])
+      Buffer.concat([
+        Buffer.from([5, 1, 0, 5, 1, 0, 3, name.length]),
+        name,
+        Buffer.from([0, 80])
+      ])
     )
     await new Promise((resolve, reject) => {
       let data = ''
@@ -151,10 +155,14 @@ test(
         type: 'hosts',
         tag: 'proxy-dns',
         predefined: Object.fromEntries(
-          ['default.test', 'direct.test', 'tunnel.test', 'overlap.test'].map((name) => [
-            name,
-            ['198.51.100.1']
-          ])
+          [
+            'default.test',
+            'direct.test',
+            'tunnel.test',
+            'overlap.test',
+            'app.kilo.ai',
+            'kilocode.ai'
+          ].map((name) => [name, ['198.51.100.1']])
         )
       }
     ]
@@ -175,6 +183,8 @@ test(
       socket.destroy()
     }
     await check('default.test', 'proxy')
+    await check('app.kilo.ai', 'proxy')
+    await check('kilocode.ai', 'proxy')
     await check('direct.test', 'direct')
     await check('overlap.test', 'direct')
     const oldFull = await routedSocket(routePort, 'default.test')
@@ -194,6 +204,8 @@ test(
     await splitClosed
     const fullMs = Date.now() - back
     await check('default.test', 'proxy')
+    await check('app.kilo.ai', 'proxy')
+    await check('kilocode.ai', 'proxy')
     await check('direct.test', 'direct')
     assert.equal(child.pid, pid)
     assert.equal(child.exitCode, null)

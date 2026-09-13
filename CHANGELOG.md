@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Desktop 0.3.2 — remove hidden Full bypasses
+
+- Stop loading the bundled inside-russia domain list as direct exceptions in Full. It contains
+  kilo.ai and kilocode.ai, so an empty user exception list could still send those sites directly.
+  Full now uses only explicit user website exceptions; transport and private-network rules remain.
+- Clarify the independent site-list descriptions. Add a regression with a leftover bundled file
+  and real sing-box checks for app.kilo.ai/kilocode.ai before and after a Full/Split round trip.
+- Remove the same implicit list from the legacy launcher and default downloads; an explicitly
+  supplied legacy DirectListPath remains supported.
+- Reproduce the old behavior as direct routing in a loopback fixture before applying the fix.
+  Health-check egress alone does not prove the route taken by every website.
+
 ### Desktop 0.3.1 — reopening and process exit
 
 - Repeated launches restore/focus the existing window, or recreate it if missing, instead of

@@ -20,7 +20,7 @@ npm start
 npm run dist
 ```
 
-The portable artifact is `app/dist/magnetgate-0.3.1.exe`. The app requests Administrator at launch
+The portable artifact is `app/dist/magnetgate-0.3.2.exe`. The app requests Administrator at launch
 for TUN/firewall operations. Child processes are hidden and only owned processes are stopped.
 
 Builds use the valid empty example config by default. Add PSKs under Настройки → Серверы и ключи доступа.
@@ -47,7 +47,8 @@ to its module directory if it is not on the module search path). Screenshots go 
 
 ## Routing and protection
 
-- Full: proxy by default with configured direct exceptions and an optional bundled RU list.
+- Full: proxy by default with only explicit user domain exceptions. Bundled lists never add
+  direct website exceptions. Private-network and transport/discovery bypasses remain separate.
 - Split: only selected domains/IP rules go through the proxy.
 - With the firewall option off, switching Full/Split updates rules on the same engine/TUN.
   Existing connections close so applications reconnect under the new policy. Other configuration
