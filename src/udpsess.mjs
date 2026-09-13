@@ -10,6 +10,7 @@
 import dgram from 'node:dgram'
 import { EventEmitter } from 'node:events'
 import crypto from 'node:crypto'
+import dns from 'node:dns/promises'
 
 const MAGIC = 0x4d
 export const UDP_CMD = { HELLO: 1, HELLO_ACK: 2, PSH: 3, ACK: 4 }
@@ -30,12 +31,17 @@ function encode(conv, cmd, seq, payload = Buffer.alloc(0)) {
 
 function decode(msg) {
   if (msg.length < 10 || msg[0] !== MAGIC) return null
-  return { conv: msg.readUInt32BE(1), cmd: msg[5], seq: msg.readUInt32BE(6), payload: msg.subarray(10) }
+  return {
+    conv: msg.readUInt32BE(1),
+    cmd: msg[5],
+    seq: msg.readUInt32BE(6),
+    payload: msg.subarray(10)
+  }
 }
 
 function sendDatagram(udp, buf, remote) {
   try {
-    udp.send(buf, remote.port, remote.host)
+    udp.send(buf, remote.port, remote.host ?? remote.address, () => {})
   } catch (e) {
     if (process.env.MAGNETGATE_DEBUG) console.log('[dbg-net] udp send failed:', e.message)
   }
@@ -54,9 +60,9 @@ export class ReliableStream extends EventEmitter {
     this.nextSend = 1
     this.nextRecv = 1
     this.rto = RTO_BASE
-    this.unacked = new Map()  // seq -> { packet, sentAt }
-    this.recvBuf = new Map()  // seq -> payload (out of order)
-    this.queue = []           // fragments waiting for a window slot
+    this.unacked = new Map() // seq -> { packet, sentAt }
+    this.recvBuf = new Map() // seq -> payload (out of order)
+    this.queue = [] // fragments waiting for a window slot
     this.keys = null
     this.helloWait = null
     this.helloSentAt = 0
@@ -83,11 +89,16 @@ export class ReliableStream extends EventEmitter {
   }
 
   onDatagram(msg, rinfo) {
+    if (this.closed) return
     if (rinfo.address !== this.remote.host || rinfo.port !== this.remote.port) return
     const p = decode(msg)
     if (!p || p.conv !== this.conv) return
     if (p.cmd === UDP_CMD.HELLO_ACK) {
-      if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-net] HELLO_ACK received from ${rinfo.address}:${rinfo.port} (ready=${this.ready})`)
+      if (p.payload.length !== 0) return this.destroy()
+      if (process.env.MAGNETGATE_DEBUG)
+        console.log(
+          `[dbg-net] HELLO_ACK received from ${rinfo.address}:${rinfo.port} (ready=${this.ready})`
+        )
       if (this.helloWait && !this.ready) {
         this.helloWait = null
         this.ready = true
@@ -95,13 +106,19 @@ export class ReliableStream extends EventEmitter {
         this.emit('ready')
       }
     } else if (p.cmd === UDP_CMD.ACK) {
+      if (p.payload.length !== 4) return this.destroy()
       this.onAck(p.payload.readUInt32BE(0))
     } else if (p.cmd === UDP_CMD.PSH) {
-      if (p.seq < this.nextRecv || this.recvBuf.has(p.seq)) { this.sendAck(); return }
+      if (!p.seq || !p.payload.length || p.payload.length > MTU || p.seq >= this.nextRecv + WINDOW)
+        return this.destroy()
+      if (p.seq < this.nextRecv || this.recvBuf.has(p.seq)) {
+        this.sendAck()
+        return
+      }
       if (p.seq === this.nextRecv) {
         this.emit('data', p.payload)
         this.nextRecv++
-        while (this.recvBuf.has(this.nextRecv)) {
+        while (!this.closed && this.recvBuf.has(this.nextRecv)) {
           this.emit('data', this.recvBuf.get(this.nextRecv))
           this.recvBuf.delete(this.nextRecv)
           this.nextRecv++
@@ -120,22 +137,31 @@ export class ReliableStream extends EventEmitter {
   }
 
   onAck(next) {
+    if (!next || next > this.nextSend) return this.destroy()
     for (const [seq] of this.unacked) {
-      if (seq < next) { this.unacked.delete(seq); this.rto = RTO_BASE }
+      if (seq < next) {
+        this.unacked.delete(seq)
+        this.rto = RTO_BASE
+      }
     }
   }
 
   onTick() {
     if (this.closed) return
+    if (this.nextSend >= 0xffffffff || this.nextRecv >= 0xffffffff) return this.destroy()
     while (this.unacked.size < WINDOW && this.queue.length > 0) {
+      if (this.nextSend >= 0xffffffff) return this.destroy()
       const seq = this.nextSend++
       const packet = encode(this.conv, UDP_CMD.PSH, seq, this.queue.shift())
       this.unacked.set(seq, { packet, sentAt: now() })
       sendDatagram(this.udp, packet, this.remote)
-      if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-net] PSH sent seq=${seq} (${this.remote.host}:${this.remote.port})`)
+      if (process.env.MAGNETGATE_DEBUG)
+        console.log(`[dbg-net] PSH sent seq=${seq} (${this.remote.host}:${this.remote.port})`)
     }
     for (const [seq, u] of this.unacked) {
       if (now() - u.sentAt >= this.rto) {
+        u.retries = (u.retries || 0) + 1
+        if (u.retries > 30) return this.destroy()
         u.sentAt = now()
         sendDatagram(this.udp, u.packet, this.remote)
         if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-net] PSH retransmit seq=${seq}`)
@@ -144,18 +170,19 @@ export class ReliableStream extends EventEmitter {
     if (this.helloWait && now() - this.helloSentAt >= 300) {
       this.helloSentAt = now()
       sendDatagram(this.udp, encode(this.conv, UDP_CMD.HELLO, 0, this.helloWait), this.remote)
-      if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-net] HELLO sent to ${this.remote.host}:${this.remote.port}`)
+      if (process.env.MAGNETGATE_DEBUG)
+        console.log(`[dbg-net] HELLO sent to ${this.remote.host}:${this.remote.port}`)
     }
   }
 
   write(data) {
     if (this.closed) return false
+    if (this.queue.length + Math.ceil(data.length / MTU) > 4096) {
+      this.destroy()
+      return false
+    }
     for (let off = 0; off < data.length; off += MTU) {
       this.queue.push(data.subarray(off, Math.min(off + MTU, data.length)))
-      if (this.queue.length > 4096) {
-        this.emit('error', new Error('send queue overflow'))
-        return false
-      }
     }
     return true
   }
@@ -164,30 +191,62 @@ export class ReliableStream extends EventEmitter {
     if (this.closed) return
     this.closed = true
     clearInterval(this.tick)
+    this.queue.length = 0
+    this.recvBuf.clear()
+    this.unacked.clear()
     this.emit('close')
   }
 }
 
 // Client side: HELLO handshake against a known exit UDP endpoint.
-export function createClientUdpStream({ remote }) {
+export async function createClientUdpStream({ remote }) {
+  const resolved = await dns.lookup(remote.host, { family: 4 })
+  remote = { host: resolved.address, port: remote.port }
   return new Promise((resolve, reject) => {
     const udp = dgram.createSocket('udp4')
     const conv = crypto.randomBytes(4).readUInt32BE(0)
     const rremote = { host: remote.host, port: remote.port }
     const stream = new ReliableStream(udp, rremote, conv)
 
-    const dbg = (...a) => { if (process.env.MAGNETGATE_DEBUG) console.log(...a) }
+    const dbg = (...a) => {
+      if (process.env.MAGNETGATE_DEBUG) console.log(...a)
+    }
     udp.on('message', (msg, rinfo) => {
       const p = decode(msg)
-      dbg('[dbg-cli] datagram', p ? `cmd=${p.cmd} seq=${p.seq} (${p.payload.length}b)` : 'undecodable', 'from', rinfo.address + ':' + rinfo.port)
+      dbg(
+        '[dbg-cli] datagram',
+        p ? `cmd=${p.cmd} seq=${p.seq} (${p.payload.length}b)` : 'undecodable',
+        'from',
+        rinfo.address + ':' + rinfo.port
+      )
       if (!p || p.conv !== conv) return
       stream.onDatagram(msg, rinfo)
     })
 
-    udp.on('error', (e) => { dbg('[dbg] client udp error:', e.message); clearTimeout(t); stream.destroy(); reject(e) })
-    const t = setTimeout(() => { dbg('[dbg] handshake timeout'); stream.destroy(); reject(new Error('udp handshake timeout')) }, 15000)
-    stream.once('ready', () => { dbg('[dbg] ready'); clearTimeout(t); resolve(stream) })
-    stream.once('close', () => { dbg('[dbg] stream closed'); clearTimeout(t); reject(new Error('closed during handshake')) })
+    udp.on('error', (e) => {
+      dbg('[dbg] client udp error:', e.message)
+      clearTimeout(t)
+      stream.destroy()
+      reject(e)
+    })
+    const t = setTimeout(() => {
+      dbg('[dbg] handshake timeout')
+      stream.destroy()
+      reject(new Error('udp handshake timeout'))
+    }, 15000)
+    stream.once('ready', () => {
+      dbg('[dbg] ready')
+      clearTimeout(t)
+      resolve(stream)
+    })
+    stream.once('close', () => {
+      dbg('[dbg] stream closed')
+      clearTimeout(t)
+      try {
+        udp.close()
+      } catch {}
+      reject(new Error('closed during handshake'))
+    })
 
     stream.startHello()
   })
@@ -201,6 +260,9 @@ export class ExitUdpMux {
     this.udp = dgram.createSocket('udp4')
     this.streams = new Map() // key conv@peer -> { stream }
     this.udp.on('message', (msg, rinfo) => this.onDatagram(msg, rinfo))
+    this.udp.on('error', () => {
+      for (const { stream } of this.streams.values()) stream.destroy()
+    })
     this.udp.bind(port)
   }
 
@@ -210,16 +272,23 @@ export class ExitUdpMux {
     const cmd = msg[5]
     const key = `${conv}@${rinfo.address}:${rinfo.port}`
     const payload = msg.subarray(10)
-    if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-exit] datagram conv=${conv} cmd=${cmd} from ${rinfo.address}:${rinfo.port} (${payload.length}b)`)
+    if (process.env.MAGNETGATE_DEBUG)
+      console.log(
+        `[dbg-exit] datagram conv=${conv} cmd=${cmd} from ${rinfo.address}:${rinfo.port} (${payload.length}b)`
+      )
 
     if (cmd === UDP_CMD.HELLO) {
+      if (payload.length || (!this.streams.has(key) && this.streams.size >= 512)) return
       sendDatagram(this.udp, encode(conv, UDP_CMD.HELLO_ACK, 0), rinfo)
-      if (process.env.MAGNETGATE_DEBUG) console.log(`[dbg-exit] HELLO_ACK sent to ${rinfo.address}:${rinfo.port}`)
+      if (process.env.MAGNETGATE_DEBUG)
+        console.log(`[dbg-exit] HELLO_ACK sent to ${rinfo.address}:${rinfo.port}`)
       if (!this.streams.has(key)) {
         const stream = new ReliableStream(this.udp, { host: rinfo.address, port: rinfo.port }, conv)
         stream.ready = true
         this.streams.set(key, { stream })
-        stream.on('close', () => { if (this.streams.get(key)?.stream === stream) this.streams.delete(key) })
+        stream.on('close', () => {
+          if (this.streams.get(key)?.stream === stream) this.streams.delete(key)
+        })
         this.onConn(stream, rinfo)
       }
       return

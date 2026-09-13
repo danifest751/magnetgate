@@ -1,9 +1,10 @@
 {
   "localPort": 1080,
-  "bootstrap": ["<exit-ip>:20001"],
-  "rules": { "direct": ["ru", "*.local"], "proxy": [] },
-  "exits": [
-    { "name": "nl", "psk": "<psk-hex-or-string>" },
-    { "name": "backup", "psk": "<another-psk>" }
-  ]
+  "singboxPort": 1081,
+  "probePort": 1082,
+  "bootstrap": ["router.bittorrent.com:6881", "dht.transmissionbt.com:6881"],
+  "rules": { "direct": [], "proxy": [] },
+  "vpnMode": "full",
+  "killSwitch": false,
+  "exits": []
 }
