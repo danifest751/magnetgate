@@ -1,6 +1,80 @@
 # Changelog
 
 ## Unreleased
+
+### Desktop 0.3.1 — reopening and process exit
+
+- Repeated launches restore/focus the existing window, or recreate it if missing, instead of
+  silently discarding the request. A duplicate process exits without touching the primary VPN.
+- After owned-process cleanup and log flushing succeed, exit directly instead of re-entering
+  the cancellable window-close lifecycle. Failed cleanup keeps the recovery window available.
+- Add regressions for repeated launches, missing windows, duplicate instances and exit ordering.
+
+### Desktop 0.3.0 — focused desktop interface
+
+- Separate Russian-language Connection, Sites, Settings and Diagnostics screens, with system
+  light/dark themes and a resizable layout. Show actual connection health and applied routing mode.
+- Edit direct and tunnel lists independently. Serialize automatic rule saves; keep unsaved server
+  keys and advanced fields separate until explicit Save, including edits made during a pending save.
+- Preserve disconnect/firewall recovery even when configuration loading fails. Other-VPN detection
+  offers Retry. Keep technical errors and bounded logs available without exposing keys in the UI.
+- Retain the existing engine and in-place Full/Split switching. Browser regression coverage uses
+  fixture IPC only; real elevated desktop connection tests remain a manual verification step.
+
+### Desktop 0.2.2 — Full/Split switching without TUN recreation
+
+- With the firewall option disabled, load both routing policies and switch the owned engine's
+  authenticated Clash mode in place. Confirm the applied mode and close old flows before reporting
+  success. Full direct exceptions and Split tunnel lists keep their separate priorities.
+- Bound and cancel control requests, retain visible pending state on partial failure, and retry
+  without silently restarting TUN. Strict firewall and other configuration changes retain restart.
+- Probe the applied policy immediately and discard stale health after mode changes or engine exit.
+  Log mode, PID and duration. Windows loopback integration verifies real routing/connection cleanup
+  without a TUN; user verification of system-wide switching is still required.
+
+### Desktop 0.2.1 — Windows TUN startup recovery
+
+- After a field test found a stalled adapter and a create/open-existing adapter conflict, use a
+  fresh TUN name for each engine attempt. Strict firewall rules follow the owned adapter name.
+- Wait for authenticated control and local SOCKS readiness with a cancellable 30-second deadline;
+  spawning the process no longer counts as startup success. Egress health is checked afterward.
+- Wait for actual owned-process exit even when taskkill reports an error. Failed Disconnect stays
+  available for retry, and failed shutdown keeps the app open while still attempting client cleanup.
+- Rotate sing-box warnings with the application log and record startup PID, adapter and health.
+  Unit/config validation passes; repeat elevated desktop testing remains necessary.
+
+### 0.11.0 / desktop 0.2.0 — stability and security remediation
+
+- **Breaking wire change:** v4 session metadata/counters are authenticated; replay closes the
+  session. Random-nonce discovery envelopes also require clients and exit to upgrade together.
+- Normalize IPv4/IPv6 and validate resolved TCP/UDP destinations. Bound pre-auth time, session,
+  stream, datagram and write queues. Preserve SOCKS early data and TCP half-close responses.
+- Reuse UDP associations, try all configured transports/exits, retain endpoint generations for
+  active CLI streams and retry failed sing-box starts. Nostr publishes independently of DHT
+  readiness and resends queued offers after relay reconnect.
+- Persist sequences before publication; use kernel locks for server publisher/rotation. Validate
+  rotation candidates and listener readiness before advertising, recover forward after publication.
+  Autodeploy validates a candidate, checks each service and preserves backups on failed rollback.
+- Desktop serializes lifecycle changes, retains owned children on stop failures, refreshes
+  discovery credentials and rejects expired endpoints. Native fallback and multiple exits are
+  available to its shared sing-box configuration. Health uses HTTPS system and forced-proxy probes.
+- Optional strict Full firewall policy persists until explicit Disconnect. It is off by default;
+  elevated Windows crash/leak/restore field tests remain outstanding. Legacy launchers no longer
+  claim a persistent kill-switch or stop unrelated binaries by name.
+- Electron 44.3.0 and electron-builder 26.15.3; distribution defaults to an empty valid config.
+  Only binaries and `.srs` files are copied from the local sing-box directory, excluding credentials.
+
+### Validation of core 0.11.0 and desktop 0.3.1
+
+- Pass 37 core tests, 46 desktop tests and 54 fixture-IPC browser checks. Core tests exercise
+  actual TCP/UDP loopback, handshake tampering/replay, half-close and recovery. Desktop tests
+  include real loopback-only sing-box mode changes on the same process, without a system TUN.
+- Build the Windows portable app and verify packaged source files, empty default seed and the
+  resource allowlist. Dependency audits report no known vulnerabilities at verification time.
+- Elevated firewall crash/leak/restoration tests and manual reopening/connection testing of
+  desktop 0.3.1 remain outstanding; browser and loopback checks do not establish those outcomes.
+
+### Earlier development notes (historical behavior; superseded where changed above)
 - **Reworked the system-VPN plumbing (elevated app, no consoles).** The app now runs elevated
   (requireAdministrator — one UAC at launch) and manages the sing-box TUN directly as a hidden
   child process, with the config generated in-process: no per-toggle UAC, no PowerShell console

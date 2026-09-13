@@ -5,6 +5,12 @@
 
 **RU:** [README.ru.md](README.ru.md)
 
+**0.11 migration:** native sessions and sealed rendezvous envelopes now use wire version 4.
+Update clients and exits together; older releases cannot discover the new envelopes.
+Node.js 20.19+ is required (22.12+ to build the desktop app). Run `npm test` before rollout.
+The optional desktop firewall guard still needs an elevated Windows failure/recovery field test;
+`strict_route` alone does not protect traffic after the engine exits.
+
 An exit node publishes a signed and encrypted **offer** into public infrastructure; a client
 discovers it from a shared secret (PSK) and connects — preferring a strongly camouflaged data plane
 (Reality / hysteria2) and falling back to magnetgate's own forward-secret channel. A censor sees
@@ -111,7 +117,7 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_PSK` | exit PSK, read from the env so it never lands on the argv/`ps` line (argv is a fallback) |
 | `MAGNETGATE_PORT` / `MAGNETGATE_PUBLIC_HOST` | exit native-channel port and the public host advertised in the offer |
 | `DHT_BOOTSTRAP` | CSV bootstrap list; **lead with an IPv4 node**, self-hosted `:20001` recommended |
-| `MAGNETGATE_SEQ_FILE` | persistence for `seq` (mandatory on the exit: restarts must increment it, or an offer nonce can repeat) |
+| `MAGNETGATE_SEQ_FILE` | durable sequence reservation before publication; one publisher per file (systemd holds `flock`). Offer nonces are independently random. |
 | `MAGNETGATE_NOSTR` / `MAGNETGATE_NOSTR_RELAYS` | disable the Nostr rendezvous channel / override its relay pool |
 | `MAGNETGATE_DATA_PLANE` | client: `auto` (default — prefer Reality/hysteria2, else native) or `mgt` (native only) |
 | `MAGNETGATE_RULES` | split-tunnel rules file (client) |
@@ -167,10 +173,10 @@ is not captured:
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1        # connect (downloads tun2proxy, pinned)
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off   # disconnect
 ```
-> Phase 3 (in progress) replaces tun2proxy with sing-box's own TUN — a fail-closed kill-switch,
-> IPv6-leak block and DNS routed through the tunnel — via `scripts\vpn-singbox-windows.ps1` (same
-> `-Off`/`-Bypass` interface). The config is offline-validated; field bring-up (elevated, with the
-> other full tunnel off) is pending — see the roadmap.
+> The desktop app manages sing-box TUN directly and retains native fallback. Full mode supports
+> direct exceptions; Split routes only selected resources. The optional strict Full guard disables
+> exceptions and persists after engine/app termination until explicit Disconnect. The legacy
+> PowerShell launchers do not provide a persistent firewall guard. See [app/README.md](app/README.md).
 
 ## Deployment (pull-based autodeploy)
 
@@ -239,8 +245,7 @@ who holds — or brute-forces a weak — PSK can locate the exit: **use a ≥128
 **Phase 3:**
 - ✅ **hy2 cert-pinning** — the server cert now ships via the size-unbounded Nostr offer (DHT offer
   compact, both sealed under disjoint nonces), dropping the `insecure` fallback for hysteria2.
-- **sing-box TUN as the system-wide VPN** (next), replacing tun2proxy — one engine for both the data
-  plane and the full-VPN layer, with a **kill-switch**, IPv6 handling and DNS-leak protection.
+- **sing-box TUN desktop** is implemented; persistent firewall failure/recovery testing remains.
 
 **After Phase 3:**
 - **WebRTC DataChannel data plane** (coturn on the exit; DTLS looks like a video call; built-in NAT

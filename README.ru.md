@@ -1,5 +1,11 @@
 # magnetgate
 
+**Переход на 0.11:** native-сессии и зашифрованные конверты discovery используют wire version 4.
+Клиенты и exit нужно обновлять совместно: старые версии не читают новые конверты.
+Требуется Node.js 20.19+; для сборки desktop — 22.12+. Перед обновлением запустите `npm test`.
+Отдельная firewall-защита desktop пока требует полевого теста отказов/восстановления Windows;
+одного `strict_route` недостаточно после завершения движка.
+
 > Устойчивый к цензуре туннель **без фиксированного адреса и без брокера**: клиент сам находит exit
 > по двум независимым каналам рандеву и подключается через камуфляж-дата-плоскость.
 
@@ -161,10 +167,10 @@ SOCKS5-клиент — это дата-плоскость; чтобы заве�
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1        # подключить (скачает tun2proxy, pinned)
 powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off   # отключить
 ```
-> Фаза 3 (в процессе) заменяет tun2proxy собственным TUN sing-box — fail-closed kill-switch, блок
-> IPv6-утечки и DNS через туннель — скриптом `scripts\vpn-singbox-windows.ps1` (тот же интерфейс
-> `-Off`/`-Bypass`). Конфиг провалидирован офлайн; полевой запуск (с админ-правами, при выключенном
-> другом full-tunnel) ещё предстоит — см. роадмап.
+> Desktop управляет TUN sing-box и сохраняет native fallback. Full допускает direct-исключения,
+> Split направляет в туннель выбранные ресурсы. Строгая firewall-опция Full отключает исключения
+> и сохраняется после закрытия приложения до явного Disconnect. Старые PowerShell-лаунчеры
+> постоянной firewall-защиты не дают. Подробности — [app/README.md](app/README.md).
 
 ## Деплой (pull-based автодеплой)
 
@@ -232,8 +238,7 @@ MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
 **Фаза 3:**
 - ✅ **Пиннинг cert для hy2** — серверный cert теперь доставляется через Nostr-offer (DHT-offer
   компактный, оба запечатаны разными нонсами), `insecure` для hysteria2 убран.
-- **sing-box TUN как системный VPN** (следующее) вместо tun2proxy — один движок и для дата-плоскости, и
-  для полного VPN, с **kill-switch**, обработкой IPv6 и защитой от DNS-leak.
+- **Desktop с TUN sing-box** реализован; полевой тест отказов и восстановления firewall остаётся.
 
 **После Фазы 3:**
 - **Дата-плоскость на WebRTC DataChannel** (coturn на exit'е; DTLS выглядит как видеозвонок; встроенный

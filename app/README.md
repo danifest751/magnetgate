@@ -1,61 +1,91 @@
-# magnetgate desktop app
+# magnetgate desktop 0.3
 
-An Electron UI around the magnetgate client. It runs the existing
-[`../src/client.js`](../src/client.js) as a separate system-`node` process (rendezvous, local SOCKS,
-Reality→hy2→native fail-over), manages a `magnetgate.config.json` (PSK / exits / ports), and brings
-the system-wide VPN up on the sing-box TUN via
-[`../scripts/vpn-singbox-windows.ps1`](../scripts/vpn-singbox-windows.ps1) — elevated on demand (UAC
-only when you enable it; the app itself stays unprivileged).
+The elevated Electron app manages a sing-box TUN process and a discovery/native SOCKS client.
+Reality and pinned hysteria2 run directly in sing-box; native is a fallback through the Node client.
+Multiple fresh exits participate in selection. Node is bundled through Electron.
 
-## Prerequisites
+## Build and develop
 
-The built app is **self-contained** — no system Node.js needed at runtime. The client runs on
-Electron's own Node (`ELECTRON_RUN_AS_NODE`); this is safe because the only native dep,
-`sodium-native`, ships ABI-stable N-API prebuilds.
-
-To **build**, the resources that get bundled must be present:
-- repo deps at the root: from the repo root run `npm ci` (bundled into the exe);
-- `../tools/sing-box/sing-box.exe` and `wintun.dll` — `powershell -File ..\scripts\get-singbox.ps1`
-  fetches sing-box; wintun is auto-fetched (pinned) by the VPN launcher, or place `wintun.dll` in
-  `../tools/sing-box/` yourself.
-
-## Develop
+Use Node.js 22.12 or later for desktop tooling; the core requires 20.19 or later.
 
 ```powershell
+# repository root
+npm ci
+# sing-box.exe and wintun.dll must exist in tools/sing-box
 cd app
-npm install        # electron + electron-builder (dev only)
-npm start          # launch the app against ../src and ../tools
+npm ci
+npm run install:electron
+npm test
+npm start
+npm run dist
 ```
 
-The config is stored in Electron's `userData` dir (Open config folder in the UI), **not** in the
-repo, so PSKs are never committed. On first run it is **seeded** from `seed-config.json` (prepared
-at build by `prepare-seed.js` from your `../magnetgate.config.json`), so testing needs no manual PSK
-entry. Because that seed is baked into the exe, the built `.exe` then **contains your PSK — keep it
-private**. `seed-config.json` is gitignored.
+The portable artifact is `app/dist/magnetgate-0.3.1.exe`. The app requests Administrator at launch
+for TUN/firewall operations. Child processes are hidden and only owned processes are stopped.
 
-**Logs** (for reading back a field test): everything goes to `%APPDATA%\magnetgate\logs\` —
-`magnetgate.log` (app events + the client's output) and, when the VPN is on, `vpn.log` (sing-box)
-and `vpn-launcher.log`. The UI has an **Open logs folder** button.
+Builds use the valid empty example config by default. Add PSKs under Настройки → Серверы и ключи доступа.
+`MAGNETGATE_PERSONAL_BUILD=1` deliberately embeds the local `magnetgate.config.json`; such an artifact
+contains credentials and is for private use. The resource allowlist excludes local sing-box JSON
+configs and logs. Store user settings in Electron userData; use Open config folder to find it.
 
-## Build a portable .exe
+## Interface
+
+The Russian UI has four screens: Подключение, Сайты, Настройки and Диагностика. Full is labelled
+«Весь интернет» and Split «Только выбранное». The selected preference and actual applied mode
+are displayed separately while a change is pending. Light/dark appearance follows Windows.
+
+Direct exceptions and tunnel domains are separate lists; editing either does not switch modes.
+Rule changes save automatically. Server keys and advanced settings use explicit Save buttons;
+unsaved drafts do not leak into unrelated saves. Existing userData configuration remains in use.
+Diagnostics shows live status, egress and the bounded log; Refresh reads the current status.
+
+`npm test` includes state/recovery tests and loopback-only sing-box checks. The optional
+`npm run test:ui` runs the actual renderer in headless Edge using fixture IPC, without Electron,
+TUN or firewall operations. It requires an existing Playwright installation (set `PLAYWRIGHT_MODULE`
+to its module directory if it is not on the module search path). Screenshots go to ignored
+`tools/verification/ui-0.3.0`. This does not replace a manual test of the packaged desktop app.
+
+## Routing and protection
+
+- Full: proxy by default with configured direct exceptions and an optional bundled RU list.
+- Split: only selected domains/IP rules go through the proxy.
+- With the firewall option off, switching Full/Split updates rules on the same engine/TUN.
+  Existing connections close so applications reconnect under the new policy. Other configuration
+  changes and transitions with the firewall option enabled still restart the engine.
+- Strict Full firewall option: disables direct exceptions, records prior local firewall settings,
+  disables existing local outbound allows and restricts egress to the owned executables, loopback
+  and TUN. The policy survives engine or app termination. **Disconnect** restores the recorded
+  policy; simply closing the app leaves it engaged. Domain/GPO policy that prevents enforcement
+  is reported as an error. A recovery file alone is never shown as verified protection.
+
+The firewall option is off by default. This revision has unit tests, real Electron UI checks and
+`sing-box check` validation; elevated TUN/firewall crash, leak and restoration tests have not been
+performed on the workstation. Its `-Status` and `-DryRun` commands are read-only. Recovery from an
+interrupted strict session is available through Disconnect or elevated PowerShell:
 
 ```powershell
-cd app
-npm install
-npm run dist       # -> app/dist/magnetgate-<version>.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/kill-switch.ps1 -Off
 ```
 
-`electron-builder` bundles `../src`, `../node_modules`, `../tools/sing-box` and the VPN launcher as
-resources (see the `build.extraResources` in [package.json](package.json)).
+For a packaged app, use its `resources/scripts/kill-switch.ps1` path or reopen the app and Disconnect.
+Other full tunnels should be turned off first. The legacy PowerShell launchers only provide routing
+while their engine runs; they do not enable the persistent guard.
 
-## Notes / limitations
+Connection health compares HTTPS system egress with an HTTPS request forced through a separate
+proxy-only SOCKS inbound. Split has a separate health condition. Endpoint snapshots expire after
+12 minutes and are refreshed independently of active connections.
+Mode changes request an immediate health check and discard results from previous policies.
+Logs distinguish a live mode change from an engine restart and include mode-change duration/PID.
 
-- **Elevation model:** only the System-VPN toggle elevates (a UAC prompt spawns the TUN launcher);
-  starting/stopping the client and editing config do not. The elevated sing-box runs in its own
-  window, so its log is not streamed into the app (the client's log is). Turning the VPN off elevates
-  again (second UAC).
-- **Other full tunnels:** do not enable the system VPN on top of an active WireGuard/OpenVPN full
-  tunnel — turn the other one off first.
-- Field bring-up of the TUN has not been validated yet (see the repo ROADMAP); the generated sing-box
-  config is offline-validated with `sing-box check`, and the packaged client is verified to start on
-  Electron's Node.
+App and sing-box warnings share the bounded, rotating userData/logs `magnetgate.log` (plus one
+previous file). Existing `vpn.log` files are historical and are no longer appended by the app.
+Each engine attempt uses a fresh TUN name to avoid reusing a stale Wintun device identity.
+Startup waits up to 30 seconds for authenticated control and SOCKS endpoints before egress checks.
+Disconnect cancels that wait. If Windows delays termination, the app retains the owned process,
+offers Disconnect again and keeps the window open on failed shutdown.
+
+## Protocol migration
+
+Core 0.11 uses native wire v4 and v4 sealed rendezvous envelopes. Clients and exit must be updated
+together. Offer JSON remains schema v3; desktop endpoint snapshots are schema v4. The legacy native
+helper names `frame2`/`makeCodecV2` do not imply old-wire compatibility.
