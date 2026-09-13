@@ -39,7 +39,7 @@ scale) is its enemy. Keep that boundary explicit in every design decision below.
 ## 3. Near-term — Phase 3
 
 - ✅ **sing-box TUN as the system-wide VPN (done, field-validated)** — replaces tun2proxy with a
-  fail-closed **kill-switch** (`route.final = proxy` + `strict_route`), IPv6-leak block and DNS routed
+  strict routing while the engine is running, IPv6-leak block and DNS routed
   through the tunnel. `scripts/vpn-singbox-windows.ps1` keeps the TUN → magnetgate SOCKS topology so
   reality>hy2>native fail-over and rendezvous stay in the client; the app passes the exit IP as
   `-Bypass` so the uplink does not loop. Validated in the field: with WireGuard off, system egress
@@ -49,8 +49,17 @@ scale) is its enemy. Keep that boundary explicit in every design decision below.
 - ✅ **hy2 cert-pinning (done, 0.10.0)** — the self-signed server cert now ships via the
   size-unbounded Nostr offer, dropping the `insecure` fallback. Implemented as the compact-DHT /
   superset-Nostr split: the DHT offer omits hy2, the Nostr offer carries it with the cert, and the
-  two are sealed under disjoint nonces (`seq` vs `'n'+seq`) so the differing plaintexts never reuse a
-  nonce. The cert carries a SAN so Go's TLS verifier accepts it under `server_name=magnetgate`.
+  envelopes now use random nonces plus authenticated domains (`seq` vs `'n'+seq`). The cert carries
+  a SAN so Go's TLS verifier accepts it under `server_name=magnetgate`.
+
+### Stabilization, 0.11 (2026-09-13)
+
+Native wire v4 authenticates routing metadata and counters. TCP setup/half-close, reusable UDP
+associations, multi-exit fallback, Nostr reconnect publication, durable sequences, rotation recovery
+and deploy rollback now have regression coverage. Desktop uses shared transport/config validation,
+owned process lifecycles and an optional persistent firewall policy. The older field test above
+does not validate this new firewall implementation: elevated crash/leak/recovery testing and a
+coordinated v4 server/client rollout remain required before calling it field-validated.
 
 ## 4. The exit overlay — entry/egress split & control-plane mesh
 
