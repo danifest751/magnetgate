@@ -21,7 +21,10 @@ $ErrorActionPreference = 'Stop'
 $tools = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\tun2proxy'
 
 if ($Off) {
-  Get-Process tun2proxy-bin -ErrorAction SilentlyContinue | Stop-Process -Force
+  $ownedExe = Join-Path $tools 'tun2proxy-bin.exe'
+  Get-CimInstance Win32_Process -Filter "Name='tun2proxy-bin.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.ExecutablePath -eq $ownedExe } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
   Write-Host 'tun2proxy stopped (the TUN adapter is removed automatically).'
   exit 0
 }

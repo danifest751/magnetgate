@@ -1,7 +1,7 @@
 # System-wide VPN on Windows using sing-box's own TUN inbound (replaces tun2proxy). All traffic is
 # captured by a TUN adapter and routed through the magnetgate SOCKS5 client (127.0.0.1:1080), which
 # tunnels it via Reality/hysteria2/native to the exit. sing-box adds what tun2proxy did not: a
-# fail-closed kill-switch (route.final = proxy + strict_route), DNS-leak protection (all DNS hijacked
+# strict routing while the engine is running, DNS protection (all DNS hijacked
 # to a DoH resolver reached through the tunnel), and IPv6-leak protection (v6 rejected, since the
 # exit egresses IPv4). Rendezvous, rotation and reality>hy2>native fail-over stay in the magnetgate
 # client - this only replaces the TUN capture layer.
@@ -61,7 +61,7 @@ function Test-Admin {
 
 if ($Off) {
   Get-CimInstance Win32_Process -Filter "Name='sing-box.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match 'vpn-config\.json' } |
+    Where-Object { $_.ExecutablePath -eq $exe -and $_.CommandLine -match [regex]::Escape($cfgOut) } |
     ForEach-Object { Write-Host "stopping sing-box TUN PID $($_.ProcessId)"; Stop-Process -Id $_.ProcessId -Force }
   Write-Host 'magnetgate sing-box TUN stopped (the adapter is removed automatically).'
   exit 0
@@ -207,8 +207,8 @@ $json = @"
     "rules": [
       { "action": "sniff" },
       { "protocol": "dns", "action": "hijack-dns" },$bypassRule$directRouteJson
-      { "ip_is_private": true, "action": "route", "outbound": "direct" },
-      { "ip_version": 6, "action": "reject" }
+      { "ip_version": 6, "action": "reject" },
+      { "ip_is_private": true, "action": "route", "outbound": "direct" }
     ],
     "final": "$finalOut",
     "auto_detect_interface": true,
@@ -226,6 +226,6 @@ Write-Host "config OK: $cfgOut"
 if ($DryRun) { Write-Host "[dry-run] mode=$Mode - config generated and validated, not starting."; exit 0 }
 
 Write-Host ("starting sing-box TUN [mode=$Mode]: " + $(if ($Mode -eq 'split') { 'blocked/geo-restricted list -> exit, everything else direct.' } else { 'all traffic -> exit, direct-list stays local.' }))
-Write-Host '  kill-switch: ON (fail-closed)   IPv6: blocked   DNS: via tunnel (DoH)'
+Write-Host '  Persistent kill-switch: OFF (use the desktop strict firewall option). IPv6: blocked while running. DNS: via tunnel (DoH).'
 Write-Host 'stop with: powershell -ExecutionPolicy Bypass -File scripts\vpn-singbox-windows.ps1 -Off   (or Ctrl+C here)'
 & $exe run -c $cfgOut
