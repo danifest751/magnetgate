@@ -11,7 +11,7 @@ WorkingDirectory=/opt/magnetgate
 EnvironmentFile=/etc/magnetgate.env
 Environment=NODE_ENV=production
 Environment=MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq
-ExecStart=/usr/bin/node src/exit.js
+ExecStart=/usr/bin/flock --no-fork --nonblock /var/lib/magnetgate/publisher.lock /usr/bin/node src/exit.js
 Restart=always
 RestartSec=5
 
