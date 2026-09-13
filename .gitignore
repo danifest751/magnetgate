@@ -4,6 +4,11 @@ node_modules/
 .env.*
 key/
 *.pem
+*.ppk
+*.p12
+*.pfx
+access.txt
+.codegraph/
 Thumbs.db
 .DS_Store
 
