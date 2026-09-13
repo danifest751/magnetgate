@@ -4,6 +4,10 @@
 // connections through that local SOCKS. The native "mgt" channel stays as the fallback.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
+import crypto from 'node:crypto'
+import { transportOutbound } from './transport-config.cjs'
+import { encodeAddress } from './address.mjs'
 import net from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,31 +17,11 @@ const TOOLS = path.join(REPO, 'tools', 'sing-box')
 const BIN = path.join(TOOLS, process.platform === 'win32' ? 'sing-box.exe' : 'sing-box')
 
 function buildConfig(dp, socksPort) {
-  const inbounds = [{ type: 'socks', listen: '127.0.0.1', listen_port: socksPort }]
-  let out
-  if (dp.t === 'reality') {
-    out = {
-      type: 'vless', server: dp.host, server_port: dp.port, uuid: dp.uuid, flow: 'xtls-rprx-vision',
-      tls: {
-        enabled: true, server_name: dp.sni,
-        utls: { enabled: true, fingerprint: dp.fp || 'chrome' },
-        reality: { enabled: true, public_key: dp.pbk, short_id: dp.sid },
-      },
-    }
-  } else if (dp.t === 'hy2') {
-    // Pin the exit's self-signed cert when the offer carries it (dp.ca, delivered over the
-    // size-unbounded Nostr channel); server_name must match the cert's SAN (dp.sni). Fall back to
-    // `insecure` only for a legacy offer that has no cert.
-    const tls = { enabled: true, alpn: ['h3'] }
-    if (dp.ca) { tls.certificate = Array.isArray(dp.ca) ? dp.ca : [dp.ca]; if (dp.sni) tls.server_name = dp.sni }
-    else tls.insecure = true
-    out = {
-      type: 'hysteria2', server: dp.host, server_port: dp.port, password: dp.pw,
-      obfs: { type: 'salamander', password: dp.obfs },
-      tls,
-    }
-  } else throw new Error(`unsupported data-plane type: ${dp.t}`)
-  return { log: { level: 'warn' }, inbounds, outbounds: [out] }
+  return {
+    log: { level: 'warn' },
+    inbounds: [{ type: 'socks', listen: '127.0.0.1', listen_port: socksPort }],
+    outbounds: [transportOutbound(dp)]
+  }
 }
 
 const dpKey = (dp) => JSON.stringify(dp)
@@ -47,8 +31,15 @@ function waitPort(host, port, timeoutMs) {
   return new Promise((resolve) => {
     const tryOnce = () => {
       const s = net.connect(port, host)
-      s.on('connect', () => { s.destroy(); resolve(true) })
-      s.on('error', () => { s.destroy(); if (Date.now() > deadline) resolve(false); else setTimeout(tryOnce, 250) })
+      s.on('connect', () => {
+        s.destroy()
+        resolve(true)
+      })
+      s.on('error', () => {
+        s.destroy()
+        if (Date.now() > deadline) resolve(false)
+        else setTimeout(tryOnce, 250)
+      })
     }
     tryOnce()
   })
@@ -62,10 +53,15 @@ export class DpSupervisor {
     this.curKey = null
     this.ready = false
     this.starting = null
-    this.cfgPath = path.join(TOOLS, 'client-config.json')
+    this.cfgPath = path.join(
+      os.tmpdir(),
+      'magnetgate-dp-' + process.pid + '-' + crypto.randomBytes(8).toString('hex') + '.json'
+    )
   }
 
-  available() { return fs.existsSync(BIN) }
+  available() {
+    return fs.existsSync(BIN)
+  }
 
   // ensure sing-box is running for this dp; resolves true when the local SOCKS accepts connections.
   // All ensure/stop operations are serialized on one chain so overlapping offers (e.g. rapid
@@ -73,75 +69,218 @@ export class DpSupervisor {
   ensure(dp) {
     if (!this.available()) return Promise.resolve(false)
     const key = dpKey(dp)
-    this.chain = (this.chain || Promise.resolve()).then(() => this._ensure(key, dp)).catch(() => false)
+    this.chain = (this.chain || Promise.resolve())
+      .then(() => this._ensure(key, dp))
+      .catch(() => false)
     return this.chain
   }
 
   async _ensure(key, dp) {
     if (this.proc && this.ready && this.curKey === key) return true
     if (this.proc) await this._stop() // different endpoint or a dead proc: tear down and wait for exit first
-    try { fs.mkdirSync(TOOLS, { recursive: true }) } catch {}
-    try { fs.writeFileSync(this.cfgPath, JSON.stringify(buildConfig(dp, this.socksPort))) } catch (e) { this.log(`[dp] config write failed: ${e.message}`); return false }
+    try {
+      fs.mkdirSync(TOOLS, { recursive: true })
+    } catch {}
+    try {
+      fs.writeFileSync(this.cfgPath, JSON.stringify(buildConfig(dp, this.socksPort)), {
+        mode: 0o600
+      })
+    } catch (e) {
+      this.log(`[dp] config write failed: ${e.message}`)
+      return false
+    }
     this.curKey = key
     this.ready = false
     const proc = spawn(BIN, ['run', '-c', this.cfgPath], { stdio: 'ignore', windowsHide: true })
     this.proc = proc
-    proc.on('exit', (code) => { if (this.proc === proc) { this.proc = null; this.ready = false; this.curKey = null } this.log(`[dp] sing-box exited (code=${code})`) })
-    proc.on('error', (e) => { this.log(`[dp] sing-box spawn error: ${e.message}`) })
-    this.ready = await waitPort('127.0.0.1', this.socksPort, 8000)
-    if (this.ready) this.log(`[dp] ${dp.t} data plane up (sing-box socks 127.0.0.1:${this.socksPort})`)
-    else { this.log(`[dp] ${dp.t} data plane failed to come up`); await this._stop() }
+    proc.on('exit', (code) => {
+      if (this.proc === proc) {
+        this.proc = null
+        this.ready = false
+        this.curKey = null
+      }
+      this.log(`[dp] sing-box exited (code=${code})`)
+    })
+    proc.on('error', (e) => {
+      this.log(`[dp] sing-box spawn error: ${e.message}`)
+    })
+    this.ready =
+      (await waitPort('127.0.0.1', this.socksPort, 8000)) &&
+      this.proc === proc &&
+      proc.exitCode === null
+    if (this.ready)
+      this.log(`[dp] ${dp.t} data plane up (sing-box socks 127.0.0.1:${this.socksPort})`)
+    else {
+      this.log(`[dp] ${dp.t} data plane failed to come up`)
+      await this._stop()
+    }
     return this.ready
   }
 
   // kill the current sing-box and wait for it to exit + a short grace for the OS to release the port
   _stop() {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const proc = this.proc
-      this.proc = null; this.ready = false; this.curKey = null
+      this.ready = false
       if (!proc) return resolve()
-      let done = false
-      const finish = () => { if (!done) { done = true; resolve() } }
-      proc.once('exit', () => setTimeout(finish, 300))
-      try { proc.kill() } catch { finish() }
-      setTimeout(finish, 3000)
+      const finish = () => {
+        clearTimeout(timer)
+        if (this.proc === proc) {
+          this.proc = null
+          this.curKey = null
+        }
+        try {
+          fs.unlinkSync(this.cfgPath)
+        } catch {}
+        resolve()
+      }
+      const timer = setTimeout(() => {
+        proc.removeListener('exit', finish)
+        reject(new Error('data-plane process did not stop'))
+      }, 5000)
+      proc.once('exit', finish)
+      if (proc.exitCode !== null || proc.signalCode !== null) return finish()
+      try {
+        proc.kill()
+      } catch (err) {
+        clearTimeout(timer)
+        proc.removeListener('exit', finish)
+        reject(err)
+      }
     })
   }
 
-  stop() { this.chain = (this.chain || Promise.resolve()).then(() => this._stop()); return this.chain }
+  stop() {
+    this.chain = (this.chain || Promise.resolve()).then(() => this._stop())
+    return this.chain
+  }
 }
 
 // Minimal SOCKS5 (no-auth) client: connect through a local SOCKS proxy to host:port.
 // Resolves { sock, leftover } once the tunnel is established (sock is a raw duplex to the target).
 export function socks5Connect(socksPort, host, port) {
   return new Promise((resolve, reject) => {
-    const s = net.connect(socksPort, '127.0.0.1')
-    let stage = 0, buf = Buffer.alloc(0)
-    const fail = (m) => { try { s.destroy() } catch {}; reject(new Error(m)) }
-    s.on('error', (e) => fail(e.message))
-    s.on('connect', () => { try { s.write(Buffer.from([5, 1, 0])) } catch (e) { fail(e.message) } })
-    s.on('data', (d) => {
-      buf = Buffer.concat([buf, d])
+    const sock = net.connect(socksPort, '127.0.0.1')
+    let stage = 0,
+      buf = Buffer.alloc(0),
+      done = false
+    const finish = (err, result) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      sock.removeListener('data', onData)
+      sock.removeListener('error', fail)
+      sock.removeListener('close', closed)
+      if (err) {
+        sock.destroy()
+        reject(err)
+      } else {
+        sock.pause()
+        resolve(result)
+      }
+    }
+    const fail = (err) => finish(err),
+      closed = () => finish(new Error('SOCKS closed'))
+    const timer = setTimeout(() => finish(new Error('SOCKS timeout')), 10000)
+    const onData = (data) => {
+      buf = Buffer.concat([buf, data])
+      if (buf.length > 128 * 1024) return finish(new Error('SOCKS reply too large'))
       if (stage === 0) {
         if (buf.length < 2) return
-        if (buf[0] !== 5 || buf[1] !== 0x00) return fail('socks method rejected')
-        buf = buf.subarray(2); stage = 1
-        const hb = Buffer.from(String(host), 'latin1')
-        const req = Buffer.concat([Buffer.from([5, 1, 0, 3, hb.length]), hb, Buffer.from([(port >> 8) & 0xff, port & 0xff])])
-        try { s.write(req) } catch (e) { return fail(e.message) }
+        if (buf[0] !== 5 || buf[1] !== 0) return finish(new Error('SOCKS auth rejected'))
+        buf = buf.subarray(2)
+        stage = 1
+        try {
+          sock.write(Buffer.concat([Buffer.from([5, 1, 0]), encodeAddress(host, port)]))
+        } catch (e) {
+          return finish(e)
+        }
       }
-      if (stage === 1) {
-        if (buf.length < 5) return
-        const atyp = buf[3]
-        const need = atyp === 1 ? 10 : atyp === 4 ? 22 : (5 + buf[4] + 2)
-        if (buf.length < need) return
-        if (buf[1] !== 0x00) return fail(`socks connect failed (rep=${buf[1]})`)
-        const leftover = buf.subarray(need)
-        stage = 2
-        s.removeAllListeners('data')
-        s.removeAllListeners('error')
-        resolve({ sock: s, leftover })
-      }
-    })
+      if (buf.length < 5) return
+      if (buf[0] !== 5 || ![1, 3, 4].includes(buf[3]))
+        return finish(new Error('invalid SOCKS reply'))
+      const need = buf[3] === 1 ? 10 : buf[3] === 4 ? 22 : 7 + buf[4]
+      if (buf.length < need) return
+      if (buf[1] !== 0) return finish(new Error('SOCKS target rejected'))
+      finish(null, { sock, leftover: buf.subarray(need) })
+    }
+    sock.once('connect', () => sock.write(Buffer.from([5, 1, 0])))
+    sock.on('data', onData)
+    sock.once('error', fail)
+    sock.once('close', closed)
   })
+}
+
+// Engines are keyed by complete endpoint generation. Rotation never kills existing streams.
+export class DpPool {
+  constructor({ log = () => {}, engineFactory = (options) => new DpSupervisor(options) } = {}) {
+    this.log = log
+    this.engineFactory = engineFactory
+    this.entries = new Map()
+    this.stopped = false
+  }
+  available() {
+    return fs.existsSync(BIN)
+  }
+  async connect(dp, target) {
+    if (this.stopped) throw new Error('pool stopped')
+    const key = dpKey(dp)
+    let entry = this.entries.get(key)
+    if (!entry) {
+      if (this.entries.size >= 32) throw new Error('data-plane engine limit')
+      entry = { refs: 0, timer: null, promise: null }
+      entry.promise = (async () => {
+        const port = await new Promise((resolve, reject) => {
+          const server = net.createServer()
+          server.on('error', reject)
+          server.listen(0, '127.0.0.1', () => {
+            const p = server.address().port
+            server.close(() => resolve(p))
+          })
+        })
+        const engine = this.engineFactory({ socksPort: port, log: this.log })
+        entry.engine = engine
+        return engine
+      })()
+      this.entries.set(key, entry)
+    }
+    clearTimeout(entry.timer)
+    entry.refs++
+    const release = () => {
+      entry.refs--
+      if (!entry.refs && !this.stopped)
+        entry.timer = setTimeout(async () => {
+          try {
+            await entry.engine?.stop()
+            if (this.entries.get(key) === entry) this.entries.delete(key)
+          } catch (err) {
+            this.log('[dp] stop failed: ' + err.message)
+          }
+        }, 30000)
+    }
+    try {
+      const engine = await entry.promise
+      if (this.stopped) throw new Error('pool stopped')
+      if (!(await engine.ensure(dp))) throw new Error('data-plane engine could not restart')
+      const result = await socks5Connect(engine.socksPort, target.host, target.port)
+      result.sock.once('close', release)
+      return result
+    } catch (e) {
+      release()
+      throw e
+    }
+  }
+  async stop() {
+    this.stopped = true
+    await Promise.allSettled(
+      [...this.entries.values()].map(async (entry) => {
+        clearTimeout(entry.timer)
+        try {
+          await entry.promise
+        } catch {}
+        await entry.engine?.stop()
+      })
+    )
+    this.entries.clear()
+  }
 }

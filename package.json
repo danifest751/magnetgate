@@ -1,17 +1,17 @@
 {
   "name": "magnetgate",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "SOCKS5 tunnel with rendezvous over the BitTorrent Mainline DHT (BEP 44) — no domains, no brokers, no fixed addresses",
   "type": "module",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=20.19.0"
   },
   "scripts": {
     "exit": "node src/exit.js",
     "client": "node src/client.js",
     "dht": "node src/dht-node.mjs",
-    "test": "node --test tests/unit.test.mjs"
+    "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",

@@ -3,9 +3,21 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import {
-  deriveKeys, saltOf, targetOf, signer, bep44Verify,
-  seal, unseal, connKeys, frame2, makeCodecV2, FRAME,
-  hsClientInit, hsExitRespond, hsClientFinish,
+  deriveKeys,
+  saltOf,
+  targetOf,
+  signer,
+  bep44Verify,
+  seal,
+  unseal,
+  connKeys,
+  frame2,
+  makeFrameEncoder,
+  makeCodecV2,
+  FRAME,
+  hsClientInit,
+  hsExitRespond,
+  hsClientFinish
 } from '../src/common.mjs'
 import { nostrKeys, buildEvent } from '../src/nostr.mjs'
 import { pickDp, mergeOffer } from '../src/offer.mjs'
@@ -17,7 +29,13 @@ const KEY = crypto.randomBytes(32)
 function decodeAll(key, wire, chunkSize = 0) {
   const out = []
   let killed = false
-  const codec = makeCodecV2(key, (type, id, plain) => out.push({ type, id, plain }), () => { killed = true })
+  const codec = makeCodecV2(
+    key,
+    (type, id, plain) => out.push({ type, id, plain }),
+    () => {
+      killed = true
+    }
+  )
   if (chunkSize > 0) {
     for (let i = 0; i < wire.length; i += chunkSize) codec.push(wire.subarray(i, i + chunkSize))
   } else {
@@ -53,11 +71,12 @@ test('padding quantizes wire size to buckets (does not leak exact length)', () =
 })
 
 test('codec reassembles frames split across arbitrary chunk boundaries', () => {
+  const encode = makeFrameEncoder(KEY)
   const parts = [
-    frame2(KEY, FRAME.OPEN, 1, Buffer.from(JSON.stringify({ host: 'example.com', port: 443 }))),
-    frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(1300)),
-    frame2(KEY, FRAME.PING, 0, Buffer.from('p')),
-    frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(3000)),
+    encode(FRAME.OPEN, 1, Buffer.from(JSON.stringify({ host: 'example.com', port: 443 }))),
+    encode(FRAME.DATA, 1, crypto.randomBytes(1300)),
+    encode(FRAME.PING, 0, Buffer.from('p')),
+    encode(FRAME.DATA, 1, crypto.randomBytes(3000))
   ]
   const wire = Buffer.concat(parts)
   for (const cs of [1, 3, 7, 45, 64, 500]) {
@@ -72,7 +91,10 @@ test('codec reassembles frames split across arbitrary chunk boundaries', () => {
 test('non-DATA frames are not padded/stripped', () => {
   for (const t of [FRAME.OPEN, FRAME.CLOSE, FRAME.PING, FRAME.PONG, FRAME.UDP_ASSOC]) {
     const plain = crypto.randomBytes(50)
-    const { out } = decodeAll(KEY, frame2(KEY, t, 3, plain))
+    const { out } = decodeAll(
+      KEY,
+      frame2(KEY, t, [FRAME.PING, FRAME.PONG].includes(t) ? 0 : 3, plain)
+    )
     assert.ok(out[0].plain.equals(plain), `type ${t} payload mismatch`)
   }
 })
@@ -80,7 +102,8 @@ test('non-DATA frames are not padded/stripped', () => {
 test('wrong key or tampered ciphertext triggers onKill (auth holds)', () => {
   const wire = frame2(KEY, FRAME.DATA, 1, crypto.randomBytes(300))
   assert.equal(decodeAll(crypto.randomBytes(32), wire).killed, true, 'wrong key must kill')
-  const tampered = Buffer.from(wire); tampered[tampered.length - 1] ^= 0xff
+  const tampered = Buffer.from(wire)
+  tampered[tampered.length - 1] ^= 0xff
   assert.equal(decodeAll(KEY, tampered).killed, true, 'tampered MAC must kill')
 })
 
@@ -108,7 +131,8 @@ test('BEP44 sign/verify and target derivation', () => {
   const value = crypto.randomBytes(120)
   const sig = signer(sk)(value)
   assert.equal(bep44Verify(sig, value, pk), true)
-  const bad = Buffer.from(value); bad[0] ^= 1
+  const bad = Buffer.from(value)
+  bad[0] ^= 1
   assert.equal(bep44Verify(sig, bad, pk), false)
   assert.equal(bep44Verify(sig, value, crypto.randomBytes(32)), false)
   assert.equal(targetOf(pk, saltOf('psk-abc')).length, 20)
@@ -126,7 +150,13 @@ test('forward-secret handshake: client and exit derive matching keys', () => {
   // a real DATA frame round-trips across the negotiated keys
   const payload = crypto.randomBytes(1500)
   let got = null
-  makeCodecV2(resp.keys.c2e, (t, id, p) => { got = p }, () => {}).push(frame2(fin.keys.c2e, FRAME.DATA, 1, payload))
+  makeCodecV2(
+    resp.keys.c2e,
+    (t, id, p) => {
+      got = p
+    },
+    () => {}
+  ).push(frame2(fin.keys.c2e, FRAME.DATA, 1, payload))
   assert.ok(got && got.equals(payload))
 })
 
@@ -142,11 +172,17 @@ test('handshake rejects wrong PSK and tampering', () => {
   const wrong = deriveKeys('other-psk').boxKey
   const init = hsClientInit(boxKey)
   assert.equal(hsExitRespond(wrong, init.msg1), null, 'wrong PSK must be rejected')
-  const bad = Buffer.from(init.msg1); bad[30] ^= 0xff
+  const bad = Buffer.from(init.msg1)
+  bad[30] ^= 0xff
   assert.equal(hsExitRespond(boxKey, bad), null, 'tampered msg1 must be rejected')
   const resp = hsExitRespond(boxKey, init.msg1)
-  const badMsg2 = Buffer.from(resp.msg2); badMsg2[30] ^= 0xff
-  assert.equal(hsClientFinish(boxKey, badMsg2, init.ceSk, init.cePk), null, 'tampered msg2 must be rejected')
+  const badMsg2 = Buffer.from(resp.msg2)
+  badMsg2[30] ^= 0xff
+  assert.equal(
+    hsClientFinish(boxKey, badMsg2, init.ceSk, init.cePk),
+    null,
+    'tampered msg2 must be rejected'
+  )
 })
 
 test('handshake exposes a stable client ephemeral key for replay detection', () => {
@@ -154,11 +190,15 @@ test('handshake exposes a stable client ephemeral key for replay detection', () 
   const init = hsClientInit(boxKey)
   const r1 = hsExitRespond(boxKey, init.msg1)
   const r2 = hsExitRespond(boxKey, init.msg1) // replay of the same msg1
-  assert.ok(r1.cePk.equals(r2.cePk), 'replayed msg1 yields the same cePk so the caller cache blocks it')
+  assert.ok(
+    r1.cePk.equals(r2.cePk),
+    'replayed msg1 yields the same cePk so the caller cache blocks it'
+  )
 })
 
 test('nostr identity is deterministic from the PSK (valid 32-byte x-only pubkey)', () => {
-  const a = nostrKeys('psk-abc'); const b = nostrKeys('psk-abc')
+  const a = nostrKeys('psk-abc')
+  const b = nostrKeys('psk-abc')
   assert.equal(a.pkHex, b.pkHex)
   assert.equal(a.pkHex.length, 64)
   assert.notEqual(nostrKeys('psk-xyz').pkHex, a.pkHex)
@@ -166,11 +206,25 @@ test('nostr identity is deterministic from the PSK (valid 32-byte x-only pubkey)
 
 test('nostr event id and schnorr signature verify', () => {
   const { sk, pkHex } = nostrKeys('psk-abc')
-  const ev = buildEvent(sk, pkHex, [['d', 'x'], ['mgt-seq', '7']], 'payload')
-  const id = crypto.createHash('sha256')
-    .update(JSON.stringify([0, ev.pubkey, ev.created_at, ev.kind, ev.tags, ev.content])).digest('hex')
+  const ev = buildEvent(
+    sk,
+    pkHex,
+    [
+      ['d', 'x'],
+      ['mgt-seq', '7']
+    ],
+    'payload'
+  )
+  const id = crypto
+    .createHash('sha256')
+    .update(JSON.stringify([0, ev.pubkey, ev.created_at, ev.kind, ev.tags, ev.content]))
+    .digest('hex')
   assert.equal(ev.id, id, 'id must be sha256 of the serialized event')
-  const ok = schnorr.verify(Buffer.from(ev.sig, 'hex'), Buffer.from(ev.id, 'hex'), Buffer.from(ev.pubkey, 'hex'))
+  const ok = schnorr.verify(
+    Buffer.from(ev.sig, 'hex'),
+    Buffer.from(ev.id, 'hex'),
+    Buffer.from(ev.pubkey, 'hex')
+  )
   assert.equal(ok, true, 'signature must verify over the id bytes')
 })
 
@@ -193,8 +247,12 @@ test('sealed offer v3 survives the Nostr content path (base64 + seq tag, MAC-che
 test('offer channels seal under disjoint nonces (DHT seq vs Nostr "n"+seq)', () => {
   const { boxKey } = deriveKeys('psk-split')
   const seq = 1757_000_000
-  const dhtPlain = Buffer.from(JSON.stringify({ v: 3, ts: 1, dp: [{ t: 'reality' }, { t: 'mgt' }] }))
-  const nostrPlain = Buffer.from(JSON.stringify({ v: 3, ts: 1, dp: [{ t: 'reality' }, { t: 'hy2', ca: 'PEM' }, { t: 'mgt' }] }))
+  const dhtPlain = Buffer.from(
+    JSON.stringify({ v: 3, ts: 1, dp: [{ t: 'reality' }, { t: 'mgt' }] })
+  )
+  const nostrPlain = Buffer.from(
+    JSON.stringify({ v: 3, ts: 1, dp: [{ t: 'reality' }, { t: 'hy2', ca: 'PEM' }, { t: 'mgt' }] })
+  )
   const sDht = seal(boxKey, dhtPlain, seq)
   const sNostr = seal(boxKey, nostrPlain, 'n' + seq)
   // each opens only under its own seq domain
@@ -215,8 +273,23 @@ test('pickDp honours the preference order', () => {
 
 test('mergeOffer unions same-generation offers so the Nostr-only hy2 survives the DHT offer', () => {
   const ts = Date.now()
-  const dht = { v: 3, ts, dp: [{ t: 'reality', sid: 'a' }, { t: 'mgt', port: 49001 }] }
-  const nostr = { v: 3, ts, dp: [{ t: 'reality', sid: 'a' }, { t: 'hy2', ca: 'PEM', sni: 'magnetgate' }, { t: 'mgt', port: 49001 }] }
+  const dht = {
+    v: 3,
+    ts,
+    dp: [
+      { t: 'reality', sid: 'a' },
+      { t: 'mgt', port: 49001 }
+    ]
+  }
+  const nostr = {
+    v: 3,
+    ts,
+    dp: [
+      { t: 'reality', sid: 'a' },
+      { t: 'hy2', ca: 'PEM', sni: 'magnetgate' },
+      { t: 'mgt', port: 49001 }
+    ]
+  }
   // DHT first, then the hy2-bearing Nostr offer of the same generation
   let held = mergeOffer(null, dht)
   assert.equal(pickDp(held, ['hy2']), null, 'DHT offer alone has no hy2')
@@ -234,9 +307,17 @@ test('mergeOffer: newer generation replaces, older is ignored, invalid keeps pre
   const newer = { v: 3, ts: t0 + 1, dp: [{ t: 'reality' }, { t: 'mgt' }] }
   const replaced = mergeOffer(prev, newer)
   assert.equal(replaced.ts, t0 + 1)
-  assert.equal(pickDp(replaced, ['hy2']), null, 'a new generation drops the stale hy2 until Nostr refreshes it')
+  assert.equal(
+    pickDp(replaced, ['hy2']),
+    null,
+    'a new generation drops the stale hy2 until Nostr refreshes it'
+  )
   const older = { v: 3, ts: t0 - 1, dp: [{ t: 'reality' }] }
   assert.equal(mergeOffer(prev, older), prev, 'older generation is ignored')
-  assert.equal(mergeOffer(prev, { v: 2, ts: t0 + 5 }), null, 'invalid offer -> null (caller keeps prev)')
+  assert.equal(
+    mergeOffer(prev, { v: 2, ts: t0 + 5 }),
+    null,
+    'invalid offer -> null (caller keeps prev)'
+  )
   assert.equal(mergeOffer(prev, null), null)
 })
