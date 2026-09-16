@@ -1,7 +1,7 @@
 {
   "name": "magnetgate-app",
   "productName": "magnetgate",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Desktop UI for the magnetgate censorship-resistant tunnel client",
   "author": "magnetgate",
   "private": true,

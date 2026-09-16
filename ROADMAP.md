@@ -2,7 +2,7 @@
 
 > The longer-horizon plan behind the README "Roadmap" section, especially the **exit overlay
 > (entry/egress split)** idea. The transport survey that motivates it is kept in the internal
-> `docs/` (out of the public repo). Last updated: 2026-09-12.
+> `docs/` (out of the public repo). Last updated: 2026-09-16.
 
 ## 1. Framing: what magnetgate is (and is not)
 
@@ -60,6 +60,29 @@ and deploy rollback now have regression coverage. Desktop uses shared transport/
 owned process lifecycles and an optional persistent firewall policy. The older field test above
 does not validate this new firewall implementation: elevated crash/leak/recovery testing and a
 coordinated v4 server/client rollout remain required before calling it field-validated.
+
+### Hardening, 0.11.1 (2026-09-16)
+
+An external audit (`docs/audit-2026-09-16.md`, internal) found that the engineering was ahead of the
+operations. What it changed is in the CHANGELOG; three items belong on this roadmap because they are
+product decisions, not cleanups:
+
+1. **Fixed addresses.** The production exit address had been published inside a test report in this
+   repository (purged, but a public repo means it is public forever). The project's "no single
+   address a censor can block" claim is only true for the *rendezvous*, not for the exit: `target`
+   and the host in the offer never rotate, so an IP-level block is terminal. That is exactly what
+   §4 (exit overlay) is for, and it is now the highest-value next feature — ahead of WebRTC,
+   multipath and the cold-fallback tier.
+2. **The deploy path.** Autodeploy runs `npm ci` + `npm test` from GitHub as root, and the optional
+   signature gate cannot be enabled because no commit is signed. Either sign commits and enable it,
+   or run the install and tests unprivileged and keep only the activation step as root.
+3. **The firewall guard.** The one component able to cut off all connectivity has still never been
+   tested against a crash, a kill or a profile change, and it pins absolute paths of a portable
+   executable that unpacks into a temporary directory. Until a VM test matrix exists it should be
+   described in the UI as unverified, not as protection.
+
+Deferred deliberately: splitting `app/main.js` (it is covered by tests and is in daily use) and any
+change to the TUN stack.
 
 ## 4. The exit overlay — entry/egress split & control-plane mesh
 

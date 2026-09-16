@@ -1,7 +1,8 @@
 # magnetgate
 
-> A censorship-resistant tunnel with **no fixed address and no broker**: the client finds the exit
-> on its own over two independent rendezvous channels, then connects through a camouflaged data plane.
+> A censorship-resistant tunnel with **no broker and a rendezvous that has no fixed address**: the
+> client finds the exit on its own over two independent channels, then connects through a camouflaged
+> data plane. The exit itself is still one address and one port — see below.
 
 **RU:** [README.ru.md](README.ru.md)
 
@@ -13,10 +14,15 @@ The optional desktop firewall guard still needs an elevated Windows failure/reco
 
 An exit node publishes a signed and encrypted **offer** into public infrastructure; a client
 discovers it from a shared secret (PSK) and connects — preferring a strongly camouflaged data plane
-(Reality / hysteria2) and falling back to magnetgate's own forward-secret channel. A censor sees
-neither a centralized broker nor a single "suspicious" address it can simply block: rendezvous rides
-the BitTorrent Mainline DHT **and** a pool of Nostr relays, and the data plane looks like ordinary
-TLS / QUIC to a real website.
+(Reality / hysteria2) and falling back to magnetgate's own forward-secret channel. There is no
+centralized broker: rendezvous rides the BitTorrent Mainline DHT **and** a pool of Nostr relays, and
+the data plane looks like ordinary TLS / QUIC to a real website.
+
+**What that does and does not mean.** Nothing in the *rendezvous* is a fixed address a censor can
+simply block, and no third party sits in the middle. The *exit* itself is still one `host:port`:
+credential rotation makes it look new on the wire, but it does not move it, so an address-level block
+is a hard stop until the exit overlay (entry/egress split, `ROADMAP.md` §4) lands. Treat this as a
+tool for a small trusted group, not as anonymity infrastructure — see "Known limitations" below.
 
 ## How it works
 
@@ -91,11 +97,13 @@ with `cd app && npm install && npm run dist`. See [app/README.md](app/README.md)
 
 ## Rendezvous (two channels)
 
-The exit publishes the same sealed offer to both channels, so discovery survives either being
-blocked or shaped:
+The exit publishes a sealed offer to both channels — the same generation and `ts`, but not byte
+identical: the DHT view is compact (it drops the hysteria2 endpoint, whose pinned certificate would
+not fit the ~1000 B BEP 44 limit) while the Nostr view carries it. Clients merge the two by data-plane
+type. Discovery therefore survives either channel being blocked or shaped:
 
 - **Mainline DHT (BEP 44)** — a mutable item keyed by a PSK-derived ed25519 key; republished every
-  5 min. Lead `DHT_BOOTSTRAP` with an IPv4 node (some public bootstraps are IPv6-only and
+  60 s. Lead `DHT_BOOTSTRAP` with an IPv4 node (some public bootstraps are IPv6-only and
   bittorrent-dht is udp4); a self-hosted bootstrap on the exit (`:20001`) is the most reliable.
 - **Nostr relays** — a parameterized-replaceable event (kind 30078) under a PSK-derived secp256k1
   key, delivered push + instantly to new subscribers. Override the pool with `MAGNETGATE_NOSTR_RELAYS`,

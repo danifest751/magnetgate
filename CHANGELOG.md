@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### 0.11.1 / Desktop 0.3.3 — audit follow-up (2026-09-16)
+
+Security and operations hardening from a full repository audit. No wire-protocol change: the sealed
+offer schema (v3) and the native envelope/frame version (v4) are untouched, so existing clients and
+exits stay compatible.
+
+**Published artefacts (a public repository is public forever)**
+- Purged `tests/results.md` / `tests/results.ru.md` from the working tree **and from every commit**
+  (74 commits rewritten, tree otherwise unchanged) and redacted the exit/uplink addresses that also
+  appeared in two older file versions. Those addresses must be treated as compromised and rotated.
+- Hygiene gate: `scripts/check-hygiene.mjs` rejects private keys, tokens, field reports and any
+  public IPv4 literal that is not a documentation/private range; it runs from `.githooks/pre-commit`,
+  the `commit-msg` guard covers the known secret file names, and `tests/results*.md` is ignored.
+- `tests/consistency.test.mjs` guards the constants documentation has already drifted on
+  (envelope/handshake/frame versions, offer schema, freshness window vs publish interval, Node floor).
+
+**Supply chain**
+- `scripts/pins.json` is the single source of truth for every downloaded or bundled artefact
+  (sing-box zip+exe, both re:filter rule-sets, wintun zip+dll, tun2proxy, tunnel-userlist) and all
+  three fetch scripts read it. The rule-sets came from a `latest` URL with **no** checksum, so an
+  upstream change could silently retune routing; that now stops the fetch instead.
+- The desktop build bundles an explicit file allowlist instead of `*.srs`, so a stray rule-set cannot
+  reach the package (a leftover inside-russia list once added a hidden direct bypass); the unused
+  `itdoginfo-inside-russia.*` files are removed.
+- `update-rules.mjs` follows redirects, requires HTTP 200, refuses an empty result and writes
+  atomically.
+
+**Credentials on disk**
+- The client child's runtime config (every PSK) is deleted as soon as the child exits and swept at
+  startup, together with engine `*.candidate` / `*.tmp` leftovers.
+- The CLI sweeps `magnetgate-dp-*.json` engine configs whose owning pid is gone, and removes its own
+  file on exit.
+
+**Privacy**
+- Destination host names are no longer logged: an 8-hex fingerprint is written instead, and
+  `MAGNETGATE_LOG_TARGETS=1` restores host names for diagnosis. The generated scheduled-task runner
+  logs to `%LOCALAPPDATA%\magnetgate`, not into the repository.
+- Diagnostics gains a "clear the log" action and a "data plane" row (reality / hysteria2 / native),
+  so an unnoticed fall back to the native channel becomes visible.
+
+**Availability**
+- The exit evicts reliable-UDP streams idle for `MAGNETGATE_UDP_IDLE_MS` (default 10 min); a peer
+  that simply vanished used to hold its slot forever, and 512 of them locked out every new client.
+- The exit writes a publication heartbeat (`MAGNETGATE_HEALTH_FILE`) and logs an `[alert]` after
+  `MAGNETGATE_ALERT_AFTER` consecutive publications that reached no DHT node;
+  `scripts/healthcheck.mjs` with `magnetgate-health.{service,timer}` surfaces it to systemd.
+- The client polls fast (3 s) only until an offer is known and then backs off to 10 s; a SOCKS request
+  waiting on discovery fails after 5 s with an actionable error instead of stalling for 20 s, and UDP
+  associations fail over across exits.
+- `frame2` checks its limit against the real overhead after padding instead of a flat 8 KiB margin
+  (hardening: the old margin was already conservative, but the bound is now exact and tested).
+
+**Testing**: 50 core tests and 47 desktop tests pass; `npm audit` reports 0 in both trees.
+
 ### Desktop 0.3.2 — remove hidden Full bypasses
 
 - Stop loading the bundled inside-russia domain list as direct exceptions in Full. It contains
