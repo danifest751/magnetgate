@@ -107,7 +107,19 @@ try {
     else { throw "no APK for ABI '$abi' in $apkDir" }
   }
   Say "installing $(Split-Path -Leaf $apk) ($([math]::Round((Get-Item $apk).Length / 1MB)) MB, abi $abi)"
-  Invoke-Native $adb @('-s', $Serial, 'install', '-r', $apk) | Out-Null
+  $install = (Invoke-Native $adb @('-s', $Serial, 'install', '-r', $apk)) -join "`n"
+  # adb install reports failure in its output and not always in its exit code, and a run that carries on
+  # after a failed install "passes" checks that never ran against anything. Confirm the package is there.
+  $present = ((Invoke-Native $adb @('-s', $Serial, 'shell', 'pm', 'list', 'packages', $appId)) -join '').Trim()
+  if ($install -match 'Failure|INSTALL_FAILED' -or -not $present) {
+    # adb writes the reason to stderr, which PowerShell 5.1 does not put in $install, so the usual cause
+    # is named here rather than parsed out: a vendor ROM refusing installs over USB.
+    throw (
+      "installing $apk on $Serial failed ($install). The package is not present afterwards. " +
+      'If the device is a Xiaomi/MIUI one, the reason is usually INSTALL_FAILED_USER_RESTRICTED: ' +
+      'enable Developer options > Install via USB, and USB debugging (Security settings).'
+    )
+  }
 
   # the PSK goes into the app's private directory, never on a command line
   Invoke-Native $adb @('-s', $Serial, 'push', $PskFile, '/data/local/tmp/mg-psk.txt') | Out-Null
@@ -137,7 +149,10 @@ try {
   $logs = (Invoke-Native $adb @('-s', $Serial, 'logcat', '-d', '-s', 'magnetgate')) -join "`n"
   Check ($result -match 'port=[0-9]+') 'the core started inside the app and opened its SOCKS listener'
   Check ($result -match 'egress \d+\.\d+\.\d+\.\d+') 'the app reached the internet through the core and an exit'
-  Check ($logs -notmatch 'core failed to start') 'the core reported no startup failure'
+  # Requiring the start line as well, not just the absence of an error: "no failure was logged" is also
+  # true when nothing ran at all, which is exactly what a silently failed install looks like.
+  Check ($logs -match 'app started' -and $logs -notmatch 'core failed to start') `
+    'the app started and the core reported no startup failure'
 } finally {
   Invoke-Native $adb @('-s', $Serial, 'shell', "run-as $appId rm -f files/psk.txt files/autotest.txt") | Out-Null
   $left = ((Invoke-Native $adb @('-s', $Serial, 'shell', "run-as $appId ls files/psk.txt 2>/dev/null")) -join '').Trim()
