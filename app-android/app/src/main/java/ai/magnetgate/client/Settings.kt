@@ -113,8 +113,15 @@ object Settings {
     open(context)?.edit()?.putStringSet(KEY_EXCLUDED, packages.toSet())?.apply()
   }
 
+  /**
+   * The rendezvous slot range: the same bound as MAX_SLOTS in src/common.mjs and MaxSlots in
+   * core/proto/keys.go, kept equal by a drift test. The field used to accept 0..255, which let a
+   * user enter a slot the core would then refuse outright.
+   */
+  const val MAX_SLOTS = 16
+
   fun parseSlots(value: String): List<Int> =
-    value.split(',', ' ', '\n').mapNotNull { it.trim().toIntOrNull() }.filter { it in 0..255 }.distinct()
+    value.split(',', ' ', '\n').mapNotNull { it.trim().toIntOrNull() }.filter { it in 0 until MAX_SLOTS }.distinct()
 
   /** The file the scripts use; named here so nothing has to repeat the literal. */
   const val PSK_FILE = "psk.txt"

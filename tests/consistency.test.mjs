@@ -104,6 +104,20 @@ test('drift: the slot range is the same on both sides', () => {
     /n < MAX_SLOTS/.test(exit),
     'exit.js hardcodes its peer-slot bound instead of using MAX_SLOTS'
   )
+  // The Go port and the Android settings field are the other two copies. The settings field used to
+  // accept 0..255, so a user could enter a slot the core then refuses outright.
+  const goLimit = pick(
+    read('app-android/core/proto/keys.go'),
+    /const MaxSlots = (\d+)/,
+    'MaxSlots in core/proto/keys.go'
+  )
+  const uiLimit = pick(
+    read('app-android/app/src/main/java/ai/magnetgate/client/Settings.kt'),
+    /const val MAX_SLOTS = (\d+)/,
+    'MAX_SLOTS in Settings.kt'
+  )
+  assert.equal(goLimit, commonLimit, 'the Go core and the Node reference disagree on the slot range')
+  assert.equal(uiLimit, commonLimit, 'the Android settings field accepts a different slot range')
 })
 
 test('drift: the slot env var is converted before it reaches the validator', () => {
