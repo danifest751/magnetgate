@@ -30,97 +30,119 @@ import (
 	"syscall"
 	"time"
 
+	"magnetgate/core/agent"
+	"magnetgate/core/dht"
 	"magnetgate/core/proto"
 	"magnetgate/core/session"
 	"magnetgate/core/socks"
 )
 
-// direct is one native session to one exit, reopened on demand. It is the only data plane this tool
-// has; the app will add libbox outbounds next to it and the rendezvous ahead of it.
-type direct struct {
+// endpoint is one native transport of an exit.
+type endpoint struct {
 	host string
 	port int
-	key  *[32]byte
+	slot int
+}
 
-	mu      sync.Mutex
-	current *session.Session
+// direct is the data plane: native sessions to whichever exits are known, reopened on demand. With
+// -exit there is one; otherwise the rendezvous fills the list and a request falls through to the next
+// candidate when one dies, which is what makes a node failure survivable.
+type direct struct {
+	key   *[32]byte
+	mu    sync.Mutex
+	exits []endpoint
+	live  map[string]*session.Session
+}
+
+func newDirect(key *[32]byte, exits []endpoint) *direct {
+	return &direct{key: key, exits: exits, live: map[string]*session.Session{}}
 }
 
 func (d *direct) dial(ctx context.Context, host string, port int) (socks.Conn, error) {
-	stream, err := d.open(ctx, host, port)
-	if err != nil && ctx.Err() == nil {
-		// the session may have died between calls: one retry on a fresh one
-		stream, err = d.open(ctx, host, port)
+	var lastErr error
+	for _, exit := range d.candidates() {
+		s, err := d.session(ctx, exit)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		stream, err := s.OpenStream(ctx, session.Target{Host: host, Port: port})
+		if err != nil {
+			d.drop(exit, s)
+			lastErr = err
+			continue
+		}
+		return stream, nil
 	}
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		lastErr = errors.New("no exit to dial through")
 	}
-	return stream, nil
+	return nil, lastErr
 }
 
-func (d *direct) open(ctx context.Context, host string, port int) (*session.Stream, error) {
-	s, err := d.session(ctx)
-	if err != nil {
-		return nil, err
-	}
-	stream, err := s.OpenStream(ctx, session.Target{Host: host, Port: port})
-	if err != nil {
-		d.drop(s)
-		return nil, err
-	}
-	return stream, nil
-}
-
-func (d *direct) session(ctx context.Context) (*session.Session, error) {
+func (d *direct) candidates() []endpoint {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.current != nil {
-		return d.current, nil
+	return append([]endpoint(nil), d.exits...)
+}
+
+// session returns the live session to an exit, connecting it once. The lock is held across the
+// handshake on purpose: two requests arriving together must not open two sessions to the same node.
+func (d *direct) session(ctx context.Context, exit endpoint) (*session.Session, error) {
+	key := net.JoinHostPort(exit.host, strconv.Itoa(exit.port))
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if s := d.live[key]; s != nil {
+		return s, nil
 	}
-	s, err := session.Connect(ctx, d.host, d.port, d.key)
+	s, err := session.Connect(ctx, exit.host, exit.port, d.key)
 	if err != nil {
 		return nil, err
 	}
-	s.SetOnClose(func() { d.drop(s) })
-	d.current = s
+	s.SetOnClose(func() { d.drop(exit, s) })
+	d.live[key] = s
 	return s, nil
 }
 
-func (d *direct) drop(s *session.Session) {
+func (d *direct) drop(exit endpoint, s *session.Session) {
+	key := net.JoinHostPort(exit.host, strconv.Itoa(exit.port))
 	d.mu.Lock()
-	if d.current == s {
-		d.current = nil
+	known := d.live[key]
+	if known == s {
+		delete(d.live, key)
 	}
 	d.mu.Unlock()
+	if known == s {
+		s.Close()
+	}
 }
 
 func (d *direct) close() {
 	d.mu.Lock()
-	s := d.current
-	d.current = nil
+	sessions := make([]*session.Session, 0, len(d.live))
+	for _, s := range d.live {
+		sessions = append(sessions, s)
+	}
+	d.live = map[string]*session.Session{}
 	d.mu.Unlock()
-	if s != nil {
+	for _, s := range sessions {
 		s.Close()
 	}
 }
 
 func main() {
-	exitAddr := flag.String("exit", "", "native endpoint of the exit, host:port (required)")
+	exitAddr := flag.String("exit", "", "native endpoint of a known exit, host:port (skips the rendezvous)")
+	slotsFlag := flag.String("slots", "0", "node slots to poll from the rendezvous, comma separated")
+	bootstrap := flag.String("bootstrap", "", "DHT bootstrap nodes, host:port[,host:port...]")
 	socksPort := flag.Int("socks-port", 0, "loopback SOCKS5 port, 0 picks a free one")
 	var checks stringList
 	flag.Var(&checks, "check", "fetch this URL through the tunnel and print the result (repeatable)")
 	pskFile := flag.String("psk-file", "", "read the PSK from this file instead of MG_PSK")
 	hold := flag.Duration("hold", 0, "keep serving for this long after the check")
 	timeout := flag.Duration("timeout", 30*time.Second, "budget for each -check")
+	discover := flag.Duration("discover", 45*time.Second, "how long to wait for an offer before giving up")
 	flag.Parse()
 
-	if *exitAddr == "" {
-		fail(errors.New("usage: agent-cli -exit host:port [-check URL] [-hold 30s] (PSK from MG_PSK or -psk-file)"))
-	}
-	exitHost, exitPort, err := splitHostPort(*exitAddr)
-	if err != nil {
-		fail(err)
-	}
 	psk, err := readPSK(*pskFile)
 	if err != nil {
 		fail(err)
@@ -130,7 +152,19 @@ func main() {
 		fail(err)
 	}
 
-	plane := &direct{host: exitHost, port: exitPort, key: &keys.BoxKey}
+	logf := func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, "[rv] "+format+"\n", args...)
+	}
+
+	exits, err := findExits(*exitAddr, *slotsFlag, *bootstrap, psk, keys, *discover, logf)
+	if err != nil {
+		fail(err)
+	}
+	for _, exit := range exits {
+		fmt.Printf("exit slot %d at %s:%d\n", exit.slot, exit.host, exit.port)
+	}
+
+	plane := newDirect(&keys.BoxKey, exits)
 	defer plane.close()
 
 	server, err := socks.Listen(*socksPort, plane.dial)
@@ -161,6 +195,94 @@ func main() {
 	if failed {
 		os.Exit(1)
 	}
+}
+
+// findExits resolves where to dial: a known endpoint, or the rendezvous. The rendezvous polls the
+// configured slots until an offer appears, so a node that is slow to publish is not a failure.
+func findExits(exitAddr, slotsFlag, bootstrap, psk string, keys proto.Keys, budget time.Duration, logf func(string, ...any)) ([]endpoint, error) {
+	if exitAddr != "" {
+		host, port, err := splitHostPort(exitAddr)
+		if err != nil {
+			return nil, err
+		}
+		return []endpoint{{host: host, port: port}}, nil
+	}
+	if bootstrap == "" {
+		return nil, errors.New("either -exit or -bootstrap is required")
+	}
+	slots, err := parseSlots(slotsFlag)
+	if err != nil {
+		return nil, err
+	}
+	channel, err := dht.New(dht.Config{
+		Bootstrap: splitList(bootstrap),
+		Passive:   true,
+		Logf:      func(format string, args ...any) { logf(format, args...) },
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer channel.Close()
+
+	discovery, err := agent.New(agent.Config{PSK: psk, Slots: slots, Getter: channel, Logf: logf})
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+	deadline := time.Now().Add(budget)
+	for {
+		discovery.PollAll(ctx)
+		for _, record := range discovery.Records() {
+			logf("slot %d: offer from %q (country %q, planes %v, seq %d)",
+				record.Slot, record.Node, record.Country, record.Offer.Types(), record.Seq)
+		}
+		if found := discovery.Endpoints(); len(found) > 0 {
+			exits := make([]endpoint, 0, len(found))
+			for _, e := range found {
+				exits = append(exits, endpoint{host: e.Host, port: e.Port, slot: e.Slot})
+			}
+			return exits, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("no usable offer after %s (slots %v)", budget, discovery.Slots())
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+func parseSlots(list string) ([]int, error) {
+	out := make([]int, 0, 4)
+	for _, field := range splitList(list) {
+		slot, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, fmt.Errorf("invalid slot %q", field)
+		}
+		if err := proto.ValidSlot(slot); err != nil {
+			return nil, err
+		}
+		out = append(out, slot)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no slots given")
+	}
+	return out, nil
+}
+
+func splitList(list string) []string {
+	fields := strings.FieldsFunc(list, func(r rune) bool { return r == ',' || r == ' ' })
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if field != "" {
+			out = append(out, field)
+		}
+	}
+	return out
 }
 
 func fail(err error) {
