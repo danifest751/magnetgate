@@ -129,6 +129,7 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_SLOTS` | client: comma-separated slots to look for, e.g. `0,1` — one PSK then finds every node in the set (same as `slots` in the config file) |
 | `MAGNETGATE_PEER_SLOTS` | exit: slots this node watches and advertises in `peers`, e.g. `0,1`; unset means no scanning, and a client that knows one slot can then learn the rest by itself |
 | `MAGNETGATE_EXPECT_PEERS` | exit: log an `[alert]` when fewer than N peer slots answer (unset = never) |
+| `MAGNETGATE_PEER_ALERT_AFTER` | exit: how many consecutive misses are needed before that alert (default 3; a single DHT lookup can come back empty for a live node) |
 | `MAGNETGATE_SLOT_DISCOVERY` | client: `0` stops taking extra slots from a node's `peers` list (they are logged when taken) |
 | `MAGNETGATE_PUBLISH_MS` | exit: republish cadence (default 60000); lower it only for tests |
 | `DHT_BOOTSTRAP` | CSV bootstrap list; **lead with an IPv4 node**, self-hosted `:20001` recommended |
@@ -142,6 +143,9 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_UDP_IDLE_MS` | exit: drop a reliable-UDP stream after this much silence (default 600000); a vanishing peer otherwise holds a slot forever |
 | `MAGNETGATE_HEALTH_FILE` | exit: write publication health (last put, node count, consecutive failures) to this file |
 | `MAGNETGATE_ALERT_AFTER` | exit: warn after N consecutive publications that reached no DHT node (default 5) |
+| `MAGNETGATE_ALERT_WEBHOOK` | exit: POST `{"text": ...}` to this endpoint when the publication health check fails, and once when it recovers |
+| `MAGNETGATE_ALERT_TG_TOKEN` / `MAGNETGATE_ALERT_TG_CHAT` | exit: send those notifications to Telegram instead (or as well) |
+| `MAGNETGATE_ALERT_COOLDOWN_MIN` | exit: how often a still-broken exit may repeat its alert (default 30) |
 | `MAGNETGATE_TRANSPORT` | native channel: `tcp` (default) or `udp` (experimental reliable-UDP) |
 | `MAGNETGATE_REALITY_SNI` | exit: the site whose TLS Reality borrows (default `www.microsoft.com`) |
 | `MAGNETGATE_STATS` | client: log per-exit traffic counters every N seconds |

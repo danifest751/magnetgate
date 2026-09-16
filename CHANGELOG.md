@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Operations (2026-09-16)
+
+- **`scripts/deploy.sh` works on any node.** It used to assume `magnetgate-exit` + `magnetgate-dht`
+  exist and started both; a node that runs only the exit needed a hand-written update command. It now
+  derives the service list from what is enabled on the host, so one command updates either node.
+- **Install and test run unprivileged.** `npm ci` and `npm test` execute code from the repository, and
+  a compromised dependency or a malicious commit must not get root on the exit: they now run as the
+  system user `magnetgate-build` with dependency lifecycle scripts disabled (`--ignore-scripts`), and
+  only activation (git reset, units, restart) stays privileged. Commit-signature enforcement
+  (`.deploy-verify`) is still available but not enabled, because no commit is signed yet.
+- **`scripts/healthcheck.mjs` can alert.** A webhook (`MAGNETGATE_ALERT_WEBHOOK`) or Telegram
+  (`MAGNETGATE_ALERT_TG_TOKEN` + `MAGNETGATE_ALERT_TG_CHAT`) gets a message when publication breaks
+  and one when it recovers, repeated no more often than `MAGNETGATE_ALERT_COOLDOWN_MIN` (30 min). A
+  broken alert channel never changes the exit code, and the file may now contain a BOM.
+- **`scripts/backup-node.sh`** snapshots everything that makes a node itself — env file, Reality
+  keypair, hy2 key/cert, obfs password, rotation state, advertised dp, sequence and the systemd
+  drop-ins — into a root-only archive, with the restore procedure in its header.
+- Two more harmless per-packet error classes are collapsed by the desktop log filter (a DNS parse
+  burst while the TUN comes up, and a one-off outbound handshake timeout): they were 38 of the 39 log
+  lines in a fresh session.
+- The legacy Windows launchers (`vpn-windows.ps1`, `vpn-singbox-windows.ps1`) are marked DEPRECATED:
+  the desktop app is the supported path, and two competing routing implementations is how a hidden
+  direct bypass appeared once already.
+
 ### Desktop 0.3.3 — traffic volume and country choice (2026-09-16)
 
 - The status line showed only the current speed, so there was no way to see how much had actually gone

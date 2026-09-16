@@ -74,7 +74,12 @@ function safeSend(channel, value) {
 // lines in 1.5 hours, which rotated this log away every few hours — a three-day history did not
 // survive and genuine tunnel events were buried in it. Collapse the repetitive connection errors
 // into a periodic summary instead; MAGNETGATE_PERSIST_NOISE=1 keeps every line for debugging.
-const NOISE = /connection:.*open connection to .* using outbound\/|outbound\/[a-z0-9-]+\[[^\]]*\]: (dial|read) tcp /
+// Three classes are known to be per-packet and harmless:
+//   - a destination dial that failed (unreachable peer/endpoint),
+//   - a DNS packet the hijacker could not parse (a burst while the TUN comes up),
+//   - a one-off outbound handshake timeout.
+const NOISE =
+  /connection:.*open connection to .* using outbound\/|outbound\/[a-z0-9-]+\[[^\]]*\]: (dial|read) tcp |router: process DNS packet: unpack request|report handshake success: connection timed out/
 const NOISE_PERSIST = process.env.MAGNETGATE_PERSIST_NOISE === '1'
 const NOISE_SUMMARY_MS = 5 * 60 * 1000
 const NOISE_SUMMARY_COUNT = 1000

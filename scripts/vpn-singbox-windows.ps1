@@ -1,3 +1,8 @@
+# DEPRECATED. The desktop app (app/) is the supported way to run magnetgate on Windows: it owns the
+# process lifecycle, the firewall guard and the routing policy in one place, and it is the only path
+# that gets tested. These launchers are kept for reference and for the pinned download steps in
+# scripts/get-singbox.ps1; do not extend them, and never run one alongside the app.
+
 # System-wide VPN on Windows using sing-box's own TUN inbound (replaces tun2proxy). All traffic is
 # captured by a TUN adapter and routed through the magnetgate SOCKS5 client (127.0.0.1:1080), which
 # tunnels it via Reality/hysteria2/native to the exit. sing-box adds what tun2proxy did not: a
