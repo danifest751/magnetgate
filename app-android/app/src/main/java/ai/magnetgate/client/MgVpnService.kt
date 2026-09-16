@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
@@ -50,6 +51,13 @@ class MgVpnService : VpnService() {
   /** The packages the tunnel must leave alone, read from settings when the tunnel comes up. */
   private var excludedPackages: List<String> = emptyList()
 
+  /**
+   * The tun device this service owns. It stays open until the tunnel goes down: libbox duplicates the fd
+   * the platform hands it, so its copy goes away with the engine, while this one is ours to close. Left
+   * open, the interface outlives the tunnel and every reconnect leaves another one behind.
+   */
+  private var tun: ParcelFileDescriptor? = null
+
   override fun onCreate() {
     super.onCreate()
     current = this
@@ -58,6 +66,9 @@ class MgVpnService : VpnService() {
 
   override fun onDestroy() {
     current = null
+    // the interface must not outlive the service that owns it
+    runCatching { tun?.close() }.onFailure { Log.w(TAG, "closing the tun: ${it.message}") }
+    tun = null
     super.onDestroy()
   }
 
@@ -227,7 +238,11 @@ class MgVpnService : VpnService() {
     builder.addDisallowedApplication(packageName)
 
     val descriptor = builder.establish() ?: throw IllegalStateException("VpnService.establish returned nothing")
-    val fd = descriptor.detachFd()
+    // the engine duplicates this fd, so replacing a tunnel means dropping ours - the old interface would
+    // otherwise stay up with its routes for as long as the process lives
+    tun?.close()
+    tun = descriptor
+    val fd = descriptor.fd
     Log.i(TAG, "tun established, fd=$fd")
     return fd
   }
@@ -263,6 +278,10 @@ class MgVpnService : VpnService() {
     } catch (error: Throwable) {
       Log.w(TAG, "closing the engine: ${error.message}")
     }
+    // after the engine is gone its duplicate is closed, and this is the only fd left holding the
+    // interface up
+    runCatching { tun?.close() }.onFailure { Log.w(TAG, "closing the tun: ${it.message}") }
+    tun = null
     Mgbox.stopCore()
     stopForeground(STOP_FOREGROUND_REMOVE)
     Log.i(TAG, "tunnel down")
