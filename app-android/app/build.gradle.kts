@@ -42,10 +42,36 @@ android {
     }
   }
 
+  androidResources {
+    // RuleSets.ensure opens these with openFd, which only works on an uncompressed asset. They are
+    // already compact binaries, so deflating them buys nothing anyway.
+    noCompress += "srs"
+  }
+
   packaging {
     resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
   }
 }
+
+// The routing rule-sets come from the same place the desktop gets them: tools/sing-box/, fetched by
+// scripts/get-singbox.ps1 against the SHA-256 pins in scripts/pins.json. They are copied into the
+// package rather than committed, so the phone routes by the same pinned list as the desktop.
+//
+// A missing file is deliberately not an error: a checkout that has not run get-singbox.ps1 still builds
+// an app that tunnels, it just has nothing to split on. The build says which ones it found.
+val ruleSetsDir = rootProject.layout.projectDirectory.dir("../tools/sing-box")
+val packRuleSets by tasks.registering(Copy::class) {
+  from(ruleSetsDir) { include("*.srs") }
+  into(layout.buildDirectory.dir("generated/ruleSets/rule-sets"))
+  doFirst {
+    val found = ruleSetsDir.asFile.listFiles { f -> f.name.endsWith(".srs") }?.map { it.name }.orEmpty()
+    if (found.isEmpty()) logger.lifecycle("rule-sets: none found in ${ruleSetsDir.asFile} - split mode will have no lists")
+    else logger.lifecycle("rule-sets: packaging ${found.joinToString(", ")}")
+  }
+}
+
+android.sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/ruleSets"))
+tasks.named("preBuild") { dependsOn(packRuleSets) }
 
 dependencies {
   // The core and the engine in one binding, built from the pinned sing-box commit by

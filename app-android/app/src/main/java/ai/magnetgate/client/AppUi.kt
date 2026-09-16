@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -90,6 +91,8 @@ fun AppRoot(
   // Where the egress check goes. A hermetic stand has no internet, so a run against one points this
   // at its own target (http://10.0.2.2:<port>/) instead of a public echo service.
   checkUrlExtra: String = "",
+  // Acceptance runs pick the routing mode on the command line; the screen still writes the store.
+  modeExtra: String = "",
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -108,6 +111,9 @@ fun AppRoot(
   var relays by remember { mutableStateOf(Settings.relays(context)) }
   var slots by remember { mutableStateOf(Settings.slots(context).joinToString(",")) }
   var excluded by remember { mutableStateOf(Settings.excluded(context).toSet()) }
+  var mode by remember { mutableStateOf(Settings.mode(context)) }
+  var directDomains by remember { mutableStateOf(Settings.directDomains(context).joinToString("\n")) }
+  var tunnelDomains by remember { mutableStateOf(Settings.tunnelDomains(context).joinToString("\n")) }
 
   val wantedBootstrap = bootstrapExtra.ifBlank { bootstrap }
   val wantedRelays = relaysExtra.ifBlank { relays }
@@ -123,7 +129,7 @@ fun AppRoot(
 
   val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     if (result.resultCode == Activity.RESULT_OK) {
-      startVpn(context, wantedBootstrap, wantedRelays, coreless)
+      startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
     } else {
       notice = "the VPN consent was refused"
       Log.w(TAG, "the user refused the VPN consent")
@@ -153,7 +159,7 @@ fun AppRoot(
       return
     }
     val consent = VpnService.prepare(context)
-    if (consent != null) vpnConsent.launch(consent) else startVpn(context, wantedBootstrap, wantedRelays, coreless)
+    if (consent != null) vpnConsent.launch(consent) else startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
   }
 
   if (autotest) {
@@ -161,7 +167,7 @@ fun AppRoot(
       if (coreless) {
         // diagnostic path: the engine alone, with no second Go runtime in the process
         val consent = VpnService.prepare(context)
-        if (consent != null) vpnConsent.launch(consent) else startVpn(context, wantedBootstrap, wantedRelays, true)
+        if (consent != null) vpnConsent.launch(consent) else startVpn(context, wantedBootstrap, wantedRelays, true, modeExtra)
         recordAutotest(context, "coreless vpn-requested")
         return@LaunchedEffect
       }
@@ -192,7 +198,7 @@ fun AppRoot(
           vpnConsent.launch(consent)
           Log.w(TAG, "AUTOTEST vpn=consent-required")
         } else {
-          startVpn(context, wantedBootstrap, wantedRelays, coreless)
+          startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
           Log.i(TAG, "AUTOTEST vpn=requested")
         }
       }
@@ -235,18 +241,27 @@ fun AppRoot(
         relays = relays,
         slots = slots,
         excluded = excluded,
+        mode = mode,
+        directDomains = directDomains,
+        tunnelDomains = tunnelDomains,
         notice = notice,
         onPsk = { psk = it },
         onBootstrap = { bootstrap = it },
         onRelays = { relays = it },
         onSlots = { slots = it },
         onExcluded = { excluded = it },
+        onMode = { mode = it },
+        onDirectDomains = { directDomains = it },
+        onTunnelDomains = { tunnelDomains = it },
         onSave = {
           Settings.setPsk(context, psk)
           Settings.setBootstrap(context, bootstrap)
           Settings.setRelays(context, relays)
           Settings.setSlots(context, Settings.parseSlots(slots))
           Settings.setExcluded(context, excluded)
+          Settings.setMode(context, mode)
+          Settings.setDirectDomains(context, directDomains)
+          Settings.setTunnelDomains(context, tunnelDomains)
           slots = Settings.parseSlots(slots).joinToString(",")
           notice = "settings saved"
         },
@@ -377,12 +392,18 @@ private fun SettingsScreen(
   relays: String,
   slots: String,
   excluded: Set<String>,
+  mode: Settings.Mode,
+  directDomains: String,
+  tunnelDomains: String,
   notice: String,
   onPsk: (String) -> Unit,
   onBootstrap: (String) -> Unit,
   onRelays: (String) -> Unit,
   onSlots: (String) -> Unit,
   onExcluded: (Set<String>) -> Unit,
+  onMode: (Settings.Mode) -> Unit,
+  onDirectDomains: (String) -> Unit,
+  onTunnelDomains: (String) -> Unit,
   onSave: () -> Unit,
   storeFailure: String?,
   pskFromFile: Boolean,
@@ -422,6 +443,41 @@ private fun SettingsScreen(
       singleLine = true,
       modifier = Modifier.fillMaxWidth(),
     )
+
+    Text("Routing", style = MaterialTheme.typography.titleMedium)
+    Text(
+      when (mode) {
+        Settings.Mode.FULL ->
+          "Everything goes through the tunnel. Only the domains listed below stay outside it."
+        Settings.Mode.SPLIT ->
+          "Only the blocked lists and the domains listed below go through the tunnel; the rest goes direct."
+      },
+      style = MaterialTheme.typography.bodySmall,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      for (option in Settings.Mode.entries) {
+        FilterChip(
+          selected = mode == option,
+          onClick = { onMode(option) },
+          label = { Text(if (option == Settings.Mode.FULL) "Full" else "Split") },
+        )
+      }
+    }
+    if (mode == Settings.Mode.SPLIT) {
+      OutlinedTextField(
+        value = tunnelDomains,
+        onValueChange = onTunnelDomains,
+        label = { Text("Through the tunnel (one per line)") },
+        modifier = Modifier.fillMaxWidth(),
+      )
+    } else {
+      OutlinedTextField(
+        value = directDomains,
+        onValueChange = onDirectDomains,
+        label = { Text("Outside the tunnel (one per line)") },
+        modifier = Modifier.fillMaxWidth(),
+      )
+    }
 
     if (pskFromFile) {
       Text(
@@ -587,12 +643,21 @@ private fun recordAutotest(context: Context, text: String) {
 }
 
 /** Hands the tunnel to the service, which owns the core and the engine while it runs. */
-private fun startVpn(context: Context, bootstrap: String, relays: String, coreless: Boolean) {
+private fun startVpn(
+  context: Context,
+  bootstrap: String,
+  relays: String,
+  coreless: Boolean,
+  // Empty means "use the stored setting"; an acceptance run overrides it without touching the store,
+  // the same way it overrides the discovery channels.
+  mode: String = "",
+) {
   val intent = Intent(context, MgVpnService::class.java)
     .setAction(MgVpnService.ACTION_START)
     .putExtra("bootstrap", bootstrap)
     .putExtra("relays", relays)
     .putExtra("coreless", coreless)
+    .putExtra("mode", mode)
   context.startForegroundService(intent)
 }
 

@@ -52,6 +52,20 @@ class MgVpnService : VpnService() {
   private var excludedPackages: List<String> = emptyList()
 
   /**
+   * The routing policy as it was when the tunnel came up. It is captured once rather than re-read on
+   * every engine reload: a reload happens because the set of nodes changed, and it must not quietly
+   * adopt a mode the user picked afterwards - that would move traffic without them reconnecting.
+   */
+  private data class Policy(
+    val mode: Settings.Mode = Settings.Mode.FULL,
+    val directDomains: List<String> = emptyList(),
+    val tunnelDomains: List<String> = emptyList(),
+    val ruleSets: List<RuleSets.Available> = emptyList(),
+  )
+
+  private var policy: Policy = Policy()
+
+  /**
    * The tun device this service owns. It stays open until the tunnel goes down: libbox duplicates the fd
    * the platform hands it, so its copy goes away with the engine, while this one is ours to close. Left
    * open, the interface outlives the tunnel and every reconnect leaves another one behind.
@@ -83,8 +97,9 @@ class MgVpnService : VpnService() {
     val bootstrap = intent?.getStringExtra("bootstrap").orEmpty().ifBlank { Settings.bootstrap(this) }
     val relays = intent?.getStringExtra("relays").orEmpty().ifBlank { Settings.relays(this) }
     val coreless = intent?.getBooleanExtra("coreless", false) == true
+    val modeExtra = intent?.getStringExtra("mode").orEmpty()
     try {
-      startTunnel(bootstrap, relays, coreless)
+      startTunnel(bootstrap, relays, coreless, modeExtra)
     } catch (error: Throwable) {
       Log.e(TAG, "the tunnel did not start: ${error.message}", error)
       stopTunnel()
@@ -100,7 +115,7 @@ class MgVpnService : VpnService() {
    *
    * It runs off the main thread: discovery takes seconds, and the service must not block the UI.
    */
-  private fun startTunnel(bootstrap: String, relays: String, coreless: Boolean) {
+  private fun startTunnel(bootstrap: String, relays: String, coreless: Boolean, modeExtra: String) {
     if (running || starting) return
     starting = true
     startForeground(NOTIFICATION_ID, notification("looking for a node"))
@@ -109,7 +124,17 @@ class MgVpnService : VpnService() {
         val port = if (coreless) 0 else startCoreAndWaitForNode(bootstrap, relays)
         val nodes = if (coreless) emptyList() else discoveredNodes()
         excludedPackages = Settings.excluded(this)
-        val built = SingBoxConfig.build(port, coreless, nodes, excludedPackages)
+        policy = Policy(
+          // an acceptance run may name the mode; otherwise the stored setting decides
+          mode = if (modeExtra.isBlank()) Settings.mode(this) else Settings.Mode.of(modeExtra),
+          directDomains = Settings.directDomains(this),
+          tunnelDomains = Settings.tunnelDomains(this),
+          ruleSets = RuleSets.ensure(this),
+        )
+        val built = SingBoxConfig.build(
+          port, coreless, nodes, excludedPackages,
+          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets,
+        )
 
         Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
         Mgbox.startEngine(built.json, MgTunPlatform(this))
@@ -119,7 +144,12 @@ class MgVpnService : VpnService() {
         running = true
         corePort = port
         watching = true
-        Log.i(TAG, "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size}, excluded apps ${excludedPackages.size})")
+        Log.i(
+          TAG,
+          "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size}, " +
+            "excluded apps ${excludedPackages.size}, mode ${policy.mode.stored}, " +
+            "rule-sets ${policy.ruleSets.size}, direct ${policy.directDomains.size}, tunnel ${policy.tunnelDomains.size})",
+        )
         notify(notification("connected"))
         watchNodes()
       } catch (error: Throwable) {
@@ -149,7 +179,10 @@ class MgVpnService : VpnService() {
       signature = next
       try {
         val nodes = discoveredNodes()
-        val built = SingBoxConfig.build(corePort, false, nodes, excludedPackages)
+        val built = SingBoxConfig.build(
+          corePort, false, nodes, excludedPackages,
+          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets,
+        )
         Mgbox.forgetPlaneSocksPorts()
         Mgbox.reloadEngine(built.json)
         for (plane in built.planes) {

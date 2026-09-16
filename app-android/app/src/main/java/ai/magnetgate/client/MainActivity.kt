@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
             bootstrapExtra = extras?.getStringExtra("bootstrap").orEmpty(),
             relaysExtra = extras?.getStringExtra("relays").orEmpty(),
             checkUrlExtra = extras?.getStringExtra("checkurl").orEmpty(),
+            modeExtra = extras?.getStringExtra("mode").orEmpty(),
           )
         }
       }

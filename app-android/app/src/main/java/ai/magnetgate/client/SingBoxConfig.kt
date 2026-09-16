@@ -30,6 +30,10 @@ object SingBoxConfig {
     coreless: Boolean,
     nodes: List<DiscoveredNode> = emptyList(),
     excludePackages: List<String> = emptyList(),
+    mode: Settings.Mode = Settings.Mode.FULL,
+    directDomains: List<String> = emptyList(),
+    tunnelDomains: List<String> = emptyList(),
+    ruleSets: List<RuleSets.Available> = emptyList(),
   ): Built {
     val outbounds = JSONArray()
     val planeInbounds = JSONArray()
@@ -103,6 +107,36 @@ object SingBoxConfig {
         )
         .put("final", "remote"),
     )
+    // ---- routing policy, the same shape as the desktop's app/vpn-config.cjs -------------------------
+    //
+    // Everything above this point is plumbing: the per-plane rules that map each loopback listener to the
+    // node it belongs to, and which must stay first so a plane's own traffic is never re-routed by the
+    // rules below. What follows is the policy a user actually chooses.
+    //
+    // FULL  - the tunnel takes everything, and only the domains the user named go direct. A packaged
+    //         list is never consulted here: a bundled file must not silently bypass the tunnel, whatever
+    //         it is called. This is the safe default.
+    // SPLIT - the tunnel takes what the rule-sets and the user's tunnel list name; the rest goes direct.
+    val ruleSetDefs = JSONArray()
+    if (mode == Settings.Mode.SPLIT) {
+      for (set in ruleSets) {
+        ruleSetDefs.put(
+          JSONObject()
+            .put("type", "local")
+            .put("tag", set.tag)
+            .put("format", "binary")
+            .put("path", set.path),
+        )
+        rules.put(JSONObject().put("rule_set", JSONArray().put(set.tag)).put("outbound", "core"))
+      }
+      if (tunnelDomains.isNotEmpty())
+        rules.put(JSONObject().put("domain_suffix", JSONArray(tunnelDomains)).put("outbound", "core"))
+    } else if (directDomains.isNotEmpty()) {
+      rules.put(JSONObject().put("domain_suffix", JSONArray(directDomains)).put("outbound", "direct"))
+    }
+    // A private address is the local network, never something an exit could reach for us.
+    rules.put(JSONObject().put("ip_is_private", true).put("outbound", "direct"))
+
     config.put("inbounds", inbounds)
     config.put("outbounds", outbounds)
     config.put(
@@ -110,7 +144,9 @@ object SingBoxConfig {
       JSONObject()
         // per-plane rules first, so the core's own listener maps to the node it belongs to
         .put("rules", rules)
-        .put("final", "core")
+        .apply { if (ruleSetDefs.length() > 0) put("rule_set", ruleSetDefs) }
+        // what nothing matched: in split mode that is the open internet, in full mode it is the tunnel
+        .put("final", if (mode == Settings.Mode.SPLIT) "direct" else "core")
         .put("auto_detect_interface", false),
     )
     return Built(config.toString(2), planes)

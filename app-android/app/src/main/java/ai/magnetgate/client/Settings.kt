@@ -29,6 +29,9 @@ object Settings {
   private const val KEY_RELAYS = "relays"
   private const val KEY_SLOTS = "slots"
   private const val KEY_EXCLUDED = "excluded"
+  private const val KEY_MODE = "mode"
+  private const val KEY_DIRECT_DOMAINS = "directDomains"
+  private const val KEY_TUNNEL_DOMAINS = "tunnelDomains"
 
   @Volatile
   private var cached: SharedPreferences? = null
@@ -112,6 +115,60 @@ object Settings {
   fun setExcluded(context: Context, packages: Collection<String>) {
     open(context)?.edit()?.putStringSet(KEY_EXCLUDED, packages.toSet())?.apply()
   }
+
+  /**
+   * How much traffic the tunnel takes, mirroring the desktop's two modes (app/vpn-config.cjs):
+   *
+   *  - [Mode.FULL]  everything goes through the tunnel; only the domains the user lists explicitly go
+   *                 direct. A bundled list must never silently bypass the tunnel, whatever it is called.
+   *  - [Mode.SPLIT] only what the rule-sets and the user's tunnel list name goes through the tunnel,
+   *                 everything else goes direct.
+   */
+  enum class Mode(val stored: String) {
+    FULL("full"),
+    SPLIT("split"),
+    ;
+
+    companion object {
+      fun of(value: String): Mode = entries.firstOrNull { it.stored == value } ?: FULL
+    }
+  }
+
+  fun mode(context: Context): Mode = Mode.of(get(context, KEY_MODE, Mode.FULL.stored))
+
+  fun setMode(context: Context, mode: Mode) = put(context, KEY_MODE, mode.stored)
+
+  /** Domains the tunnel must leave alone (full mode); the user's explicit exceptions. */
+  fun directDomains(context: Context): List<String> = parseDomains(get(context, KEY_DIRECT_DOMAINS))
+
+  fun setDirectDomains(context: Context, value: String) =
+    put(context, KEY_DIRECT_DOMAINS, parseDomains(value).joinToString(SEPARATOR))
+
+  /** Domains that must go through the tunnel (split mode), on top of the rule-sets. */
+  fun tunnelDomains(context: Context): List<String> = parseDomains(get(context, KEY_TUNNEL_DOMAINS))
+
+  fun setTunnelDomains(context: Context, value: String) =
+    put(context, KEY_TUNNEL_DOMAINS, parseDomains(value).joinToString(SEPARATOR))
+
+  /**
+   * Mirrors `domains()` in src/config.cjs: lowercase, a leading `*.` and a trailing dot dropped, and
+   * anything that is not a plausible host name silently ignored rather than fed to the engine, which
+   * would reject the whole configuration over one typo.
+   */
+  fun parseDomains(value: String): List<String> =
+    value
+      .split(',', ' ', '\n', '\r', '\t')
+      .asSequence()
+      .map { it.trim().lowercase().removePrefix("*.").removeSuffix(".") }
+      .filter { it.isNotEmpty() && it.length <= 253 && DOMAIN.matches(it) }
+      .distinct()
+      .take(MAX_DOMAINS)
+      .toList()
+
+  // stored one per line; the parser accepts commas and spaces too, so a paste of either works
+  private const val SEPARATOR = "\n"
+  private val DOMAIN = Regex("^[a-z0-9_.-]+$")
+  private const val MAX_DOMAINS = 10000
 
   /**
    * The rendezvous slot range: the same bound as MAX_SLOTS in src/common.mjs and MaxSlots in
