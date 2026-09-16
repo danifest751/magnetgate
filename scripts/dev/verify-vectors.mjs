@@ -11,6 +11,9 @@ import {
   targetOf,
   seal,
   unseal,
+  frame2,
+  makeCodecV2,
+  FRAME,
   OFFER_SCHEMA,
   MAX_SLOTS
 } from '../../src/common.mjs'
@@ -51,22 +54,24 @@ function goRun(args, { psk, slot, domain, input } = {}) {
 
 function buildClis(binDir) {
   // built once instead of `go run` per case: same result, a fifth of the time
-  execFileSync(go, ['build', '-o', path.join(binDir, 'seal.exe'), './cmd/seal'], { cwd: coreDir })
-  execFileSync(go, ['build', '-o', path.join(binDir, 'unseal.exe'), './cmd/unseal'], { cwd: coreDir })
-  return {
-    seal: path.join(binDir, 'seal.exe'),
-    unseal: path.join(binDir, 'unseal.exe')
+  const build = (name) => {
+    const out = path.join(binDir, `${name}.exe`)
+    execFileSync(go, ['build', '-o', out, `./cmd/${name}`], { cwd: coreDir })
+    return out
   }
+  return { seal: build('seal'), unseal: build('unseal'), frame: build('frame') }
 }
 
-function runBin(bin, { psk, slot, domain, input }) {
+function runBin(bin, { psk, slot, domain, input, args = [] }) {
   try {
-    const out = execFileSync(bin, [], {
+    const out = execFileSync(bin, args, {
       cwd: coreDir,
       input,
       env: { ...process.env, MG_PSK: psk, MG_SLOT: String(slot ?? 0), MG_DOMAIN: domain ?? '' },
       encoding: 'utf8',
-      maxBuffer: 8 * 1024 * 1024
+      maxBuffer: 8 * 1024 * 1024,
+      // rejections are expected in several checks: keep their stderr out of the report
+      stdio: ['pipe', 'pipe', 'ignore']
     })
     return { code: 0, out }
   } catch (err) {
@@ -134,6 +139,81 @@ function main() {
       runBin(cli.unseal, { psk: 'another-psk', slot: 0, domain: '42', input: env.toString('hex') }).code === 1,
       'Go отвергает чужой PSK'
     )
+
+    console.log('=== 4. кадры: длины совпадают с векторами ===')
+    for (const c of vectors.frameLengths) {
+      const payload = Buffer.alloc(c.plainLen, 7)
+      const data = frame2(boxKey, FRAME.DATA, 1, payload, 0n)
+      const open = frame2(boxKey, FRAME.OPEN, 1, payload, 0n)
+      check(data.length === c.data, `DATA ${c.plainLen} Б → ${c.data} Б (Node)`)
+      check(open.length === c.open, `OPEN ${c.plainLen} Б → ${c.open} Б (Node)`)
+    }
+    for (const plainLen of [0, 63, 4095]) {
+      const payload = Buffer.alloc(plainLen, 7)
+      const goData = runBin(cli.frame, {
+        psk: PSK,
+        input: payload.toString(),
+        args: ['-mode=encode', `-type=${FRAME.DATA}`, '-id=1', '-seq=0']
+      })
+      const want = vectors.frameLengths.find((c) => c.plainLen === plainLen).data
+      check(goData.code === 0 && goData.out.trim().length === want * 2, `Go собирает DATA ${plainLen} Б той же длины`)
+    }
+
+    console.log('=== 5. кадры: Node ⇄ Go (обе стороны) ===')
+    const payload = Buffer.alloc(517, 9) // the TLS ClientHello size that once broke framing
+    const nodeFrame = frame2(boxKey, FRAME.DATA, 1, payload, 0n)
+    const goDecoded = runBin(cli.frame, { psk: PSK, input: nodeFrame.toString('hex'), args: ['-mode=decode'] })
+    check(
+      goDecoded.code === 0 && goDecoded.out.trim() === `${FRAME.DATA} 1 ${payload.toString('hex')}`,
+      'Go декодирует кадр Node (DATA 517 Б, включая паддинг)',
+      goDecoded.out
+    )
+
+    const goFrame = runBin(cli.frame, {
+      psk: PSK,
+      input: payload.toString(),
+      args: ['-mode=encode', `-type=${FRAME.DATA}`, '-id=1', '-seq=0']
+    })
+    check(goFrame.code === 0, 'Go собрал кадр', goFrame.out)
+    const decoded = []
+    let killed = false
+    const codec = makeCodecV2(boxKey, (type, id, body) => decoded.push({ type, id, body }), () => {
+      killed = true
+    })
+    codec.push(Buffer.from(goFrame.out.trim(), 'hex'))
+    check(
+      !killed && decoded.length === 1 && decoded[0].type === FRAME.DATA && decoded[0].id === 1 &&
+        decoded[0].body.toString('hex') === payload.toString('hex'),
+      'Node декодирует кадр Go (кодек v4 с проверкой счётчика)'
+    )
+
+    console.log('=== 6. кадры: отказы ===')
+    const replayed = frame2(boxKey, FRAME.OPEN, 1, payload, 5n) // sequence 5 where 0 is expected
+    check(
+      runBin(cli.frame, { psk: PSK, input: replayed.toString('hex'), args: ['-mode=decode'] }).code === 1,
+      'Go отвергает кадр с чужим счётчиком'
+    )
+    const oneFrame = frame2(boxKey, FRAME.OPEN, 1, payload, 0n)
+    const killed2 = []
+    let killedNode = false
+    const codec2 = makeCodecV2(boxKey, (t, i, b) => killed2.push(b), () => {
+      killedNode = true
+    })
+    codec2.push(oneFrame)
+    codec2.push(oneFrame) // the same frame twice
+    check(killedNode && killed2.length === 1, 'Node отвергает повтор кадра')
+    const badType = runBin(cli.frame, {
+      psk: PSK,
+      input: payload.toString(),
+      args: ['-mode=encode', '-type=99', '-id=1', '-seq=0']
+    })
+    check(badType.code === 1, 'Go отказывается собирать кадр неизвестного типа')
+    const badStream = runBin(cli.frame, {
+      psk: PSK,
+      input: '',
+      args: [`-mode=encode`, `-type=${FRAME.PING}`, '-id=3', '-seq=0']
+    })
+    check(badStream.code === 1, 'Go отказывается собирать ping со streamId != 0')
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

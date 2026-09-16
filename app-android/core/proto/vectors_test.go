@@ -1,6 +1,7 @@
 package proto
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -18,17 +19,25 @@ type vectors struct {
 		OfferSchema     int `json:"offerSchema"`
 		MaxSlots        int `json:"maxSlots"`
 		MaxSealDomain   int `json:"maxSealDomain"`
+		FrameHeaderSize int `json:"frameHeaderSize"`
+		MaxFrameBytes   int `json:"maxFrameBytes"`
+		MinFrameLength  int `json:"minFrameLength"`
 	} `json:"constants"`
+	FrameLengths []struct {
+		PlainLen int `json:"plainLen"`
+		Data     int `json:"data"`
+		Open     int `json:"open"`
+	} `json:"frameLengths"`
 	Keys struct {
 		Pk     string `json:"pk"`
 		BoxKey string `json:"boxKey"`
 		Salt0  string `json:"salt0"`
 	} `json:"keys"`
 	Slots []struct {
-		Slot    int    `json:"slot"`
-		Salt    string `json:"salt"`
-		Target  string `json:"target"`
-		BoxKey  string `json:"boxKey"`
+		Slot   int    `json:"slot"`
+		Salt   string `json:"salt"`
+		Target string `json:"target"`
+		BoxKey string `json:"boxKey"`
 	} `json:"slots"`
 }
 
@@ -129,6 +138,45 @@ func TestProtocolConstantsMatchTheVectors(t *testing.T) {
 	}
 	if v.Constants.MaxSealDomain != MaxSealDomain {
 		t.Errorf("seal domain drift: code %d, vectors %d", MaxSealDomain, v.Constants.MaxSealDomain)
+	}
+	if v.Constants.FrameHeaderSize != FrameHeaderSize() {
+		t.Errorf("frame header drift: code %d, vectors %d", FrameHeaderSize(), v.Constants.FrameHeaderSize)
+	}
+	if v.Constants.MaxFrameBytes != MaxFrameBytes {
+		t.Errorf("frame limit drift: code %d, vectors %d", MaxFrameBytes, v.Constants.MaxFrameBytes)
+	}
+	if v.Constants.MinFrameLength != MinFrameLength {
+		t.Errorf("minimum frame drift: code %d, vectors %d", MinFrameLength, v.Constants.MinFrameLength)
+	}
+}
+
+// Frame sizes must quantise exactly as the Node implementation does, otherwise a peer sees a different
+// wire shape (and the old 517-byte ClientHello bug class becomes possible again).
+func TestFrameLengthsMatchNodeImplementation(t *testing.T) {
+	v := loadVectors(t)
+	keys, err := DeriveKeys(v.Psk)
+	if err != nil {
+		t.Fatalf("derive: %v", err)
+	}
+	if len(v.FrameLengths) == 0 {
+		t.Fatal("the vectors carry no frame lengths (regenerate with scripts/dev/gen-vectors.mjs)")
+	}
+	for _, c := range v.FrameLengths {
+		plain := bytes.Repeat([]byte{7}, c.PlainLen)
+		data, err := EncodeFrame(&keys.BoxKey, FrameData, 1, plain, 0)
+		if err != nil {
+			t.Fatalf("data frame of %d bytes: %v", c.PlainLen, err)
+		}
+		if len(data) != c.Data {
+			t.Errorf("DATA frame of %d bytes: got %d, want %d", c.PlainLen, len(data), c.Data)
+		}
+		open, err := EncodeFrame(&keys.BoxKey, FrameOpen, 1, plain, 0)
+		if err != nil {
+			t.Fatalf("open frame of %d bytes: %v", c.PlainLen, err)
+		}
+		if len(open) != c.Open {
+			t.Errorf("OPEN frame of %d bytes: got %d, want %d", c.PlainLen, len(open), c.Open)
+		}
 	}
 }
 

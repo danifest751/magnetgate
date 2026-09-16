@@ -20,7 +20,7 @@ import (
 const (
 	EnvelopeVersion = 4
 	MaxSealDomain   = 64
-	MinEnvelope     = 43   // 1 + 24 + 16 + 2
+	MinEnvelope     = 43 // 1 + 24 + 16 + 2
 	MaxEnvelope     = 65536
 )
 
