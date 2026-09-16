@@ -108,7 +108,7 @@ func TestPollRecordsTheOfferAndItsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("poll: %v", err)
 	}
-	if record.Node != "lab-a" || record.Seq != 1 {
+	if record.Node != "lab-a" || record.Seq != "1" {
 		t.Fatalf("record: %+v", record)
 	}
 	endpoints := a.Endpoints()
@@ -135,6 +135,22 @@ func TestPeerSlotsAreLearnedAndThenPolled(t *testing.T) {
 	endpoints := a.Endpoints()
 	if len(endpoints) != 2 || endpoints[1].Port != 29602 {
 		t.Fatalf("endpoints: %+v", endpoints)
+	}
+}
+
+// A slot learned from an offer must be polled in the same pass. Leaving it for the next pass means up to
+// half a minute where the client does not know about a node the offer just told it about, which is
+// exactly when a failover needs it.
+func TestALearnedSlotIsPolledInTheSamePass(t *testing.T) {
+	channel := newFakeChannel()
+	channel.put(t, testPSK, 0, 1, offerDoc(0, "lab-a", []map[string]any{{"slot": 1, "ts": 1}}, 29601))
+	channel.put(t, testPSK, 1, 1, offerDoc(1, "lab-b", nil, 29602))
+	a := newTestAgent(t, channel, 0)
+
+	var seen []int
+	a.PollOnce(context.Background(), func(record *Record) { seen = append(seen, record.Slot) })
+	if len(seen) != 2 || seen[0] != 0 || seen[1] != 1 {
+		t.Fatalf("the learned slot was not picked up in the same pass: %v", seen)
 	}
 }
 
@@ -285,6 +301,139 @@ func TestOffersFromTheFutureAreRefusedBeyondTheSkew(t *testing.T) {
 	b := newTestAgent(t, far, 0)
 	if _, err := b.Poll(context.Background(), 0); err == nil {
 		t.Fatal("an offer dated minutes in the future must be refused")
+	}
+}
+
+// fakePush is a push channel whose delivery the test controls.
+type fakePush struct {
+	mu      sync.Mutex
+	watched map[int]func([]byte, string)
+	calls   []int
+}
+
+func newFakePush() *fakePush { return &fakePush{watched: map[int]func([]byte, string){}} }
+
+func (f *fakePush) Watch(slot int, onOffer func([]byte, string)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.watched[slot] = onOffer
+	f.calls = append(f.calls, slot)
+	return nil
+}
+
+func (f *fakePush) deliver(slot int, plain []byte, seq string) bool {
+	f.mu.Lock()
+	handler := f.watched[slot]
+	f.mu.Unlock()
+	if handler == nil {
+		return false
+	}
+	handler(plain, seq)
+	return true
+}
+
+func (f *fakePush) slots() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.calls...)
+}
+
+// A pushed offer takes exactly the same path as a polled one: it becomes a record, its freshness is the
+// offer's own timestamp, and the slots it advertises are learned — including over the push channel.
+func TestPushedOffersBecomeRecordsAndTeachSlots(t *testing.T) {
+	push := newFakePush()
+	agent, err := New(Config{
+		PSK:    testPSK,
+		Slots:  []int{0},
+		Getter: newFakeChannel(), // nothing on the request/response channel
+		Push:   push,
+		Fast:   5 * time.Millisecond,
+		Slow:   5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+
+	records := make(chan *Record, 8)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.Run(ctx, func(record *Record) { records <- record })
+
+	// wait until the agent has subscribed slot 0
+	deadline := time.Now().Add(3 * time.Second)
+	for len(push.slots()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the push channel was never subscribed")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	doc, err := json.Marshal(offerDoc(0, "lab-b", []map[string]any{{"slot": 1, "ts": 1}}, 29602))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !push.deliver(0, doc, "n5") {
+		t.Fatal("slot 0 was not being watched")
+	}
+
+	select {
+	case record := <-records:
+		if record.Node != "lab-b" || record.Seq != "n5" {
+			t.Fatalf("record: %+v", record)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the pushed offer never became a record")
+	}
+
+	// slot 1 was advertised in the offer, so it must be watched too — and its key is its own
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		slots := push.slots()
+		found := false
+		for _, slot := range slots {
+			if slot == 1 {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("slot 1 was never watched: %v", slots)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// The push channel is not exempt from the freshness rule: a relay can hand over a record that is
+// correctly sealed and long dead.
+func TestPushedStaleOfferIsRefused(t *testing.T) {
+	push := newFakePush()
+	agent, err := New(Config{PSK: testPSK, Slots: []int{0}, Getter: newFakeChannel(), Push: push,
+		Fast: 5 * time.Millisecond, Slow: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.Run(ctx, nil)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for len(push.slots()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the push channel was never subscribed")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	stale, err := json.Marshal(offerDocAt(time.Now().Add(-time.Hour).UnixMilli(), 0, "lab-a", 29601))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	push.deliver(0, stale, "n5")
+	time.Sleep(50 * time.Millisecond)
+	if len(agent.Records()) != 0 {
+		t.Fatalf("a stale pushed offer must not be recorded: %+v", agent.Records())
 	}
 }
 

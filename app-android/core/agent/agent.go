@@ -43,8 +43,10 @@ type Getter interface {
 
 // Record is one node as this client currently sees it.
 type Record struct {
-	Slot    int
-	Seq     int64
+	Slot int
+	// Seq is the domain the envelope was sealed with, kept verbatim: the DHT channel publishes under a
+	// numeric sequence and the Nostr channel under "n"+sequence, and both are strings on the wire.
+	Seq     string
 	Node    string
 	Country string
 	Offer   *offer.Offer
@@ -58,11 +60,19 @@ type Endpoint struct {
 	Port int
 }
 
+// PushChannel is a rendezvous channel that hands offers over without being asked. The agent treats a
+// pushed offer exactly like a polled one — same parse, same freshness rule, same merge — so a node is
+// usable the moment a relay passes the event on instead of at the next poll.
+type PushChannel interface {
+	Watch(slot int, onOffer func(plain []byte, seq string)) error
+}
+
 // Config is what an agent needs to run.
 type Config struct {
 	PSK      string
 	Slots    []int
 	Getter   Getter
+	Push     PushChannel
 	MaxSlots int
 	Fresh    time.Duration
 	Fast     time.Duration
@@ -81,12 +91,13 @@ type Agent struct {
 	mu      sync.Mutex
 	records map[int]*Record
 	slots   map[int]bool
+	watched map[int]bool
 }
 
 // New derives the keys and prepares the slot set. The first poll is the caller's job, so a caller that
 // wants a different cadence can drive it.
 func New(cfg Config) (*Agent, error) {
-	if cfg.Getter == nil {
+	if cfg.Getter == nil && cfg.Push == nil {
 		return nil, errors.New("agent: no rendezvous channel")
 	}
 	if cfg.PSK == "" {
@@ -121,6 +132,7 @@ func New(cfg Config) (*Agent, error) {
 		logf:    cfg.Logf,
 		records: make(map[int]*Record),
 		slots:   make(map[int]bool),
+		watched: make(map[int]bool),
 	}
 	for _, slot := range cfg.Slots {
 		if err := proto.ValidSlot(slot); err != nil {
@@ -181,30 +193,48 @@ func (a *Agent) Endpoints() []Endpoint {
 // PollOnce polls every known slot once and hands each fresh record to onRecord (which may be nil). It
 // returns whether any slot is still missing or stale, which is what picks the next interval.
 //
-// A slot that is not published yet is not an error, it is the normal state before a node comes up; any
-// other failure is logged. Slots learned from `peers` join the rotation on the next pass.
+// A slot is not an error: one that is not published yet is the normal state before a node comes up, and
+// any other failure is logged. Slots learned from `peers` while this pass is running are polled in the
+// same pass — waiting for the next one would mean up to half a minute of not knowing about a node the
+// offer just told us about.
 func (a *Agent) PollOnce(ctx context.Context, onRecord func(*Record)) (missing bool) {
-	for _, slot := range a.Slots() {
-		record, err := a.Poll(ctx, slot)
-		if err != nil {
-			if !errors.Is(err, ErrNotPublished) {
-				a.logf("slot %d: %v", slot, err)
+	polled := make(map[int]bool)
+	for {
+		fresh := false
+		for _, slot := range a.Slots() {
+			if polled[slot] {
+				continue
 			}
-			missing = true
-			continue
+			fresh = true
+			polled[slot] = true
+			record, err := a.Poll(ctx, slot)
+			if err != nil {
+				if !errors.Is(err, ErrNotPublished) {
+					a.logf("slot %d: %v", slot, err)
+				}
+				missing = true
+				continue
+			}
+			if onRecord != nil {
+				onRecord(record)
+			}
 		}
-		if onRecord != nil {
-			onRecord(record)
+		if !fresh {
+			// polling turned up no new slot, so there is nothing left to do in this pass
+			return missing
 		}
 	}
-	return missing
 }
 
 // Run polls until ctx is done: at the fast interval while a slot is missing or stale, at the slow one
 // once every slot carries a fresh offer. This is how an app keeps its view of the exit set current
 // without hammering the DHT, and why a node that has just come up is noticed quickly.
+//
+// A push channel, when there is one, is subscribed for every known slot as well: its offers arrive
+// between polls and go through exactly the same ingest path.
 func (a *Agent) Run(ctx context.Context, onRecord func(*Record)) {
 	for {
+		a.watchPush(onRecord)
 		missing := a.PollOnce(ctx, onRecord)
 		delay := a.cfg.Slow
 		if missing {
@@ -218,14 +248,59 @@ func (a *Agent) Run(ctx context.Context, onRecord func(*Record)) {
 	}
 }
 
+// watchPush subscribes any slot the push channel is not watching yet. A slot learned from `peers` is
+// picked up on the next pass; re-subscribing a slot that is already watched would only make the relay
+// resend what it holds.
+func (a *Agent) watchPush(onRecord func(*Record)) {
+	if a.cfg.Push == nil {
+		return
+	}
+	for _, slot := range a.Slots() {
+		a.mu.Lock()
+		watched := a.watched[slot]
+		if !watched {
+			a.watched[slot] = true
+		}
+		a.mu.Unlock()
+		if watched {
+			continue
+		}
+		slot := slot
+		err := a.cfg.Push.Watch(slot, func(plain []byte, seq string) {
+			record, err := a.ingest(slot, plain, seq)
+			if err != nil {
+				a.logf("slot %d (push): %v", slot, err)
+				return
+			}
+			// a pushed offer is the same event as a polled one, so a caller may see the same record twice
+			// (the generation is unchanged); merging makes that harmless
+			if onRecord != nil {
+				onRecord(record)
+			}
+		})
+		if err != nil {
+			a.mu.Lock()
+			a.watched[slot] = false
+			a.mu.Unlock()
+			a.logf("slot %d: subscribing to the push channel failed: %v", slot, err)
+			continue
+		}
+		a.logf("slot %d: watching the push channel", slot)
+	}
+}
+
 // ErrNotPublished is what a poll returns when the channel has nothing for that slot yet.
 var ErrNotPublished = errors.New("agent: slot not published")
 
-// Poll reads one slot, unseals the offer and folds it into the record held for that slot. Further slots
-// a node advertises in `peers` are added to the agent.
+// Poll reads one slot over the request/response channel, unseals the offer and folds it in. Further
+// slots a node advertises in `peers` are added to the agent.
 func (a *Agent) Poll(ctx context.Context, slot int) (*Record, error) {
 	if err := proto.ValidSlot(slot); err != nil {
 		return nil, err
+	}
+	if a.cfg.Getter == nil {
+		// a deployment that only has the push channel: polling is simply not a thing it can do
+		return nil, fmt.Errorf("%w: no request/response channel", ErrNotPublished)
 	}
 	salt, err := proto.SlotSalt(a.cfg.PSK, slot)
 	if err != nil {
@@ -239,11 +314,19 @@ func (a *Agent) Poll(ctx context.Context, slot int) (*Record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNotPublished, err)
 	}
-	// the sequence is the domain the envelope was sealed with, so a record and its seq travel together
-	plain := proto.Unseal(&key, value, strconv.FormatInt(seq, 10))
+	// the sequence is the domain the envelope was sealed with, so a record and its sequence travel
+	// together — a caller never sees one without the other
+	domain := strconv.FormatInt(seq, 10)
+	plain := proto.Unseal(&key, value, domain)
 	if plain == nil {
-		return nil, fmt.Errorf("agent: slot %d: the envelope did not unseal at seq %d", slot, seq)
+		return nil, fmt.Errorf("agent: slot %d: the envelope did not unseal at seq %s", slot, domain)
 	}
+	return a.ingest(slot, plain, domain)
+}
+
+// ingest is the one path every channel goes through: parse the offer, check that it is fresh by its own
+// timestamp, merge it with what is already held and learn the slots the node advertises.
+func (a *Agent) ingest(slot int, plain []byte, seq string) (*Record, error) {
 	var incoming offer.Offer
 	if err := json.Unmarshal(plain, &incoming); err != nil {
 		return nil, fmt.Errorf("agent: slot %d: offer is not JSON: %w", slot, err)

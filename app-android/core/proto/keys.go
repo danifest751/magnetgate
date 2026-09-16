@@ -5,12 +5,17 @@
 package proto
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
+	"github.com/btcsuite/btcd/btcec/v2"
+	"github.com/btcsuite/btcd/btcec/v2/schnorr"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -98,6 +103,56 @@ func TargetOf(pk [32]byte, salt []byte) []byte {
 	h.Write(pk[:])
 	h.Write(salt)
 	return h.Sum(nil)
+}
+
+// NostrKeys mirrors nostrKeys() in src/nostr.mjs: the second rendezvous channel has its own identity,
+// a secp256k1 keypair whose secret is SHA-256("mgt-nostr:" + secret). It serves both as the author an
+// exit signs events with and as the author filter a subscriber asks relays for, so the two sides must
+// derive the same x-only public key.
+func NostrKeys(secret string) (sk []byte, publicKeyHex string, err error) {
+	sum := sha256.Sum256([]byte("mgt-nostr:" + secret))
+	_, public := btcec.PrivKeyFromBytes(sum[:])
+	return sum[:], hex.EncodeToString(schnorr.SerializePubKey(public)), nil
+}
+
+// NostrTagOf mirrors nostrTagOf(): the `d` tag of the replaceable event a node publishes under.
+//
+// It MUST differ per slot — a relay keeps one event per (author, kind, d), so two nodes sharing a PSK
+// would otherwise overwrite each other and only the last writer would survive — while slot 0 keeps the
+// original derivation so an existing deployment does not have to migrate.
+func NostrTagOf(secret string, slot int) (string, error) {
+	if err := ValidSlot(slot); err != nil {
+		return "", err
+	}
+	domain := "mgt-nostr-d:" + secret
+	if slot != 0 {
+		domain = fmt.Sprintf("mgt-nostr-d:%d:%s", slot, secret)
+	}
+	sum := sha256.Sum256([]byte(domain))
+	return hex.EncodeToString(sum[:])[:32], nil
+}
+
+// NostrVerify checks an event the way a relay does: the id is SHA-256 over the compact JSON of
+// [0, pubkey, created_at, kind, tags, content] and the signature is BIP-340 over that id. The envelope
+// MAC is what actually authenticates an offer; this only settles that the event is not relay garbage.
+func NostrVerify(publicKeyHex string, id, sig, signedData []byte) bool {
+	sum := sha256.Sum256(signedData)
+	if !bytes.Equal(sum[:], id) {
+		return false
+	}
+	public, err := hex.DecodeString(publicKeyHex)
+	if err != nil {
+		return false
+	}
+	point, err := schnorr.ParsePubKey(public)
+	if err != nil {
+		return false
+	}
+	signature, err := schnorr.ParseSignature(sig)
+	if err != nil {
+		return false
+	}
+	return signature.Verify(sum[:], point)
 }
 
 // VerifyDetached mirrors bep44Verify(): standard ed25519 with libsodium-compatible layout, so records

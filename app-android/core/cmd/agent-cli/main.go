@@ -32,6 +32,7 @@ import (
 
 	"magnetgate/core/agent"
 	"magnetgate/core/dht"
+	"magnetgate/core/nostr"
 	"magnetgate/core/offer"
 	"magnetgate/core/pool"
 	"magnetgate/core/proto"
@@ -45,6 +46,7 @@ func main() {
 	exitAddr := flag.String("exit", "", "native endpoint of a known exit, host:port (skips the rendezvous)")
 	slotsFlag := flag.String("slots", "0", "node slots to poll from the rendezvous, comma separated")
 	bootstrap := flag.String("bootstrap", "", "DHT bootstrap nodes, host:port[,host:port...]")
+	relays := flag.String("relays", "", "Nostr relays to subscribe to, comma separated (the second channel)")
 	socksPort := flag.Int("socks-port", 0, "loopback SOCKS5 port, 0 picks a free one")
 	var checks stringList
 	flag.Var(&checks, "check", "fetch this URL through the tunnel and print the result (repeatable)")
@@ -94,10 +96,10 @@ func main() {
 		go keepSeeding(ctx, plane, node)
 		fmt.Printf("exit slot 0 at %s:%d\n", host, port)
 	} else {
-		if *bootstrap == "" {
-			fail(errors.New("either -exit or -bootstrap is required"))
+		if *bootstrap == "" && *relays == "" {
+			fail(errors.New("either -exit, or -bootstrap and/or -relays is required"))
 		}
-		if err := startRendezvous(ctx, plane, psk, *slotsFlag, *bootstrap, *discover, logf); err != nil {
+		if err := startRendezvous(ctx, plane, psk, *slotsFlag, *bootstrap, *relays, *discover, logf); err != nil {
 			fail(err)
 		}
 		for _, node := range plane.Nodes() {
@@ -124,7 +126,9 @@ func main() {
 
 	failed := runChecks(ctx, server.Addr().String(), checks, *every, *hold, *timeout)
 
-	if *hold > 0 {
+	// with -every the hold is the check window and has already been spent; without it, -hold means "keep
+	// serving for a while after the checks"
+	if *hold > 0 && *every <= 0 {
 		stopping := make(chan os.Signal, 1)
 		signal.Notify(stopping, os.Interrupt, syscall.SIGTERM)
 		select {
@@ -167,20 +171,37 @@ func runChecks(ctx context.Context, proxyAddr string, urls []string, every, hold
 	}
 }
 
-// startRendezvous wires the DHT channel to an agent and runs the poll loop, then waits for the first
-// usable node so a caller does not have to sit through an arbitrary sleep.
-func startRendezvous(ctx context.Context, plane *pool.Pool, psk, slotsFlag, bootstrap string, budget time.Duration, logf func(string, ...any)) error {
+// startRendezvous wires every configured channel to an agent and runs the poll loop, then waits for the
+// first usable node so a caller does not have to sit through an arbitrary sleep. The DHT channel answers
+// requests; the Nostr channel pushes, so an offer published while we are already subscribed arrives
+// without waiting for the next poll.
+func startRendezvous(ctx context.Context, plane *pool.Pool, psk, slotsFlag, bootstrap, relays string, budget time.Duration, logf func(string, ...any)) error {
 	slots, err := parseSlots(slotsFlag)
 	if err != nil {
 		return err
 	}
-	channel, err := dht.New(dht.Config{Bootstrap: splitList(bootstrap), Passive: true, Logf: logf})
-	if err != nil {
-		return err
+	agentCfg := agent.Config{PSK: psk, Slots: slots, Logf: logf}
+
+	if relays != "" {
+		channel, err := nostr.New(nostr.Config{PSK: psk, Relays: splitList(relays), Logf: logf})
+		if err != nil {
+			return err
+		}
+		defer channel.Close()
+		agentCfg.Push = channel
+		logf("nostr: subscribing across %d relay(s)", channel.RelayCount())
 	}
-	rendezvous, err := agent.New(agent.Config{PSK: psk, Slots: slots, Getter: channel, Logf: logf})
+	if bootstrap != "" {
+		channel, err := dht.New(dht.Config{Bootstrap: splitList(bootstrap), Passive: true, Logf: logf})
+		if err != nil {
+			return err
+		}
+		defer channel.Close()
+		agentCfg.Getter = channel
+	}
+
+	rendezvous, err := agent.New(agentCfg)
 	if err != nil {
-		channel.Close()
 		return err
 	}
 
@@ -190,7 +211,7 @@ func startRendezvous(ctx context.Context, plane *pool.Pool, psk, slotsFlag, boot
 		plane.Update(pool.Node{Slot: record.Slot, Name: record.Node, Offer: record.Offer, Seen: record.Seen})
 		if lastLogged[record.Slot] != record.Offer.TS {
 			lastLogged[record.Slot] = record.Offer.TS
-			logf("slot %d: offer from %q (country %q, planes %v, seq %d)",
+			logf("slot %d: offer from %q (country %q, planes %v, seq %s)",
 				record.Slot, record.Node, record.Country, record.Offer.Types(), record.Seq)
 		}
 	})
@@ -201,12 +222,10 @@ func startRendezvous(ctx context.Context, plane *pool.Pool, psk, slotsFlag, boot
 			return nil
 		}
 		if time.Now().After(deadline) {
-			channel.Close()
 			return fmt.Errorf("no usable offer after %s (slots %v)", budget, rendezvous.Slots())
 		}
 		select {
 		case <-ctx.Done():
-			channel.Close()
 			return ctx.Err()
 		case <-time.After(200 * time.Millisecond):
 		}
