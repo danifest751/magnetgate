@@ -47,6 +47,19 @@ Phase 1 fixes found by running it for real (2026-09-16):
 - A slot discovered through `peers` now gets a Nostr subscription as well; before, it stayed DHT-only.
 - Second node brought up with the full data plane (Reality + hysteria2 + native, all verified from a
   client) and with rotation held on both nodes, as on the first one.
+
+Credential rotation, exercised for the first time (2026-09-16):
+
+- `setup-singbox.sh` now generates the hysteria2 key and cert into a temp directory and moves them
+  into place back to back, then reloads sing-box explicitly: replacing one before the other is what
+  produced the observed `reload certificate: ... private key does not match public key`, after which
+  sing-box silently keeps the previous pair.
+- `rotate-dp.mjs` documents the supported manual path and what to check afterwards. Rotation was run
+  on both live nodes: the config carries `[new, previous]`, the advertised record carries only the new
+  generation, sing-box restarts and both 443 listeners come back, and signalling (exit + DHT
+  publication) is not interrupted. The grace window was verified by connecting with real credentials:
+  current and previous work, one generation older does not. A normal client picks the new credentials
+  up from the offer within one poll interval.
 ### 0.11.1 / Desktop 0.3.3 — audit follow-up (2026-09-16)
 
 Security and operations hardening from a full repository audit. No wire-protocol change: the sealed
