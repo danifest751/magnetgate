@@ -170,3 +170,37 @@ test('owned TUN alias is configurable without reusing the legacy adapter name', 
   assert.equal(cfg.inbounds[0].interface_name, 'magnetgate-abcdef123456')
   assert.equal(cfg.log.output, undefined)
 })
+
+test('named processes are validated and routed outside the tunnel', () => {
+  // accepts a bare name or a full path, lowercases, dedupes
+  const cfg = validateConfig({
+    directProcesses: [
+      ' C:\\Program Files\\qBittorrent\\qBittorrent.exe ',
+      'qbittorrent.exe',
+      'Steam.exe'
+    ]
+  })
+  assert.deepEqual(cfg.directProcesses, ['qbittorrent.exe', 'steam.exe'])
+
+  for (const bad of [
+    { directProcesses: 'qbittorrent.exe' },
+    { directProcesses: ['ok.exe', 'bad name'] },
+    { directProcesses: [1] },
+    { directProcesses: Array(33).fill('a.exe') }
+  ])
+    assert.throws(() => validateConfig(bad), /invalid process/)
+
+  const rule = build({ vpnMode: 'full', directProcesses: ['qbittorrent.exe'] }).route.rules.find(
+    (r) => r.process_name
+  )
+  assert.deepEqual(rule, {
+    process_name: ['qbittorrent.exe'],
+    action: 'route',
+    outbound: 'direct'
+  })
+  // no rule is emitted when the list is empty, so nothing changes by default
+  assert.equal(
+    build({ vpnMode: 'full' }).route.rules.some((r) => r.process_name),
+    false
+  )
+})

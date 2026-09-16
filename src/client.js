@@ -144,7 +144,11 @@ function handleOffer(e, o) {
   const isNew = !e.offer || e.offer.ts !== merged.ts
   e.offer = merged
   if (isNew) {
-    console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port}`)
+    // the planes this generation advertises; without them the line reads "via mgt" even when the
+    // desktop is carrying traffic over reality/hysteria2, because the app runs this child with
+    // MAGNETGATE_NATIVE_ONLY=1 and the child's own preference is not what the tunnel uses.
+    const planes = merged.dp.map((d) => d.t).join('+')
+    console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port} (planes: ${planes})`)
   }
   // publish the merged endpoints for an external engine; fires on the first offer and whenever the
   // set changes (a same-generation Nostr offer adding hy2, or a rotation changing creds).

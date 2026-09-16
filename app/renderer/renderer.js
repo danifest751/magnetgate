@@ -39,7 +39,7 @@ function text(id, value) {
 function renderStatus() {
   const view = MGView.connectionView(cfg, st)
   all(
-    '[data-mode], #btnAddSite, #domain, #killSwitch, #btnAddExit, #btnSaveServers, #btnSaveAdvanced, #localPort, #singboxPort, #probePort, #bootstrap'
+    '[data-mode], #btnAddSite, #domain, #killSwitch, #btnAddExit, #btnSaveServers, #btnSaveAdvanced, #localPort, #singboxPort, #probePort, #bootstrap, #directProcesses'
   ).forEach((el) => (el.disabled = !loaded))
   $('mg-app').dataset.state = view.connected ? 'connected' : 'idle'
   text('phase', view.title)
@@ -299,6 +299,7 @@ function renderServers() {
 function fillAdvanced() {
   for (const name of ['localPort', 'singboxPort', 'probePort']) $(name).value = cfg[name]
   $('bootstrap').value = cfg.bootstrap.join('\n')
+  $('directProcesses').value = (cfg.directProcesses || []).join('\n')
 }
 function appendLog(line) {
   const el = $('log'),
@@ -424,7 +425,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       text('serversMessage', 'Серверы не сохранены. Проверьте значения и повторите.')
     }
   }
-  for (const id of ['localPort', 'singboxPort', 'probePort', 'bootstrap'])
+  for (const id of ['localPort', 'singboxPort', 'probePort', 'bootstrap', 'directProcesses'])
     $(id).oninput = () => {
       advancedRevision++
       text('advancedMessage', 'Есть несохранённые изменения.')
@@ -440,6 +441,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       }
     }
     fields.bootstrap = $('bootstrap')
+      .value.split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    fields.directProcesses = $('directProcesses')
       .value.split(/\r?\n/)
       .map((s) => s.trim())
       .filter(Boolean)

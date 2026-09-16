@@ -65,12 +65,41 @@ const state = {
 function safeSend(channel, value) {
   if (win && !win.isDestroyed() && !quitting) win.webContents.send(channel, value)
 }
-function pushLog(line) {
-  const text = new Date().toISOString() + ' ' + String(line).slice(0, 8192)
+// sing-box writes one ERROR per failed outbound connection. A torrent client alone produced ~20k
+// lines in 1.5 hours, which rotated this log away every few hours — a three-day history did not
+// survive and genuine tunnel events were buried in it. Collapse the repetitive connection errors
+// into a periodic summary instead; MAGNETGATE_PERSIST_NOISE=1 keeps every line for debugging.
+const NOISE = /connection:.*open connection to .* using outbound\/|outbound\/[a-z0-9-]+\[[^\]]*\]: (dial|read) tcp /
+const NOISE_PERSIST = process.env.MAGNETGATE_PERSIST_NOISE === '1'
+const NOISE_SUMMARY_MS = 5 * 60 * 1000
+const NOISE_SUMMARY_COUNT = 1000
+let noiseCount = 0,
+  noiseReported = 0,
+  noiseAt = 0
+function writeLog(text) {
   logs.push(text)
   if (logs.length > 500) logs.shift()
   diskLog.append(text)
   safeSend('log', text)
+}
+function pushLog(line) {
+  const raw = String(line)
+  if (!NOISE_PERSIST && NOISE.test(raw)) {
+    noiseCount++
+    const now = Date.now()
+    if (!noiseAt) noiseAt = now
+    if (noiseCount - noiseReported >= NOISE_SUMMARY_COUNT || now - noiseAt >= NOISE_SUMMARY_MS) {
+      const suppressed = noiseCount - noiseReported
+      noiseReported = noiseCount
+      noiseAt = now
+      writeLog(
+        new Date().toISOString() +
+          ` [app] suppressed ${suppressed} repeated connection error(s) (unreachable destinations); last: ${raw.slice(0, 160)}`
+      )
+    }
+    return
+  }
+  writeLog(new Date().toISOString() + ' ' + raw.slice(0, 8192))
 }
 // A tunnel client's log records where the user went: make it removable from the UI.
 async function clearLogs() {

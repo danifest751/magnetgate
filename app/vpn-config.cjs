@@ -48,6 +48,9 @@ function buildVpnConfig({
     { protocol: 'dns', action: 'hijack-dns' },
     { process_path: [clientPath], action: 'route', outbound: 'direct' }
   ]
+  // keep named applications out of the tunnel (e.g. qbittorrent.exe) — see src/config.cjs
+  if (cfg.directProcesses?.length)
+    rules.push({ process_name: cfg.directProcesses, action: 'route', outbound: 'direct' })
   if (bypass.length)
     rules.push({ ip_cidr: bypass.map((ip) => `${ip}/32`), action: 'route', outbound: 'direct' })
   rules.push({ ip_version: 6, action: 'reject' })

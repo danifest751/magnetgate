@@ -11,7 +11,8 @@ const DEFAULT_CONFIG = {
   tunnelDomains: [],
   dataPlane: 'auto',
   transport: 'tcp',
-  killSwitch: false
+  killSwitch: false,
+  directProcesses: []
 }
 const domains = (list) => {
   if (!Array.isArray(list) || list.length > 10000) throw new Error('invalid domain list')
@@ -21,6 +22,23 @@ const domains = (list) => {
         if (typeof value !== 'string') throw new Error('invalid domain')
         const s = value.trim().toLowerCase().replace(/^\*\./, '').replace(/\.$/, '')
         if (!s || s.length > 253 || !/^[a-z0-9_.-]+$/.test(s)) throw new Error('invalid domain')
+        return s
+      })
+    )
+  ]
+}
+// Executable names whose traffic must bypass the tunnel. A torrent client behind one exit is a
+// practical problem, not a theoretical one: the exit dials hundreds of thousands of dead peers a
+// day, which risks the VPS provider suspending it and fills both logs. Accepts a bare name or a
+// path (the basename is used).
+const processes = (list) => {
+  if (!Array.isArray(list) || list.length > 32) throw new Error('invalid process list')
+  return [
+    ...new Set(
+      list.map((value) => {
+        if (typeof value !== 'string') throw new Error('invalid process')
+        const s = value.trim().toLowerCase().split(/[\\/]/).pop()
+        if (!s || s.length > 64 || !/^[a-z0-9._-]+$/.test(s)) throw new Error('invalid process')
         return s
       })
     )
@@ -67,6 +85,7 @@ function validateConfig(value) {
     throw new Error('invalid bootstrap')
   cfg.directDomains = domains(cfg.directDomains)
   cfg.tunnelDomains = domains(cfg.tunnelDomains)
+  cfg.directProcesses = processes(cfg.directProcesses)
   cfg.rules = { direct: domains(cfg.rules?.direct || []), proxy: domains(cfg.rules?.proxy || []) }
   return cfg
 }
