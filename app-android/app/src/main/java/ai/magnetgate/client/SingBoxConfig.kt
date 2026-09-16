@@ -2,33 +2,82 @@ package ai.magnetgate.client
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.ServerSocket
+
+/** One plane the engine carries for the core: a node's slot, the plane type and the loopback port. */
+data class EnginePlane(val slot: Int, val plane: String, val port: Int)
+
+/** A node as the core reports it: its slot and the transports it advertises. */
+data class DiscoveredNode(val slot: Int, val planes: List<JSONObject>)
 
 /**
- * The sing-box configuration the app runs: everything goes into the tunnel and out through the core.
+ * The sing-box configuration the app runs: everything goes into the tunnel and out through one of the
+ * planes the core can use.
  *
- * The core already knows how to reach an exit - it discovered one over the DHT or over Nostr - and it
- * exposes that as a SOCKS listener on loopback. So the engine needs exactly one outbound of its own: a
- * SOCKS client pointed at the core. Which means the routing policy of the phone client lives in the
- * core (which node, which plane, what is paused), and this file only describes the tunnel itself.
- *
- * Addresses here are the ones the platform hands to VpnService (see PlatformInterface.openTun): they
- * have to agree with what the tun inbound declares, and sing-box passes them straight through.
+ * The core speaks the native mux itself and tells the engine where to send anything else: for every node
+ * and every plane the core cannot speak (reality, hysteria2) this file adds an outbound and a loopback
+ * SOCKS listener of its own, plus the rule that ties them together. The core then dials that listener and
+ * gets the node's plane - the engine holds the transport details, the core only holds a port number.
  */
 object SingBoxConfig {
   const val TUN_ADDRESS_V4 = "172.19.0.1/30"
 
-  fun build(socksPort: Int, coreless: Boolean = false): String {
-    val config = JSONObject()
+  /** The configuration, and the plane-to-port mapping the core has to be told about. */
+  data class Built(val json: String, val planes: List<EnginePlane>)
 
-    config.put(
-      "log",
+  fun build(socksPort: Int, coreless: Boolean, nodes: List<DiscoveredNode> = emptyList()): Built {
+    val outbounds = JSONArray()
+    val planeInbounds = JSONArray()
+    val rules = JSONArray()
+    val planes = mutableListOf<EnginePlane>()
+
+    for (node in nodes) {
+      for (plane in node.planes) {
+        val type = plane.optString("t")
+        if (type != "reality" && type != "hy2") continue // the core speaks the rest itself
+        val outbound = transportOutbound(plane) ?: continue
+        val tag = "exit-${node.slot}-$type"
+        outbound.put("tag", tag)
+        outbounds.put(outbound)
+
+        // the core reaches that plane through this listener, and only this listener
+        val port = freePort()
+        val inbound = "in-${node.slot}-$type"
+        planeInbounds.put(
+          JSONObject()
+            .put("type", "socks")
+            .put("tag", inbound)
+            .put("listen", "127.0.0.1")
+            .put("listen_port", port),
+        )
+        rules.put(JSONObject().put("inbound", JSONArray().put(inbound)).put("outbound", tag))
+        planes.add(EnginePlane(node.slot, type, port))
+      }
+    }
+
+    outbounds.put(
       JSONObject()
-        .put("level", "warn")
-        .put("timestamp", true),
+        .put("type", "socks")
+        .put("tag", "core")
+        .put("server", "127.0.0.1")
+        .put("server_port", socksPort),
     )
+    outbounds.put(JSONObject().put("type", "direct").put("tag", "direct"))
 
-    // DNS goes through the tunnel as well; auto_route hijacks port 53 into the tun, so the resolver
-    // below is what actually answers.
+    val tun = JSONObject()
+      .put("type", "tun")
+      .put("tag", "tun")
+      .put("address", JSONArray().put(TUN_ADDRESS_V4))
+      .put("mtu", 1500)
+      .put("auto_route", true)
+      .put("strict_route", false)
+      // a userspace stack: no kernel module, no root, and it is what libbox is being used for
+      .put("stack", "gvisor")
+    val inbounds = JSONArray().put(tun)
+    for (index in 0 until planeInbounds.length()) inbounds.put(planeInbounds.get(index))
+
+    val config = JSONObject()
+    config.put("log", JSONObject().put("level", "warn").put("timestamp", true))
     config.put(
       "dns",
       JSONObject()
@@ -44,48 +93,82 @@ object SingBoxConfig {
         )
         .put("final", "remote"),
     )
-
-    config.put(
-      "inbounds",
-      JSONArray().put(
-        JSONObject()
-          .put("type", "tun")
-          .put("tag", "tun")
-          .put("address", JSONArray().put(TUN_ADDRESS_V4))
-          .put("mtu", 1500)
-          .put("auto_route", true)
-          .put("strict_route", false)
-          // a userspace stack: no kernel module, no root, and it is what libbox is being used for
-          .put("stack", "gvisor"),
-      ),
-    )
-
-    // without the core there is nothing to tunnel through; the engine is then only a tun with a direct    // outbound, which is what the two-runtime experiment needs to be meaningful
-    config.put(
-      "outbounds",
-      if (coreless) {
-        JSONArray().put(JSONObject().put("type", "direct").put("tag", "core"))
-      } else {
-        JSONArray()
-          .put(
-            JSONObject()
-              .put("type", "socks")
-              .put("tag", "core")
-              .put("server", "127.0.0.1")
-              .put("server_port", socksPort),
-          )
-          .put(JSONObject().put("type", "direct").put("tag", "direct"))
-      },
-    )
-
+    config.put("inbounds", inbounds)
+    config.put("outbounds", outbounds)
     config.put(
       "route",
       JSONObject()
-        .put("rules", JSONArray())
+        // per-plane rules first, so the core's own listener maps to the node it belongs to
+        .put("rules", rules)
         .put("final", "core")
         .put("auto_detect_interface", false),
     )
-
-    return config.toString(2)
+    return Built(config.toString(2), planes)
   }
+
+  /**
+   * Mirrors src/transport-config.cjs: what a node's data-plane entry means as a sing-box outbound. Nothing
+   * here weakens TLS verification - the certificate is pinned where the entry carries one.
+   */
+  fun transportOutbound(plane: JSONObject): JSONObject? {
+    val host = plane.optString("host")
+    val port = plane.optInt("port")
+    if (host.isEmpty() || port !in 1..65535) return null
+    return when (plane.optString("t")) {
+      "reality" -> {
+        val uuid = plane.optString("uuid")
+        val sni = plane.optString("sni")
+        val publicKey = plane.optString("pbk")
+        val shortId = plane.optString("sid")
+        if (uuid.isEmpty() || sni.isEmpty() || publicKey.isEmpty() || shortId.isEmpty()) return null
+        JSONObject()
+          .put("type", "vless")
+          .put("server", host)
+          .put("server_port", port)
+          .put("uuid", uuid)
+          .put("flow", "xtls-rprx-vision")
+          .put(
+            "tls",
+            JSONObject()
+              .put("enabled", true)
+              .put("server_name", sni)
+              .put("utls", JSONObject().put("enabled", true).put("fingerprint", plane.optString("fp", "chrome")))
+              .put(
+                "reality",
+                JSONObject().put("enabled", true).put("public_key", publicKey).put("short_id", shortId),
+              ),
+          )
+      }
+
+      "hy2" -> {
+        val password = plane.optString("pw")
+        val obfs = plane.optString("obfs")
+        val sni = plane.optString("sni")
+        val certificates = plane.optJSONArray("ca")?.let { array ->
+          (0 until array.length()).map { array.optString(it) }
+        } ?: listOf(plane.optString("ca"))
+        if (password.isEmpty() || obfs.isEmpty() || sni.isEmpty()) return null
+        if (certificates.isEmpty() || certificates.any { !it.contains("-----BEGIN CERTIFICATE-----") }) return null
+        JSONObject()
+          .put("type", "hysteria2")
+          .put("server", host)
+          .put("server_port", port)
+          .put("password", password)
+          .put("obfs", JSONObject().put("type", "salamander").put("password", obfs))
+          .put(
+            "tls",
+            JSONObject()
+              .put("enabled", true)
+              .put("alpn", JSONArray().put("h3"))
+              .put("server_name", sni)
+              .put("certificate", JSONArray(certificates)),
+          )
+      }
+
+      else -> null
+    }
+  }
+
+  /** A free loopback port for a plane's listener: taken now, bound by the engine when it starts. */
+  private fun freePort(): Int = ServerSocket(0).use { it.localPort }
 }

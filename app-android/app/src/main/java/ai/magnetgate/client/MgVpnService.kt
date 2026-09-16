@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.util.Log
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -30,6 +31,7 @@ class MgVpnService : VpnService() {
     const val ACTION_STOP = "ai.magnetgate.client.action.STOP"
 
     private const val CHANNEL_ID = "magnetgate"
+    private const val DISCOVERY_TIMEOUT_MS = 90_000L
     private const val NOTIFICATION_ID = 1
 
     @Volatile
@@ -40,6 +42,7 @@ class MgVpnService : VpnService() {
   }
 
   private var running = false
+  private var starting = false
 
   override fun onCreate() {
     super.onCreate()
@@ -71,36 +74,72 @@ class MgVpnService : VpnService() {
     return START_STICKY
   }
 
+  /**
+   * Starts the core, waits until it has found a node (a tunnel with nowhere to go is not a tunnel), builds
+   * the engine's configuration from what was found, starts the engine and tells the core which loopback
+   * listener carries which of the node's planes.
+   *
+   * It runs off the main thread: discovery takes seconds, and the service must not block the UI.
+   */
   private fun startTunnel(bootstrap: String, relays: String, coreless: Boolean) {
-    if (running) return
-    startForeground(NOTIFICATION_ID, notification("connecting"))
+    if (running || starting) return
+    starting = true
+    startForeground(NOTIFICATION_ID, notification("looking for a node"))
+    Thread {
+      try {
+        val port = if (coreless) 0 else startCoreAndWaitForNode(bootstrap, relays)
+        val nodes = if (coreless) emptyList() else discoveredNodes()
+        val built = SingBoxConfig.build(port, coreless, nodes)
 
-    val port = if (coreless) {
-      // diagnostic path: the engine alone, for when the tun itself is what is being questioned
-      Log.w(TAG, "started without the core (engine only)")
-      0
-    } else {
-      val psk = CoreConfig.readPsk(this)
-      if (psk.isBlank()) throw IllegalStateException("no PSK: put it in files/psk.txt or the settings screen")
-      val started = Mgbox.startCore(
-        CoreConfig.json(psk, CoreConfig.splitList(bootstrap), CoreConfig.splitList(relays)),
-      ).toInt()
-      Log.i(TAG, "core listening on 127.0.0.1:$started")
-      started
+        Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
+        Mgbox.startEngine(built.json, MgTunPlatform(this))
+        for (plane in built.planes) {
+          Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+        }
+        running = true
+        Log.i(TAG, "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size})")
+        notify(notification("connected"))
+      } catch (error: Throwable) {
+        Log.e(TAG, "the tunnel did not start: ${error.message}", error)
+        stopTunnel()
+        stopSelf()
+      } finally {
+        starting = false
+      }
+    }.start()
+  }
+
+  /** Starts the core and waits for the first discovered node. */
+  private fun startCoreAndWaitForNode(bootstrap: String, relays: String): Int {
+    val psk = CoreConfig.readPsk(this)
+    if (psk.isBlank()) throw IllegalStateException("no PSK: put it in files/psk.txt or the settings screen")
+    val port = Mgbox.startCore(
+      CoreConfig.json(psk, CoreConfig.splitList(bootstrap), CoreConfig.splitList(relays)),
+    ).toInt()
+    Log.i(TAG, "core listening on 127.0.0.1:$port")
+
+    val deadline = System.currentTimeMillis() + DISCOVERY_TIMEOUT_MS
+    while (System.currentTimeMillis() < deadline) {
+      if (discoveredNodes().isNotEmpty()) return port
+      Thread.sleep(1000)
     }
+    throw IllegalStateException("no exit was discovered within ${DISCOVERY_TIMEOUT_MS / 1000} s")
+  }
 
-    Mgbox.setupEngine(
-      filesDir.absolutePath,
-      filesDir.absolutePath,
-      cacheDir.absolutePath,
-      300L,
-      false,
-    )
-
-    Mgbox.startEngine(SingBoxConfig.build(port, coreless), MgTunPlatform(this))
-    running = true
-    Log.i(TAG, "tunnel up (engine ${Mgbox.coreVersion()}, core $port)")
-    notify(notification("connected"))
+  /** The nodes the core knows right now, with the transports they advertise. */
+  private fun discoveredNodes(): List<DiscoveredNode> {
+    val status = runCatching { Mgbox.coreStatus() }.getOrNull() ?: return emptyList()
+    val snapshot = runCatching { JSONObject(status).optJSONObject("snapshot") }.getOrNull() ?: return emptyList()
+    val exits = snapshot.optJSONArray("exits") ?: return emptyList()
+    val nodes = mutableListOf<DiscoveredNode>()
+    for (index in 0 until exits.length()) {
+      val exit = exits.optJSONObject(index) ?: continue
+      val planes = mutableListOf<JSONObject>()
+      val dp = exit.optJSONArray("dp") ?: JSONArray()
+      for (plane in 0 until dp.length()) dp.optJSONObject(plane)?.let { planes.add(it) }
+      nodes.add(DiscoveredNode(exit.optInt("slot"), planes))
+    }
+    return nodes
   }
 
   /**
@@ -160,9 +199,11 @@ class MgVpnService : VpnService() {
   }
 
   internal fun stopTunnel() {
-    if (!running) return
+    if (!running && !starting) return
     running = false
+    starting = false
     try {
+      Mgbox.forgetPlaneSocksPorts()
       Mgbox.stopEngine()
     } catch (error: Throwable) {
       Log.w(TAG, "closing the engine: ${error.message}")

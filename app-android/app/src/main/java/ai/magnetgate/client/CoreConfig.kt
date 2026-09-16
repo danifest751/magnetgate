@@ -17,6 +17,9 @@ object CoreConfig {
     config.put("slots", JSONArray().put(0))
     config.put("bootstrap", array(bootstrap))
     config.put("relays", array(relays))
+    // Transports in order of preference: the two the engine speaks for us come first, and the native mux
+    // is the fallback - the same order the desktop client uses.
+    config.put("preference", array(listOf("reality", "hy2", "mgt")))
     return config.toString()
   }
 

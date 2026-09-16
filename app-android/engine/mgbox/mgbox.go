@@ -36,6 +36,18 @@ func CoreStatus() (string, error) { return mobile.Status() }
 // StopCore tears the core down.
 func StopCore() { mobile.Stop() }
 
+// SetPlaneSocksPort tells the core where the engine exposes one node's plane.
+//
+// The engine speaks transports the core does not implement (reality, hysteria2) and can serve each node's
+// plane on a loopback SOCKS listener; the core then uses that plane like any other. The app calls this once
+// the engine's configuration is in place, for every plane it put in there.
+func SetPlaneSocksPort(slot int, plane string, port int) error {
+	return mobile.SetPlaneSocksPort(slot, plane, port)
+}
+
+// ForgetPlaneSocksPorts drops every mapping, for when the engine is rebuilt.
+func ForgetPlaneSocksPorts() { mobile.ForgetPlaneSocksPorts() }
+
 // SetupEngine prepares the engine's data directories. It must be called before StartEngine.
 //
 // The paths are separate arguments rather than a struct because gomobile binds neither a struct value nor
