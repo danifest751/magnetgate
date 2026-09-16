@@ -71,6 +71,8 @@ function validateConfig(value) {
   return cfg
 }
 function freshEndpoints(snapshot, now = Date.now()) {
+  // 720000 must stay equal to OFFER_TTL_MS in client.js and comfortably above the exit's 60 s
+  // republish interval; tests/consistency.test.mjs fails if the three ever disagree.
   if (snapshot?.v !== 4 || !Array.isArray(snapshot.exits)) return []
   return snapshot.exits
     .filter(

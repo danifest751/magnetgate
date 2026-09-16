@@ -567,8 +567,21 @@ function pollStats() {
             up = Number(j.uploadTotal) || 0,
             down = Number(j.downloadTotal) || 0
           const dt = lastSample ? (now - lastSample.time) / 1000 : 0
+          // which data plane is actually carrying traffic right now: chains look like
+          // ["exit-0-reality-0", "proxy"]. Knowing that a session silently fell back to the native
+          // channel (PoC-level camouflage) matters more than the connection count.
+          const planes = new Set()
+          for (const c of Array.isArray(j.connections) ? j.connections : []) {
+            for (const hop of Array.isArray(c.chains) ? c.chains : []) {
+              const tag = String(hop)
+              if (/reality/i.test(tag)) planes.add('reality')
+              else if (/hy2|hysteria/i.test(tag)) planes.add('hysteria2')
+              else if (/native|mgt/i.test(tag)) planes.add('mgt (native)')
+            }
+          }
           state.stats = {
             conns: Array.isArray(j.connections) ? j.connections.length : 0,
+            planes: [...planes],
             up,
             down,
             upBps: dt > 0 ? Math.max(0, (up - lastSample.up) / dt) : 0,

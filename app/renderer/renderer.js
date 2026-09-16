@@ -108,6 +108,8 @@ function renderStatus() {
   text('diagSystem', st.vpnOn ? st.egress || '—' : '—')
   text('diagProxy', st.vpnOn ? st.proxyEgress || '—' : '—')
   text('diagGuard', protection)
+  const planes = st.stats && Array.isArray(st.stats.planes) ? st.stats.planes : []
+  text('diagPlanes', st.vpnOn ? planes.length ? planes.join(', ') : 'ожидание трафика' : '—')
   $('traffic').hidden = !view.connected
   const stats = st.stats || {}
   text(

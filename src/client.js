@@ -151,6 +151,26 @@ function handleOffer(e, o) {
   if (DP_OUT) writeDpOut()
 }
 
+const POLL_FAST_MS = 3000
+const POLL_SLOW_MS = 10000
+let pollDelay = POLL_FAST_MS
+let pollTimer = null
+
+// Poll fast until an offer is found, then back off. A constant 3 s get against one target is a lot
+// of lookups (the exit republishes once a minute) and it is exactly the "anomalous activity under a
+// single key" pattern our own research warns about. unref() so polling never holds the process open.
+function scheduleLookup() {
+  if (pollTimer) clearTimeout(pollTimer)
+  pollTimer = setTimeout(async () => {
+    try {
+      await lookupAll()
+    } catch {}
+    pollDelay = exits.some(fresh) ? POLL_SLOW_MS : POLL_FAST_MS
+    scheduleLookup()
+  }, pollDelay)
+  if (pollTimer.unref) pollTimer.unref()
+}
+
 dht.listen(() =>
   console.log(
     ts(),
@@ -159,7 +179,7 @@ dht.listen(() =>
 )
 dht.on('ready', () => {
   lookupAll()
-  setInterval(lookupAll, 3000)
+  scheduleLookup()
 })
 
 // second rendezvous channel: Nostr (push, instant), independent of the DHT
