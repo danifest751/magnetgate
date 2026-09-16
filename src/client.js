@@ -245,10 +245,18 @@ async function routeFn(target, app) {
         resolve({ sock })
       })
     })
-  const deadline = Date.now() + 20000
+  // Never hang an application request behind discovery: give a pending lookup a short grace period,
+  // then fail with something actionable instead of a silent 20 s stall.
+  const deadline = Date.now() + Number(process.env.MAGNETGATE_ROUTE_WAIT_MS ?? 5000)
   while (!exits.some(fresh) && Date.now() < deadline && !app.destroyed)
     await new Promise((r) => setTimeout(r, 100))
   const candidates = exits.filter(fresh)
+  if (!candidates.length) {
+    if (!app.destroyed) lookupAll() // make the next attempt likely to succeed
+    throw new Error(
+      'no exit discovered yet — check the PSK and the bootstrap list, then retry in a few seconds'
+    )
+  }
   let lastError = new Error('no fresh offer')
   for (let i = 0; i < candidates.length; i++) {
     const exit = candidates[(rr + i) % candidates.length]
@@ -278,17 +286,33 @@ async function routeFn(target, app) {
   throw lastError
 }
 const associations = new WeakMap()
+let udpRr = 0
 function udpFn(req, control, sendReply) {
   let association = associations.get(control)
   if (!association) {
-    const exit = exits.find(fresh)
-    if (!exit) return control.destroy()
+    // UDP used to take the first fresh exit and give up if it failed; fail over across exits the
+    // same way the TCP path does.
+    const candidates = exits.filter(fresh)
+    if (!candidates.length) return control.destroy()
     association = {
       pendingBytes: 0,
-      promise: getSessionFor(exit).then((session) => {
-        if (control.destroyed) throw new Error('association closed')
-        return session.openRelay(control, sendReply)
-      })
+      promise: (async () => {
+        let lastError = null
+        for (let i = 0; i < candidates.length; i++) {
+          const exit = candidates[(udpRr + i) % candidates.length]
+          try {
+            const session = await getSessionFor(exit)
+            if (control.destroyed) throw new Error('association closed')
+            const relay = await session.openRelay(control, sendReply)
+            udpRr = (udpRr + i + 1) % candidates.length
+            return relay
+          } catch (err) {
+            lastError = err
+            exit.cooldownUntil = Date.now() + 30000
+          }
+        }
+        throw lastError ?? new Error('no exit available for UDP')
+      })()
     }
     association.promise.catch(() => control.destroy())
     associations.set(control, association)

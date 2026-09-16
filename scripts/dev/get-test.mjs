@@ -1,6 +1,6 @@
 // node get-test.mjs <psk>
 import DHT from 'bittorrent-dht'
-import { deriveKeys, saltOf, targetOf, unseal, bep44Verify } from './common.mjs'
+import { deriveKeys, saltOf, targetOf, unseal, bep44Verify } from '../../src/common.mjs'
 
 const SECRET = process.argv[2]
 const { pk, boxKey } = deriveKeys(SECRET)

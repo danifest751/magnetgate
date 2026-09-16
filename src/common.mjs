@@ -241,12 +241,16 @@ export const FRAME = {
 const PAD_HDR = 2
 const PAD_BUCKETS = [64, 256, 512, 1024, 2048, 4096]
 
-function padPlain(plain) {
+// how long padPlain makes the body for a given plaintext length
+function paddedLength(len) {
   const bucket =
-    PAD_BUCKETS.find((b) => plain.length + PAD_HDR <= b) ??
-    Math.ceil((plain.length + PAD_HDR) / 4096) * 4096
-  const padLen = Math.max(0, bucket - plain.length - PAD_HDR)
-  const out = Buffer.alloc(PAD_HDR + padLen + plain.length)
+    PAD_BUCKETS.find((b) => len + PAD_HDR <= b) ?? Math.ceil((len + PAD_HDR) / 4096) * 4096
+  return Math.max(len + PAD_HDR, bucket)
+}
+
+function padPlain(plain, outLen = paddedLength(plain.length)) {
+  const padLen = outLen - plain.length - PAD_HDR
+  const out = Buffer.alloc(outLen)
   out.writeUInt16BE(padLen, 0)
   if (padLen > 0) crypto.randomBytes(padLen).copy(out, PAD_HDR)
   plain.copy(out, PAD_HDR + padLen)
@@ -254,6 +258,8 @@ function padPlain(plain) {
 }
 
 export const MAX_FRAME_BYTES = 4 * 1024 * 1024
+// length prefix (4) + nonce (24) + MAC (16) + version/sequence/type/streamId (14)
+const FRAME_HDR = 4 + 24 + 16 + 14
 const validHeader = (type, id) =>
   Object.values(FRAME).includes(type) &&
   Number.isInteger(id) &&
@@ -271,8 +277,11 @@ export function frame2(key, type, streamId, plain, sequence = 0n) {
     !Buffer.isBuffer(plain)
   )
     throw new Error('invalid frame')
-  if (plain.length > MAX_FRAME_BYTES - 8192) throw new Error('frame too large')
-  const padded = type === FRAME.DATA ? padPlain(plain) : plain
+  // Check the size the frame will actually have, padding included: the old flat 8 KiB margin could
+  // still emit a frame the peer's codec rejects (MAX_FRAME_BYTES is the limit on both sides).
+  const paddedLen = type === FRAME.DATA ? paddedLength(plain.length) : plain.length
+  if (FRAME_HDR + paddedLen > MAX_FRAME_BYTES) throw new Error('frame too large')
+  const padded = type === FRAME.DATA ? padPlain(plain, paddedLen) : plain
   const body = Buffer.alloc(14 + padded.length)
   body[0] = 4
   body.writeBigUInt64BE(sequence, 1)

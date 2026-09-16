@@ -357,3 +357,26 @@ test('S8: log lines fingerprint the destination instead of writing it in clear',
   assert.notEqual(a, hostForLog('example.org'), 'different hosts stay distinguishable')
   assert.notEqual(a, 'example.com', 'the host itself must not appear')
 })
+
+test('S12: the frame size limit is exact and enforced after padding', async () => {
+  const { frame2, MAX_FRAME_BYTES } = await import('../src/common.mjs')
+  // non-DATA overhead is exactly 58 bytes (4 len + 24 nonce + 16 mac + 14 header)
+  const maxPing = frame2(KEY, FRAME.PING, 0, Buffer.alloc(MAX_FRAME_BYTES - 58), 1n)
+  assert.equal(maxPing.length, MAX_FRAME_BYTES, 'a PING frame may fill the limit exactly')
+  assert.throws(
+    () => frame2(KEY, FRAME.PING, 0, Buffer.alloc(MAX_FRAME_BYTES - 57), 1n),
+    /frame too large/
+  )
+  // DATA is padded up to a 4096 bucket, so an oversized plaintext must be rejected before padding
+  assert.throws(
+    () => frame2(KEY, FRAME.DATA, 1, Buffer.alloc(MAX_FRAME_BYTES), 2n),
+    /frame too large/
+  )
+  const big = Buffer.alloc(1024 * 1024 + 517, 7)
+  const wire = frame2(KEY, FRAME.DATA, 1, big, 0n)
+  assert.ok(wire.length <= MAX_FRAME_BYTES, `encoded frame is ${wire.length} B`)
+  const { out, killed } = decodeAll(KEY, wire, 64 * 1024)
+  assert.equal(killed, false, 'the peer must accept a frame this side produced')
+  assert.equal(out.length, 1)
+  assert.deepEqual(out[0].plain, big, 'a large padded frame round-trips byte for byte')
+})

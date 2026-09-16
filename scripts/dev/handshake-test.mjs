@@ -1,8 +1,8 @@
 // node src/handshake-test.mjs — ReliableStream handshake smoke test (direct)
 import dgram from 'node:dgram'
 import crypto from 'node:crypto'
-import { ReliableStream } from './udpsess.mjs'
-import { deriveKeys, connKeys } from './common.mjs'
+import { ReliableStream } from '../../src/udpsess.mjs'
+import { deriveKeys, connKeys } from '../../src/common.mjs'
 
 const psk = process.argv[2] ?? 'test-psk-mux'
 const host = process.argv[3] ?? '127.0.0.1'
