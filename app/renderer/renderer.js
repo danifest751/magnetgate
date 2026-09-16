@@ -136,10 +136,7 @@ function renderCountries(st, view) {
   $('countryRow').hidden = !view.connected || !countries.length
   if (!countries.length) return
   const select = $('country')
-  const options = [
-    ['', 'Любая'],
-    ...countries.map((c) => [c.cc, `${c.cc} · ${c.nodes} ${c.nodes === 1 ? 'нода' : 'нод'}`])
-  ]
+  const options = MGView.countryOptions(countries)
   // rebuild only when the set changed, so an open dropdown is not fought while the user chooses
   const signature = JSON.stringify(options)
   if (select.dataset.options !== signature) {
@@ -153,14 +150,7 @@ function renderCountries(st, view) {
     }
   }
   select.value = st.country || ''
-  text(
-    'countryMsg',
-    st.country
-      ? st.countryFallback
-        ? `В ${st.country} нет живых нод — используется любая`
-        : `Выход через ${st.country}`
-      : 'Любая страна с живой нодой'
-  )
+  text('countryMsg', MGView.countryMessage(st.country, st.countryFallback))
 }
 function renderRules() {
   all('[data-mode]').forEach((el) =>

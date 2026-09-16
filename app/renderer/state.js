@@ -54,7 +54,28 @@
     else if (state.lastError || state.otherTunnel) button = 'Повторить'
     return { connected, busy, empty, recovery, pending, title, detail, button }
   }
-  const api = { needsDisconnect, connectionView }
+  // Country selector: the list is built from what the nodes advertise — a two-letter code plus how
+  // many nodes stand behind it, never an address. Kept here (and returned as plain pairs) so the DOM
+  // code stays trivial and this is testable without a browser.
+  function countryOptions(countries) {
+    const list = Array.isArray(countries) ? countries : []
+    return [
+      ['', 'Любая'],
+      ...list
+        .filter((c) => c && /^[A-Z]{2}$/.test(String(c.cc || '').toUpperCase()))
+        .map((c) => {
+          const cc = String(c.cc).toUpperCase()
+          const nodes = Number(c.nodes) || 0
+          return [cc, `${cc} · ${nodes} ${nodes === 1 ? 'нода' : 'нод'}`]
+        })
+    ]
+  }
+  function countryMessage(country, fallback) {
+    const cc = String(country || '').toUpperCase()
+    if (!/^[A-Z]{2}$/.test(cc)) return 'Любая страна с живой нодой'
+    return fallback ? `В ${cc} нет живых нод — используется любая` : `Выход через ${cc}`
+  }
+  const api = { needsDisconnect, connectionView, countryOptions, countryMessage }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.MGView = api
 })(globalThis)

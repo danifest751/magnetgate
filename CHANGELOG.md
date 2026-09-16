@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-### Desktop 0.3.3 — traffic volume (2026-09-16)
+### Desktop 0.3.3 — traffic volume and country choice (2026-09-16)
 
 - The status line showed only the current speed, so there was no way to see how much had actually gone
   through. It now reads
@@ -11,10 +11,16 @@
   sing-box and resets its counters, which would otherwise drop the number back to zero mid-session)
   and is reset on Connect, so the line means "this connection". The logic lives in `app/stats.cjs` and
   is unit-tested.
+- **Exit country choice.** A node advertises an optional two-letter code
+  (`MAGNETGATE_NODE_COUNTRY`) and the connection page lists the codes it can actually see, e.g.
+  `FI · 1 нода`, plus `Любая`. Choosing one builds the engine config from that country's endpoints
+  only — the selector shows a code and a node count, never an address. It is a preference: if the
+  chosen country has nothing live, everything is used and the caption says so, because refusing to
+  connect would be worse.
 - Artifact: `app/dist/magnetgate-0.3.3.exe`, SHA-256
-  `ab3eff0fd5b8dd02bcc856c761dfea7d38ca3ce5449e1e02db8b3b1dfacaf7a7` — carries every change listed
+  `d39e31b86918d2802da1d53fec4208116b82314b2564a986f17ee192a3a3549c` — carries every change listed
   above for today (multi-node slots and `peers`, per-slot Nostr tags, per-process tunnel exceptions,
-  the log-noise filter and this volume line).
+  the log-noise filter, the volume line and the country selector).
 
 ### Multi-node slots (unreleased)
 

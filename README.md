@@ -125,6 +125,7 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_PSK` | exit PSK, read from the env so it never lands on the argv/`ps` line (argv is a fallback) |
 | `MAGNETGATE_PORT` / `MAGNETGATE_PUBLIC_HOST` | exit native-channel port and the public host advertised in the offer |
 | `MAGNETGATE_NODE_SLOT` / `MAGNETGATE_NODE_NAME` | exit: which rendezvous slot this node occupies (default `0` = the single-node layout) and the name it advertises; two nodes share one PSK by taking different slots |
+| `MAGNETGATE_NODE_COUNTRY` | exit: optional two-letter country code (e.g. `NL`, `FI`) advertised in the offer. The client shows the codes it can see in a selector and can restrict itself to one country — an address is never shown. Unset means the node just does not appear in that list |
 | `MAGNETGATE_SLOTS` | client: comma-separated slots to look for, e.g. `0,1` — one PSK then finds every node in the set (same as `slots` in the config file) |
 | `MAGNETGATE_PEER_SLOTS` | exit: slots this node watches and advertises in `peers`, e.g. `0,1`; unset means no scanning, and a client that knows one slot can then learn the rest by itself |
 | `MAGNETGATE_EXPECT_PEERS` | exit: log an `[alert]` when fewer than N peer slots answer (unset = never) |
