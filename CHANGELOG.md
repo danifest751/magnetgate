@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Android: routing by site rules (2026-09-17)
+
+- The phone client sent every packet through the exit: its engine configuration had a single rule,
+  `final: core`. It now carries the meaning of the desktop's policy (`app/vpn-config.cjs`) - the same
+  two modes, the same rule-sets, from the same SHA-256 pins.
+  **Full** sends everything through the tunnel and lets only the domains the user named go direct; a
+  packaged list is never consulted there, because a bundled file must not silently bypass the tunnel
+  whatever it is called. **Split** tunnels only what the rule-sets and the user's tunnel list name.
+  Private addresses always go direct.
+- The `.srs` rule-sets are copied out of `tools/sing-box` into the package by Gradle and unpacked into
+  the app's private directory, because libbox reads a rule-set from a path; they are stored
+  uncompressed so `openFd` works. A missing set is not an error, as in the desktop builder.
+- Verified on the emulator as an A/B on one request: in split mode a request to 1.1.1.1 produced no
+  core stream at all, so it left the device directly; in full mode the same request came back as
+  `stream to 1.1.1.1:80 via reality slot 0`.
+
 ### Rendezvous, slots and the Android package (2026-09-17)
 
 - **The exit's DHT node was unreachable from outside, and that looked healthy.** It bound an
