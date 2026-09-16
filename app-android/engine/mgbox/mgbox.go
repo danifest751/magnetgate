@@ -116,6 +116,21 @@ func StartEngine(configJSON string, handler PlatformHandler) error {
 	return nil
 }
 
+// ReloadEngine applies a new configuration to a running engine.
+//
+// The engine rebuilds itself, which means its tun is re-established through the platform; the app's own
+// sockets and the core keep running, so only the connections inside the tunnel are interrupted. That is the
+// price of following a changing set of nodes, and it is the same trade the desktop client makes.
+func ReloadEngine(configJSON string) error {
+	engineMu.Lock()
+	server := engine
+	engineMu.Unlock()
+	if server == nil {
+		return errors.New("mgbox: the engine is not running")
+	}
+	return server.StartOrReloadService(configJSON, &libbox.OverrideOptions{})
+}
+
 // StopEngine takes the engine (and its tunnel) down.
 func StopEngine() {
 	engineMu.Lock()

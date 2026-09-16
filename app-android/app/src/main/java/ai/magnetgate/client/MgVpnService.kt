@@ -32,6 +32,7 @@ class MgVpnService : VpnService() {
 
     private const val CHANNEL_ID = "magnetgate"
     private const val DISCOVERY_TIMEOUT_MS = 90_000L
+    private const val NODE_WATCH_INTERVAL_MS = 5_000L
     private const val NOTIFICATION_ID = 1
 
     @Volatile
@@ -43,6 +44,8 @@ class MgVpnService : VpnService() {
 
   private var running = false
   private var starting = false
+  private var watching = false
+  private var corePort = 0
 
   override fun onCreate() {
     super.onCreate()
@@ -97,8 +100,11 @@ class MgVpnService : VpnService() {
           Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
         }
         running = true
+        corePort = port
+        watching = true
         Log.i(TAG, "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size})")
         notify(notification("connected"))
+        watchNodes()
       } catch (error: Throwable) {
         Log.e(TAG, "the tunnel did not start: ${error.message}", error)
         stopTunnel()
@@ -108,6 +114,43 @@ class MgVpnService : VpnService() {
       }
     }.start()
   }
+
+  /**
+   * Follows the set of nodes the core knows.
+   *
+   * The engine's configuration is a snapshot, so when a node appears (or goes away) the snapshot is rebuilt
+   * from what the core reports and handed to the running engine. The signature is the node and plane set
+   * alone: the loopback ports change with every build, and reloading for those would be a loop.
+   */
+  private fun watchNodes() {
+    var signature = nodeSignature()
+    while (watching) {
+      Thread.sleep(NODE_WATCH_INTERVAL_MS)
+      if (!watching) return
+      val next = nodeSignature()
+      if (next == signature) continue
+      signature = next
+      try {
+        val nodes = discoveredNodes()
+        val built = SingBoxConfig.build(corePort, false, nodes)
+        Mgbox.forgetPlaneSocksPorts()
+        Mgbox.reloadEngine(built.json)
+        for (plane in built.planes) {
+          Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+        }
+        Log.i(TAG, "engine reloaded for ${nodes.size} node(s), ${built.planes.size} engine plane(s)")
+      } catch (error: Throwable) {
+        Log.w(TAG, "the engine was not reloaded: ${error.message}")
+      }
+    }
+  }
+
+  /** The node and plane set, as a value that only changes when the configuration should change. */
+  private fun nodeSignature(): String =
+    discoveredNodes().joinToString(",") { node ->
+      "${node.slot}:" + node.planes.joinToString("+") { it.optString("t") }
+    }
+
 
   /** Starts the core and waits for the first discovered node. */
   private fun startCoreAndWaitForNode(bootstrap: String, relays: String): Int {
@@ -202,6 +245,7 @@ class MgVpnService : VpnService() {
     if (!running && !starting) return
     running = false
     starting = false
+    watching = false
     try {
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.stopEngine()
