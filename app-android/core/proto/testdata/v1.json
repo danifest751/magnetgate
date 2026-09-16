@@ -13,7 +13,10 @@
     "maxSealDomain": 64,
     "frameHeaderSize": 58,
     "maxFrameBytes": 4194304,
-    "minFrameLength": 54
+    "minFrameLength": 54,
+    "hsMsg1Len": 81,
+    "hsMsg2Len": 105,
+    "hsTimestampSkewMs": 60000
   },
   "keys": {
     "pk": "c48fbd4ddb66cc10ef80de253f44f3cba2a07557a45e5cbac1a07f1ec8faae32",
@@ -92,5 +95,13 @@
       "data": 12346,
       "open": 10058
     }
-  ]
+  ],
+  "handshake": {
+    "msg1": "994f6892845268f74480387afa6811d90d2c53489f3dfc17b98cbeafdf11d3a9b981a6d3865350c1af90971a36da9a3d8246d843b548d2cb0c555844f55a28a92e86865ffb50543016d1068dcc4f8e8f91",
+    "msg2": "682a633bb152ada14bd57dfa54daab3c5ad327f2a8f7f9aab35017a602fedb31d24b79976dab8ba6ac3c0c8dc8beed22a4cc5623c5c0b8441c478e09350d1fdd32ca19e3d932d9bed1d559e5820e323dfd181c314b5a0059cea83a51abd1bbf61efbc47222d0e8a44e",
+    "ceSk": "8f13e1af9b0e467f4556147ec3c72b1797226683256ddef1e2058485ad22482f",
+    "cePk": "ff2a0c31f10f3d52320d711489a4d190ca2a486d735d89c6021fd3a7fbe26707",
+    "c2e": "197d92c6cd77aa78514e2de51beb0686830474d63c8b52a8cc9f74fc42703432",
+    "e2c": "417c58257bf65318ab7597a30d5bc43a53a08b1dba8702ea7acbfea43e1309b0"
+  }
 }

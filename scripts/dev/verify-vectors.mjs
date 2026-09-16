@@ -13,6 +13,9 @@ import {
   unseal,
   frame2,
   makeCodecV2,
+  hsClientInit,
+  hsExitRespond,
+  hsClientFinish,
   FRAME,
   OFFER_SCHEMA,
   MAX_SLOTS
@@ -59,15 +62,21 @@ function buildClis(binDir) {
     execFileSync(go, ['build', '-o', out, `./cmd/${name}`], { cwd: coreDir })
     return out
   }
-  return { seal: build('seal'), unseal: build('unseal'), frame: build('frame') }
+  return { seal: build('seal'), unseal: build('unseal'), frame: build('frame'), hs: build('hs') }
 }
 
-function runBin(bin, { psk, slot, domain, input, args = [] }) {
+function runBin(bin, { psk, slot, domain, input, args = [], extraEnv = {} }) {
   try {
     const out = execFileSync(bin, args, {
       cwd: coreDir,
       input,
-      env: { ...process.env, MG_PSK: psk, MG_SLOT: String(slot ?? 0), MG_DOMAIN: domain ?? '' },
+      env: {
+        ...process.env,
+        MG_PSK: psk,
+        MG_SLOT: String(slot ?? 0),
+        MG_DOMAIN: domain ?? '',
+        ...extraEnv
+      },
       encoding: 'utf8',
       maxBuffer: 8 * 1024 * 1024,
       // rejections are expected in several checks: keep their stderr out of the report
@@ -214,6 +223,70 @@ function main() {
       args: [`-mode=encode`, `-type=${FRAME.PING}`, '-id=3', '-seq=0']
     })
     check(badStream.code === 1, 'Go отказывается собирать ping со streamId != 0')
+
+    console.log('=== 7. хендшейк: Node ⇄ Go (обе стороны) ===')
+    // (a) Node is the client, Go is the exit
+    const nodeInit = hsClientInit(boxKey)
+    const goRespond = runBin(cli.hs, {
+      psk: PSK,
+      input: nodeInit.msg1.toString('hex'),
+      args: ['-mode=respond']
+    })
+    check(goRespond.code === 0, 'Go отвечает на msg1 клиента Node', goRespond.out)
+    const goKeys = goRespond.code === 0 ? JSON.parse(goRespond.out) : null
+    const nodeFinish = goKeys && hsClientFinish(boxKey, Buffer.from(goKeys.msg2, 'hex'), nodeInit.ceSk, nodeInit.cePk)
+    check(
+      !!nodeFinish && nodeFinish.keys.c2e.toString('hex') === goKeys.c2e && nodeFinish.keys.e2c.toString('hex') === goKeys.e2c,
+      'Node-клиент и Go-exit выводят одни и те же ключи сессии',
+      JSON.stringify({ node: nodeFinish && nodeFinish.keys.c2e.toString('hex'), go: goKeys && goKeys.c2e })
+    )
+
+    // (b) Go is the client, Node is the exit
+    const goInit = runBin(cli.hs, { psk: PSK, input: '', args: ['-mode=init'] })
+    check(goInit.code === 0, 'Go начинает хендшейк', goInit.out)
+    const goEph = goInit.code === 0 ? JSON.parse(goInit.out) : null
+    const nodeReply = goEph && hsExitRespond(boxKey, Buffer.from(goEph.msg1, 'hex'))
+    check(!!nodeReply, 'Node-exit отвечает на msg1 клиента Go')
+    let mismatched = false
+    if (nodeReply) {
+      const goDone = runBin(cli.hs, {
+        psk: PSK,
+        input: nodeReply.msg2.toString('hex'),
+        args: ['-mode=finish'],
+        extraEnv: { MG_CE_SK: goEph.ceSk, MG_CE_PK: goEph.cePk }
+      })
+      mismatched = goDone.code !== 0
+      check(!mismatched, 'Go завершает хендшейк с Node-exit', goDone.out)
+      if (!mismatched) {
+        const done = JSON.parse(goDone.out)
+        check(
+          done.c2e === nodeReply.keys.c2e.toString('hex') && done.e2c === nodeReply.keys.e2c.toString('hex'),
+          'Go-клиент и Node-exit выводят одни и те же ключи сессии'
+        )
+      }
+    }
+
+    console.log('=== 8. хендшейк: отказы ===')
+    check(
+      runBin(cli.hs, { psk: PSK, input: 'deadbeef', args: ['-mode=respond'] }).code === 1,
+      'Go отвергает мусорный msg1'
+    )
+    check(
+      runBin(cli.hs, { psk: 'a-different-psk', input: nodeInit.msg1.toString('hex'), args: ['-mode=respond'] }).code === 1,
+      'Go отвергает msg1, зашифрованный другим PSK'
+    )
+    check(
+      !!nodeReply &&
+        runBin(cli.hs, {
+          psk: PSK,
+          input: nodeReply.msg2.toString('hex'),
+          args: ['-mode=finish'],
+          extraEnv: { MG_CE_SK: 'ff'.repeat(32), MG_CE_PK: 'ee'.repeat(32) }
+        }).code === 1,
+      'Go отвергает ответ exit\'а, если эфемерный ключ не тот (привязка ответа)'
+    )
+    // stale timestamps are covered by the Go unit test (TestHandshakeRejections/stale_timestamp):
+    // they need a hand-built msg1, which is a unit concern rather than an interop one
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

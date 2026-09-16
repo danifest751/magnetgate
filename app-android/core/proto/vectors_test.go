@@ -15,14 +15,25 @@ import (
 type vectors struct {
 	Psk       string `json:"psk"`
 	Constants struct {
-		EnvelopeVersion int `json:"envelopeVersion"`
-		OfferSchema     int `json:"offerSchema"`
-		MaxSlots        int `json:"maxSlots"`
-		MaxSealDomain   int `json:"maxSealDomain"`
-		FrameHeaderSize int `json:"frameHeaderSize"`
-		MaxFrameBytes   int `json:"maxFrameBytes"`
-		MinFrameLength  int `json:"minFrameLength"`
+		EnvelopeVersion   int `json:"envelopeVersion"`
+		OfferSchema       int `json:"offerSchema"`
+		MaxSlots          int `json:"maxSlots"`
+		MaxSealDomain     int `json:"maxSealDomain"`
+		FrameHeaderSize   int `json:"frameHeaderSize"`
+		MaxFrameBytes     int `json:"maxFrameBytes"`
+		MinFrameLength    int `json:"minFrameLength"`
+		HsMsg1Len         int `json:"hsMsg1Len"`
+		HsMsg2Len         int `json:"hsMsg2Len"`
+		HsTimestampSkewMs int `json:"hsTimestampSkewMs"`
 	} `json:"constants"`
+	Handshake struct {
+		Msg1 string `json:"msg1"`
+		Msg2 string `json:"msg2"`
+		CeSk string `json:"ceSk"`
+		CePk string `json:"cePk"`
+		C2E  string `json:"c2e"`
+		E2C  string `json:"e2c"`
+	} `json:"handshake"`
 	FrameLengths []struct {
 		PlainLen int `json:"plainLen"`
 		Data     int `json:"data"`

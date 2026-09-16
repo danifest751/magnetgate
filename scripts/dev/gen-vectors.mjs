@@ -8,6 +8,12 @@ import {
   slotBoxKey,
   targetOf,
   frame2,
+  hsClientInit,
+  hsExitRespond,
+  hsClientFinish,
+  HS_MSG1_LEN,
+  HS_MSG2_LEN,
+  HS_TS_SKEW_MS,
   FRAME,
   OFFER_SCHEMA,
   MAX_SLOTS
@@ -54,6 +60,22 @@ export function buildVectors(psk = TEST_PSK) {
       open: frame2(boxKey, FRAME.OPEN, 1, plain, 0n).length
     })
   }
+  // A recorded handshake: the random parts (ephemeral keys, nonces) are baked into the bytes, the
+  // derived session keys are not. Both implementations must reproduce the same keys from the same
+  // transcript, which pins the message layout, the KDF and the reply binding. The Go test reads the
+  // timestamp out of msg1 and drives ExitRespond with it, so the vector never goes stale.
+  const { msg1, ceSk, cePk } = hsClientInit(boxKey)
+  const exitReply = hsExitRespond(boxKey, msg1)
+  const clientSide = hsClientFinish(boxKey, exitReply.msg2, ceSk, cePk)
+  const handshake = {
+    msg1: hex(msg1),
+    msg2: hex(exitReply.msg2),
+    ceSk: hex(ceSk),
+    cePk: hex(cePk),
+    c2e: hex(clientSide.keys.c2e),
+    e2c: hex(clientSide.keys.e2c)
+  }
+
   return {
     comment: [
       'Deterministic protocol vectors shared by the Node client and the Android Go core.',
@@ -69,11 +91,15 @@ export function buildVectors(psk = TEST_PSK) {
       maxSealDomain: 64,
       frameHeaderSize: FRAME_HDR_JS,
       maxFrameBytes: 4 * 1024 * 1024,
-      minFrameLength: 54
+      minFrameLength: 54,
+      hsMsg1Len: HS_MSG1_LEN,
+      hsMsg2Len: HS_MSG2_LEN,
+      hsTimestampSkewMs: HS_TS_SKEW_MS
     },
     keys: { pk: hex(pk), boxKey: hex(boxKey), salt0: hex(saltOf(psk)) },
     slots,
-    frameLengths
+    frameLengths,
+    handshake
   }
 }
 
