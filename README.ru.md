@@ -118,6 +118,9 @@ Exit публикует один и тот же sealed-offer в оба кана�
 | `MAGNETGATE_SOCKS_HOST` | адрес bind SOCKS5-клиента (по умолчанию `127.0.0.1`; не открывать в LAN) |
 | `MAGNETGATE_ALLOW_PRIVATE` | exit: `1` разрешает CONNECT к loopback/link-local/RFC1918 (по умолчанию заблокировано — защита от SSRF) |
 | `MAGNETGATE_MAX_SESSIONS` / `MAGNETGATE_MAX_STREAMS` | лимиты exit'а (по умолчанию 512 / 256 на сессию) |
+| `MAGNETGATE_UDP_IDLE_MS` | exit: закрыть reliable-UDP-стрим после стольких мс молчания (по умолчанию 600000); иначе исчезнувший пир навсегда занимает слот |
+| `MAGNETGATE_HEALTH_FILE` | exit: писать в этот файл состояние публикации (последний put, число нод, счётчик неудач) |
+| `MAGNETGATE_ALERT_AFTER` | exit: предупреждать после N публикаций подряд, не достигших ни одной DHT-ноды (по умолчанию 5) |
 | `MAGNETGATE_TRANSPORT` | нативный канал: `tcp` (по умолчанию) или `udp` (экспериментальный reliable-UDP) |
 | `MAGNETGATE_REALITY_SNI` | exit: сайт, чей TLS заимствует Reality (по умолчанию `www.microsoft.com`) |
 | `MAGNETGATE_STATS` | клиент: логировать счётчики трафика по exit'ам каждые N секунд |
@@ -193,7 +196,7 @@ ENV
 chown root:magnetgate /etc/magnetgate.env && chmod 640 /etc/magnetgate.env
 
 cp systemd/*.service systemd/*.timer /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-deploy.timer
+systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-health.timer magnetgate-deploy.timer
 
 # дата-плоскости (Reality + hysteria2 + ежедневная ротация):
 MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh

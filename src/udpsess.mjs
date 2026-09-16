@@ -1,6 +1,7 @@
 // Minimal reliable ordered stream over UDP (pure-JS ARQ, experimental).
 // Datagram: [0x4D][conv u32][cmd u8][seq u32][payload]
-//   HELLO(1): payload = 8-byte connSalt (client → exit, retransmitted until acked)
+//   HELLO(1): empty payload (client → exit, retransmitted until acked); the session keys are
+//              negotiated at the application layer on top of this stream, not from a transport salt
 //   HELLO_ACK(2): payload empty
 //   PSH(3): payload = a fragment of the ordered byte stream
 //   ACK(4): payload = u32 nextExpectedSeq (cumulative)
@@ -66,6 +67,7 @@ export class ReliableStream extends EventEmitter {
     this.keys = null
     this.helloWait = null
     this.helloSentAt = 0
+    this.lastActive = now()
     this.tick = setInterval(() => this.onTick(), TICK_MS)
     // NOTE: the datagram dispatch is attached by the owner (client handshake or ExitUdpMux)
   }
@@ -93,6 +95,7 @@ export class ReliableStream extends EventEmitter {
     if (rinfo.address !== this.remote.host || rinfo.port !== this.remote.port) return
     const p = decode(msg)
     if (!p || p.conv !== this.conv) return
+    this.lastActive = now() // any valid datagram from the peer counts as liveness
     if (p.cmd === UDP_CMD.HELLO_ACK) {
       if (p.payload.length !== 0) return this.destroy()
       if (process.env.MAGNETGATE_DEBUG)
@@ -177,6 +180,7 @@ export class ReliableStream extends EventEmitter {
 
   write(data) {
     if (this.closed) return false
+    this.lastActive = now()
     if (this.queue.length + Math.ceil(data.length / MTU) > 4096) {
       this.destroy()
       return false
@@ -254,9 +258,10 @@ export async function createClientUdpStream({ remote }) {
 
 // Exit side: one bound UDP socket; each HELLO spawns a stream (deduped by conv@peer)
 export class ExitUdpMux {
-  constructor({ port, boxKey, onConn }) {
+  constructor({ port, boxKey, onConn, idleMs = Number(process.env.MAGNETGATE_UDP_IDLE_MS ?? 600000) }) {
     this.boxKey = boxKey
     this.onConn = onConn
+    this.idleMs = idleMs > 0 ? idleMs : 0
     this.udp = dgram.createSocket('udp4')
     this.streams = new Map() // key conv@peer -> { stream }
     this.udp.on('message', (msg, rinfo) => this.onDatagram(msg, rinfo))
@@ -264,6 +269,33 @@ export class ExitUdpMux {
       for (const { stream } of this.streams.values()) stream.destroy()
     })
     this.udp.bind(port)
+    // A peer that simply vanishes never sends a FIN, and without this sweep its entry would stay
+    // forever: the 512-stream cap would then lock out every new client (S9). unref() so the sweep
+    // never keeps the process alive on its own.
+    this.sweep = this.idleMs
+      ? setInterval(() => this.evictIdle(), Math.min(30000, Math.max(1000, this.idleMs)))
+      : null
+    if (this.sweep?.unref) this.sweep.unref()
+    this.udp.on('close', () => this.close())
+  }
+
+  // destroy streams that have seen no valid datagram and sent nothing for idleMs
+  evictIdle() {
+    if (!this.idleMs) return 0
+    const cutoff = now() - this.idleMs
+    let evicted = 0
+    for (const { stream } of this.streams.values()) {
+      if (stream.closed) continue
+      if ((stream.lastActive ?? 0) > cutoff) continue
+      stream.destroy()
+      evicted++
+    }
+    return evicted
+  }
+
+  close() {
+    if (this.sweep) clearInterval(this.sweep)
+    this.sweep = null
   }
 
   onDatagram(msg, rinfo) {

@@ -1,0 +1,11 @@
+[Unit]
+Description=check the magnetgate exit publication health every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+Persistent=false
+
+[Install]
+WantedBy=timers.target

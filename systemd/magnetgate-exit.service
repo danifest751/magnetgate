@@ -11,6 +11,8 @@ WorkingDirectory=/opt/magnetgate
 EnvironmentFile=/etc/magnetgate.env
 Environment=NODE_ENV=production
 Environment=MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq
+# publication heartbeat read by scripts/healthcheck.mjs (magnetgate-health.timer)
+Environment=MAGNETGATE_HEALTH_FILE=/var/lib/magnetgate/health.json
 ExecStart=/usr/bin/flock --no-fork --nonblock /var/lib/magnetgate/publisher.lock /usr/bin/node src/exit.js
 Restart=always
 RestartSec=5

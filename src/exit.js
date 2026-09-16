@@ -8,7 +8,7 @@ import net from 'node:net'
 import os from 'node:os'
 import fs from 'node:fs'
 import { createExitHandler } from './exit-session.mjs'
-import { sequenceStore } from './state-file.mjs'
+import { sequenceStore, atomicWrite } from './state-file.mjs'
 import { deriveKeys, saltOf, signer, seal, bep44Verify, BOOTSTRAP, pskWarning } from './common.mjs'
 
 const SECRET = process.env.MAGNETGATE_PSK ?? process.env.PSK ?? process.argv[2]
@@ -16,6 +16,11 @@ const DATA_PORT = parseInt(process.env.MAGNETGATE_PORT ?? process.argv[3] ?? '49
 const PUBLIC_HOST = process.env.MAGNETGATE_PUBLIC_HOST ?? process.argv[4] ?? null
 const SEQ_FILE = process.env.MAGNETGATE_SEQ_FILE ?? null
 const ts = () => new Date().toISOString()
+// Optional health file for an external check (scripts/healthcheck.mjs + magnetgate-health.timer).
+// An exit whose offers are accepted by no DHT node is invisible to clients while still looking
+// "up" to systemd, so publication state is worth exposing.
+const HEALTH_FILE = process.env.MAGNETGATE_HEALTH_FILE ?? null
+const ALERT_AFTER = Number(process.env.MAGNETGATE_ALERT_AFTER ?? 5)
 
 if (!SECRET) {
   console.error('usage: MAGNETGATE_PSK=<psk> node src/exit.js [dataPort] [publicHost]')
@@ -44,6 +49,31 @@ if (process.env.MAGNETGATE_NOSTR !== 'off') {
 const dht = new DHT({ bootstrap: BOOTSTRAP, verify: bep44Verify })
 const nextSequence = sequenceStore(SEQ_FILE)
 let dhtReady = false
+
+// --- publication health ----------------------------------------------------------------------------
+let failures = 0
+const health = {
+  startedAt: ts(),
+  nostr: nostr ? 'enabled' : 'disabled',
+  publishedAt: null,
+  ok: null,
+  nodes: 0,
+  dhtNodes: 0,
+  dhtReady: false,
+  seq: null,
+  failures: 0,
+  error: null
+}
+function writeHealth(patch = {}) {
+  Object.assign(health, patch)
+  if (!HEALTH_FILE) return
+  try {
+    atomicWrite(HEALTH_FILE, JSON.stringify(health, null, 2))
+  } catch (e) {
+    console.log(ts(), `[health] write failed: ${e.message}`)
+  }
+}
+writeHealth()
 
 function autoIp() {
   for (const list of Object.values(os.networkInterfaces()))
@@ -106,7 +136,28 @@ function publish() {
       v: sealed
     },
     (err, _h, n) => {
-      console.log(ts(), err ? `[dht] put failed: ${err.message}` : `[dht] published (n=${n})`)
+      const nodes = typeof n === 'number' ? n : 0
+      let dhtNodes = 0
+      try {
+        dhtNodes = dht.nodes.toArray().length
+      } catch {}
+      if (err) console.log(ts(), `[dht] put failed: ${err.message}`)
+      else console.log(ts(), `[dht] published (n=${nodes})`)
+      failures = !err && nodes > 0 ? 0 : failures + 1
+      if (failures >= ALERT_AFTER)
+        console.log(
+          ts(),
+          `[alert] ${failures} consecutive publications reached no DHT node - clients that rely on DHT cannot find this exit`
+        )
+      writeHealth({
+        publishedAt: ts(),
+        ok: !err && nodes > 0,
+        nodes,
+        dhtNodes,
+        seq,
+        failures,
+        error: err ? err.message : null
+      })
     }
   )
 }
@@ -116,6 +167,7 @@ dht.listen(() =>
 )
 dht.on('ready', () => {
   dhtReady = true
+  writeHealth({ dhtReady: true })
   setTimeout(publish, 2000)
 })
 

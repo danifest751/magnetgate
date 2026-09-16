@@ -124,6 +124,9 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_SOCKS_HOST` | client SOCKS5 bind address (default `127.0.0.1`; do not expose it to the LAN) |
 | `MAGNETGATE_ALLOW_PRIVATE` | exit: `1` allows CONNECT to loopback/link-local/RFC1918 (blocked by default — SSRF guard) |
 | `MAGNETGATE_MAX_SESSIONS` / `MAGNETGATE_MAX_STREAMS` | exit resource caps (default 512 / 256 per session) |
+| `MAGNETGATE_UDP_IDLE_MS` | exit: drop a reliable-UDP stream after this much silence (default 600000); a vanishing peer otherwise holds a slot forever |
+| `MAGNETGATE_HEALTH_FILE` | exit: write publication health (last put, node count, consecutive failures) to this file |
+| `MAGNETGATE_ALERT_AFTER` | exit: warn after N consecutive publications that reached no DHT node (default 5) |
 | `MAGNETGATE_TRANSPORT` | native channel: `tcp` (default) or `udp` (experimental reliable-UDP) |
 | `MAGNETGATE_REALITY_SNI` | exit: the site whose TLS Reality borrows (default `www.microsoft.com`) |
 | `MAGNETGATE_STATS` | client: log per-exit traffic counters every N seconds |
@@ -199,7 +202,7 @@ ENV
 chown root:magnetgate /etc/magnetgate.env && chmod 640 /etc/magnetgate.env
 
 cp systemd/*.service systemd/*.timer /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-deploy.timer
+systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-health.timer magnetgate-deploy.timer
 
 # data planes (Reality + hysteria2 + daily rotation):
 MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
