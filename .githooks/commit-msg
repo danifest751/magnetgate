@@ -35,10 +35,11 @@ if [ "$subj_len" -gt 72 ]; then
   exit 1
 fi
 
-# secrets guard: never commit the key directory or obvious credentials
-if git diff --cached --name-only | grep -qiE '(^key/|\.pem$|/\.env($|\.)|access\.txt$)'; then
-  echo "commit rejected: credentials or key material in the changeset" >&2
-  git diff --cached --name-only | grep -iE '(^key/|\.pem$|/\.env($|\.)|access\.txt$)' >&2
+# secrets guard: never commit the key directory, obvious credentials or field test reports
+if git diff --cached --name-only | grep -qiE '(^key/|\.pem$|\.ppk$|\.p12$|\.pfx$|/\.env($|\.)|access\.txt$|^tests/results[a-z.]*\.md$|vps-psk|TG\.txt|oflx_key)'; then
+  echo "commit rejected: credentials, key material or a field test report in the changeset" >&2
+  echo "  (content-level check: scripts/check-hygiene.mjs via the pre-commit hook)" >&2
+  git diff --cached --name-only | grep -iE '(^key/|\.pem$|\.ppk$|\.p12$|\.pfx$|/\.env($|\.)|access\.txt$|^tests/results[a-z.]*\.md$|vps-psk|TG\.txt|oflx_key)' >&2
   exit 1
 fi
 

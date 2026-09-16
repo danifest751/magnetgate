@@ -1,0 +1,8 @@
+#!/bin/sh
+# Rejects staged secrets, private keys, field test reports and real host addresses.
+# The repository is public; see scripts/check-hygiene.mjs and docs/audit-2026-09-16.md (S2).
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node is required to run scripts/check-hygiene.mjs" >&2
+  exit 1
+fi
+exec node scripts/check-hygiene.mjs --staged

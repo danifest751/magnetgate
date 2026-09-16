@@ -21,6 +21,10 @@ magnetgate.config.json
 # internal documentation (not published)
 docs/
 
+# field test reports carry live infrastructure addresses — never publish them
+tests/results*.md
+*.bundle
+
 # electron app build output
 app/dist/
 

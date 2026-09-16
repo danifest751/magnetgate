@@ -209,7 +209,7 @@ MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
 ## Документация
 
 Дизайн-заметки, ТЗ, методика испытаний и ресёрч (с планом на 2026) лежат во внутренней папке `docs/`,
-намеренно не публикуемой в репозитории. Отчёт об испытаниях: [tests/results.md](tests/results.md).
+намеренно не публикуемой в репозитории. Отчёты об испытаниях хранятся внутри и в репозиторий не попадают.
 Юнит-тесты: `npm test` (node:test). Правила коммитов: [CONTRIBUTING.md](CONTRIBUTING.md)
 (Conventional Commits, только английский, проверяется хуком `commit-msg`).
 

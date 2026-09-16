@@ -215,7 +215,7 @@ magnetgate exit/DHT; sing-box is untouched, so Reality/hysteria2 sessions surviv
 
 Design notes, the implementation spec, the testing methodology and the research survey (with the
 2026 build plan) live in the internal `docs/` directory, kept out of the public repository.
-Test report: [tests/results.md](tests/results.md). Unit tests: `npm test` (node:test).
+Field test reports are kept internal, outside the repository. Unit tests: `npm test` (node:test).
 Commit conventions: [CONTRIBUTING.md](CONTRIBUTING.md) (Conventional Commits, English-only,
 enforced by a `commit-msg` hook).
 

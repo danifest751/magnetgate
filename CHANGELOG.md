@@ -280,7 +280,8 @@
 - Persistent `seq` (`MAGNETGATE_SEQ_FILE`) — the BEP 44 CAS requirement across restarts.
 - Fixes: `verify` is mandatory for BEP 44 in bittorrent-dht; the sodium-native argument order of
   `crypto_sign_verify_detached`; the salt in `dht.get()` opts.
-- Tests: M1–M4 pass (see tests/results.md); HTTPS to a blocked resource through the tunnel — 200.
+- Tests: M1–M4 pass; HTTPS to a blocked resource through the tunnel — 200. (Field test reports are kept
+  internal, outside the repository.)
 - Documentation is now English-primary with Russian versions in `docs/ru/` and `README.ru.md`.
 
 ## 0.1.0 — 2026-09-11
