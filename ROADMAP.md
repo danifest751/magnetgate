@@ -84,6 +84,22 @@ product decisions, not cleanups:
 Deferred deliberately: splitting `app/main.js` (it is covered by tests and is in daily use) and any
 change to the TUN stack.
 
+**Owner decision (2026-09-16):** items 1 (fixed exit address / exit overlay) and 3 (firewall-guard
+field testing) stay on the roadmap but are **not being worked on while the project is in its test
+stage**. Item 2 (root deploy path and commit signing) is open. The audit report keeps them listed as
+unresolved rather than planned, and the README wording was adjusted so nothing claims more than the
+code delivers today.
+
+The blocker for item 1 is concrete, not a priority call: §4 assumes a private overlay of the
+operator's own nodes (at minimum a cheap entry plus the existing egress), and **there is currently no
+capacity to run additional nodes**. Nothing in §4 can be built for a single host, because a second
+address is exactly what the overlay exists to provide. Consequence to keep in mind while this holds:
+the only mitigation available today is changing the existing exit's address (a different host or IP),
+which is a manual outage, and — because `pk`/`salt` derive from the PSK — it cannot be done without
+redistributing the PSK to every client. So the honest operational rule until then is "if the address
+gets blocked, the exit must move, and that is a coordinated client+server change", not "it recovers
+by itself".
+
 ## 4. The exit overlay — entry/egress split & control-plane mesh
 
 **Motivation.** The two honest weaknesses of the current design are (a) the exit is a single,
