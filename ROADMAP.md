@@ -191,6 +191,11 @@ Verify: client → entry → egress → target works, the egress IP never appear
 burning/rotating the entry swaps it without touching the egress. If it holds up, add the control-plane
 gossip (§4.2) and a small pool of entries.
 
+This still needs a relay protocol between the two nodes, so it stays blocked while there is no
+capacity for extra nodes. It should not be confused with multi-exit fan-out (§5): that one gives
+availability across independent exits and is being designed first, but it does **not** hide an egress
+— every exit stays discoverable in the rendezvous, which is exactly the property §4 exists to change.
+
 ## 5. Other post-Phase-3 directions
 
 - **WebRTC DataChannel data plane** (coturn on the exit; DTLS looks like a video call; built-in NAT
@@ -198,7 +203,10 @@ gossip (§4.2) and a small pool of entries.
 - **Third rendezvous channel** — a DoH / ENS dead-drop, so Layer 1 has ≥3 independent mechanisms.
 - **Multi-exit fan-out** — several exits, each rotating Reality/hysteria2; the client load-balances
   and fails over across them (a lighter cousin of the overlay when full entry/egress split is not
-  needed).
+  needed). **Chosen next step:** it needs no relay protocol and the client is already most of the way
+  there (`exits[]` takes a shared PSK with a per-node salt; per-connection fail-over and the desktop
+  `urltest` exist). The only real gap is that an exit cannot be assigned a slot today. Design,
+  including what deliberately stays out of scope: internal `docs/design-multi-node.md`.
 - **Multipath aggregation** — carry one session across several data planes at once (MPTCP-style), so
   blocking one degrades throughput instead of dropping the session.
 - **Cold-fallback tier** — email/IMAP store-and-forward for total-shutdown scenarios; Starlink at the
