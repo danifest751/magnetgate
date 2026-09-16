@@ -2,6 +2,7 @@ package dht
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"net"
 	"testing"
@@ -53,20 +54,34 @@ func testKeys(t *testing.T, psk string) proto.Keys {
 }
 
 // The signed bytes are a wire contract with every exit: bittorrent-dht signs
-// bencode({salt, seq, v}) with the dictionary markers sliced off, so a reconstruction that keeps them
-// (or that re-encodes the value) would reject every genuine offer.
-func TestSigningInputMatchesBEP44(t *testing.T) {
-	// the value token is what sits on the wire: the bencoding of a byte string, prefix included
-	if got := string(SigningInput([]byte("s"), 7, []byte("2:hi"))); got != "4:salt1:s3:seqi7e1:v2:hi" {
-		t.Errorf("with salt: got %q", got)
+// bencode({salt, seq, v}) with the dictionary markers sliced off, and the value keeps its own length
+// prefix. The layout is pinned here by signing it by hand and handing it to the verifier that actually
+// runs, so there is exactly one encoder on our side (the library's) and a test that notices if the
+// convention ever changes.
+func TestSignedBytesLayoutIsTheWireContract(t *testing.T) {
+	keys := testKeys(t, "dht-test-psk")
+	salt := []byte("s")
+	seq := int64(7)
+	token := []byte("2:hi") // what a node serves as `v` for the value "hi"
+
+	// "4:salt1:s" + "3:seqi7e1:v" + "2:hi", i.e. the bencoding of {salt, seq, v} without the 'd'/'e'
+	signed := append([]byte("4:salt1:s3:seqi7e1:v"), token...)
+	if !bep44.Verify(keys.Pk[:], salt, seq, token, ed25519.Sign(keys.Sk, signed)) {
+		t.Fatal("the agreed layout must verify")
 	}
-	if got := string(SigningInput(nil, 1, []byte("1:v"))); got != "3:seqi1e1:v1:v" {
-		t.Errorf("without salt: got %q", got)
+	// keeping the dictionary markers, as a naive bencoder would, must not
+	withMarkers := append([]byte{'d'}, append(signed, 'e')...)
+	if bep44.Verify(keys.Pk[:], salt, seq, token, ed25519.Sign(keys.Sk, withMarkers)) {
+		t.Error("the dictionary markers must not be part of the signed bytes")
+	}
+	// a doubly encoded value is a different byte string and must not pass against this signature
+	doubleEncoded := []byte("4:2:hi")
+	if bep44.Verify(keys.Pk[:], salt, seq, doubleEncoded, ed25519.Sign(keys.Sk, signed)) {
+		t.Error("a doubly encoded value must not verify")
 	}
 }
 
-// The library signs with its own reconstruction of the same bytes; if ours differed by one byte, every
-// genuine record would be refused.
+// The library signs with its own reconstruction of the same bytes; this keeps the tamper cases honest.
 func TestSignatureVerificationMatchesTheSigner(t *testing.T) {
 	keys := testKeys(t, "dht-test-psk")
 	salt := proto.SaltOf("dht-test-psk")
@@ -76,7 +91,7 @@ func TestSignatureVerificationMatchesTheSigner(t *testing.T) {
 	}
 	token := []byte("5:hello") // what a node serves as `v` for that value
 
-	if !verifySignature(keys.Pk, salt, 1, token, item.Sig) {
+	if !bep44.Verify(keys.Pk[:], salt, 1, token, item.Sig[:]) {
 		t.Fatal("a genuine signature must verify")
 	}
 	direct := bep44.Sign(keys.Sk, salt, 1, token)
@@ -85,18 +100,17 @@ func TestSignatureVerificationMatchesTheSigner(t *testing.T) {
 	if fromSign != item.Sig {
 		t.Fatal("bep44.Sign and NewItem must produce the same signature")
 	}
-	if verifySignature(keys.Pk, salt, 1, []byte("5:other"), item.Sig) {
+	if bep44.Verify(keys.Pk[:], salt, 1, []byte("5:other"), item.Sig[:]) {
 		t.Error("a tampered value must not verify")
 	}
-	if verifySignature(keys.Pk, salt, 2, token, item.Sig) {
+	if bep44.Verify(keys.Pk[:], salt, 2, token, item.Sig[:]) {
 		t.Error("a different sequence number must not verify")
 	}
 	other := testKeys(t, "another-psk")
-	if verifySignature(other.Pk, salt, 1, token, item.Sig) {
+	if bep44.Verify(other.Pk[:], salt, 1, token, item.Sig[:]) {
 		t.Error("a different key must not verify")
 	}
-	otherSalt := proto.SaltOf("another-psk")
-	if verifySignature(keys.Pk, otherSalt, 1, token, item.Sig) {
+	if bep44.Verify(keys.Pk[:], proto.SaltOf("another-psk"), 1, token, item.Sig[:]) {
 		t.Error("a different salt must not verify")
 	}
 }

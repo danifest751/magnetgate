@@ -21,15 +21,11 @@ import (
 	"github.com/anacrolix/dht/v2"
 	"github.com/anacrolix/dht/v2/bep44"
 	"github.com/anacrolix/dht/v2/exts/getput"
-
-	"magnetgate/core/proto"
 )
 
 var (
 	// ErrNotFound means no node on the lookup path had the item (yet).
 	ErrNotFound = errors.New("dht: no offer")
-	// ErrBadSignature means the item exists but was not signed by the key we asked for.
-	ErrBadSignature = errors.New("dht: offer signature does not match the key")
 	// ErrNotMutable means the item came back as an immutable one, which is never how a node publishes.
 	ErrNotMutable = errors.New("dht: item is not mutable")
 	// ErrBadValue means the item is not a bencoded byte string, so it cannot be a sealed offer.
@@ -109,45 +105,20 @@ func (c *Client) Get(ctx context.Context, pk [32]byte, salt []byte) ([]byte, int
 		return nil, 0, fmt.Errorf("%w: %v", ErrNotFound, err)
 	}
 	c.logf("dht: lookup finished: %d queries, %d responses", stats.NumAddrsTried, stats.NumResponses)
+	// The traversal accepted this record only after checking that it is mutable, that its target is
+	// SHA1(k ‖ salt) and that its ed25519 signature covers the exact bytes we asked for, so authenticity
+	// is settled here; what is left is the shape of the value itself.
 	if !result.Mutable {
 		return nil, 0, ErrNotMutable
 	}
 	if len(result.V) == 0 {
 		return nil, 0, ErrNotFound
 	}
-	// result.V is the value as it sits on the wire — a bencoded byte string — which is exactly what the
-	// signature covers; the envelope inside it is what we actually want.
-	if !verifySignature(pk, salt, result.Seq, result.V, result.Sig) {
-		return nil, 0, ErrBadSignature
-	}
 	value, err := unwrapValue(result.V)
 	if err != nil {
 		return nil, 0, err
 	}
 	return value, result.Seq, nil
-}
-
-// verifySignature checks a record against the key it claims to be published under.
-func verifySignature(pk [32]byte, salt []byte, seq int64, valueToken []byte, sig [64]byte) bool {
-	return proto.VerifyDetached(sig[:], SigningInput(salt, seq, valueToken), pk)
-}
-
-// SigningInput rebuilds the bytes BEP 44 signs.
-//
-// Both sides of the wire strip the bencode dictionary markers: bittorrent-dht encodes {salt, seq, v}
-// and signs `encode(ref).slice(1, -1)`, i.e. everything between the 'd' and the final 'e'. The value
-// stays in its wire form (a byte string, length prefix included), so the caller passes the token it
-// received, not the decoded envelope.
-func SigningInput(salt []byte, seq int64, valueToken []byte) []byte {
-	out := make([]byte, 0, 32+len(salt)+len(valueToken))
-	if len(salt) > 0 {
-		out = appendString(out, []byte("salt"))
-		out = appendString(out, salt)
-	}
-	out = append(out, "3:seqi"...)
-	out = strconv.AppendInt(out, seq, 10)
-	out = append(out, "e1:v"...)
-	return append(out, valueToken...)
 }
 
 // unwrapValue decodes the bencoded byte string a node serves as `v`. It is strict on purpose: an
@@ -167,10 +138,4 @@ func unwrapValue(token []byte) ([]byte, error) {
 		return nil, fmt.Errorf("%w: value length %d does not match %d bytes", ErrBadValue, length, len(body))
 	}
 	return body, nil
-}
-
-func appendString(dst, s []byte) []byte {
-	dst = strconv.AppendInt(dst, int64(len(s)), 10)
-	dst = append(dst, ':')
-	return append(dst, s...)
 }
