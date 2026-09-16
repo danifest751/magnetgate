@@ -24,9 +24,12 @@ const alertAfter = Number(process.env.MAGNETGATE_ALERT_AFTER ?? 5)
 // deliberately NOT a failure here: the exit itself alerts after MAGNETGATE_PEER_ALERT_AFTER
 // consecutive misses, and a single missed DHT lookup is normal.
 const expectedPeers = Number(process.env.MAGNETGATE_EXPECT_PEERS ?? 0)
-// A healthy mainline node knows hundreds of peers within minutes; double digits means it is not
-// being reached from outside. 100 is well below normal and well above "still bootstrapping".
+// A reachable mainline node ends up knowing hundreds of peers; a node stuck in double digits is not
+// being reached from outside. The table does not fill instantly, though - a restarted node was at 74
+// after two minutes and still climbing - so the check only applies once it has had time to bootstrap,
+// otherwise every restart would alert.
 const minDhtNodes = Number(process.env.MAGNETGATE_MIN_DHT_NODES ?? 100)
+const dhtWarmupMs = Number(process.env.MAGNETGATE_DHT_WARMUP_MS ?? 30 * 60 * 1000)
 
 let raw
 try {
@@ -60,9 +63,11 @@ if (h.ok === false && !problems.length) problems.push('the last publication was 
 // the log says "published", failures stay at 0, and clients still find nothing, because a node with a
 // crippled routing table stores the offer on peers that are nowhere near the target. The usual cause
 // is an unreachable DHT port (see MAGNETGATE_DHT_PORT in src/exit.js), so the table never grows.
-if (Number.isFinite(Number(h.dhtNodes)) && Number(h.dhtNodes) < minDhtNodes)
+const startedAt = Date.parse(h.startedAt ?? '')
+const upMs = Number.isFinite(startedAt) ? Date.now() - startedAt : Infinity
+if (upMs >= dhtWarmupMs && Number.isFinite(Number(h.dhtNodes)) && Number(h.dhtNodes) < minDhtNodes)
   problems.push(
-    `the DHT routing table holds only ${h.dhtNodes} nodes (< ${minDhtNodes}): the offer is being stored on the wrong peers — check that the DHT port is reachable`
+    `the DHT routing table holds only ${h.dhtNodes} nodes (< ${minDhtNodes}) after ${Math.round(upMs / 60000)} min up: the offer is being stored on the wrong peers — check that the DHT port is reachable`
   )
 if (h.error) problems.push(`last error: ${h.error}`)
 
