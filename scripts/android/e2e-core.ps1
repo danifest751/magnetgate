@@ -54,7 +54,7 @@ function Check([bool]$ok, [string]$message) {
   if ($ok) { Say "  PASS  $message" } else { Say "  FAIL  $message"; $script:failures += $message }
 }
 
-function Start-Node([string]$name, [string[]]$arguments, [hashtable]$environment, [string]$logName) {
+function Start-Node([string[]]$arguments, [hashtable]$environment, [string]$logName) {
   foreach ($key in $environment.Keys) { Set-Item -Path "env:$key" -Value $environment[$key] }
   $out = Join-Path $tmp "$logName.out.log"
   $err = Join-Path $tmp "$logName.err.log"
@@ -62,6 +62,25 @@ function Start-Node([string]$name, [string[]]$arguments, [hashtable]$environment
     -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden -PassThru
   $script:processes += $process
   return $process
+}
+
+# Invoke-Harness runs the core with the rendezvous enabled and returns its output and exit code.
+#
+# The harness logs to stderr on purpose. PowerShell 5.1 turns a native command's stderr into error
+# records, so merge the two streams in cmd instead and read the file.
+function Invoke-Harness([string]$logName, [string]$slots) {
+  $outFile = Join-Path $tmp $logName
+  $commandLine = '"{0}" -slots {1} -bootstrap {2} -discover 45s -check "http://127.0.0.1:{3}/" > "{4}" 2>&1' -f $binary, $slots, $bootstrap, $TargetPort, $outFile
+  $oldPsk = $env:MG_PSK
+  $env:MG_PSK = $Psk
+  try {
+    & cmd.exe /c $commandLine
+    $code = $LASTEXITCODE
+  } finally {
+    $env:MG_PSK = $oldPsk
+  }
+  $text = if (Test-Path -LiteralPath $outFile) { Get-Content -LiteralPath $outFile -Raw } else { '' }
+  return @{ Code = $code; Text = $text }
 }
 
 function Log-Text([string]$name) {
@@ -91,19 +110,19 @@ require('http').createServer((q, s) => {
   s.end('target-ok')
 }).listen($TargetPort, '127.0.0.1', () => console.log('target on 127.0.0.1:$TargetPort'))
 "@ | Set-Content -LiteralPath $targetJs -Encoding ASCII
-  Start-Node 'target' @($targetJs) @{} 'target' | Out-Null
+  Start-Node @($targetJs) @{} 'target' | Out-Null
 
   # 2. three local DHT nodes: the first is the bootstrap for the other two
   for ($i = 0; $i -lt $DhtPorts.Count; $i++) {
     $args = @((Join-Path $root 'src\dht-node.mjs'), [string]$DhtPorts[$i])
     if ($i -gt 0) { $args += "127.0.0.1:$($DhtPorts[0])" }
-    Start-Node "dht-$i" $args @{} "dht-$i" | Out-Null
+    Start-Node $args @{} "dht-$i" | Out-Null
   }
   Start-Sleep -Seconds 2
 
   # 3. two exits, one PSK, different slots; each watches the other's slot
   foreach ($node in $Nodes) {
-    Start-Node $node.name @((Join-Path $root 'src\exit.js')) @{
+    Start-Node @((Join-Path $root 'src\exit.js')) @{
       MAGNETGATE_PSK           = $Psk
       MAGNETGATE_PORT          = [string]$node.port
       MAGNETGATE_PUBLIC_HOST   = '127.0.0.1'
@@ -151,26 +170,24 @@ require('http').createServer((q, s) => {
   try { & $goExe build -o $binary ./cmd/agent-cli } finally { Pop-Location }
   if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
 
-  # The harness logs to stderr on purpose. PowerShell 5.1 turns a native command's stderr into error
-  # records, so merge the two streams in cmd instead and read the file.
-  $outFile = Join-Path $tmp 'agent-cli.log'
-  $commandLine = '"{0}" -slots 0 -bootstrap {1} -discover 45s -check "http://127.0.0.1:{2}/" > "{3}" 2>&1' -f $binary, $bootstrap, $TargetPort, $outFile
-  $oldPsk = $env:MG_PSK
-  $env:MG_PSK = $Psk
-  try {
-    & cmd.exe /c $commandLine
-    $code = $LASTEXITCODE
-  } finally {
-    $env:MG_PSK = $oldPsk
-  }
-  $text = if (Test-Path -LiteralPath $outFile) { Get-Content -LiteralPath $outFile -Raw } else { '' }
-  Say '--- core output ---'
-  foreach ($line in ($text -split "`r?`n")) { if ($line.Trim()) { Say "  $line" } }
+  $slot0 = Invoke-Harness 'agent-cli-slot0.log' '0'
+  Say '--- core output (slot 0) ---'
+  foreach ($line in ($slot0.Text -split "`r?`n")) { if ($line.Trim()) { Say "  $line" } }
 
-  Check ($text -match 'exit slot 0 at ') 'the core found and used a node address it was never told'
-  Check ($text -match 'target-ok') 'a request through the core reached the local target over the found endpoint'
-  Check ($text -match 'discovered slot 1 from peers') 'the second slot was learned from the first node, not from config'
-  Check ($code -eq 0) "the harness exited cleanly (code $code)"
+  Check ($slot0.Text -match 'exit slot 0 at ') 'the core found and used a node address it was never told'
+  Check ($slot0.Text -match 'target-ok') 'a request through the core reached the local target over the found endpoint'
+  Check ($slot0.Text -match 'discovered slot 1 from peers') 'the second slot was learned from the first node, not from config'
+  Check ($slot0.Code -eq 0) "the harness exited cleanly (code $($slot0.Code))"
+
+  # 5. the same run against slot 1 only. Every exit seals its handshake with the key of its own slot, so
+  # this fails if the core dials every node with slot 0's key.
+  $slot1 = Invoke-Harness 'agent-cli-slot1.log' '1'
+  Say '--- core output (slot 1) ---'
+  foreach ($line in ($slot1.Text -split "`r?`n")) { if ($line.Trim()) { Say "  $line" } }
+
+  Check ($slot1.Text -match 'exit slot 1 at ') 'a node on slot 1 is usable, so its key was derived per slot'
+  Check ($slot1.Text -match 'target-ok') 'a request through the slot-1 node reached the local target'
+  Check ($slot1.Code -eq 0) "the slot-1 run exited cleanly (code $($slot1.Code))"
 } catch {
   Say "error: $($_.Exception.Message)"
   $failures += $_.Exception.Message
