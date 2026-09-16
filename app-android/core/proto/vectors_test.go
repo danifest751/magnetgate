@@ -54,7 +54,7 @@ type vectors struct {
 
 func loadVectors(t *testing.T) vectors {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "v1.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "testdata", "v1.json"))
 	if err != nil {
 		t.Fatalf("read vectors (run `node scripts/dev/gen-vectors.mjs`): %v", err)
 	}

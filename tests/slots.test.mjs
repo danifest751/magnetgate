@@ -97,3 +97,14 @@ test('nostr: two slots never share a replaceable-event key, and slot 0 keeps the
   assert.equal(tags.size, 4, 'every slot needs its own d tag or the nodes overwrite each other')
   assert.notEqual(nostrTagOf(PSK, 1), nostrTagOf('another-psk', 1), 'different PSKs stay separate')
 })
+
+test('newPeerSlots: a malformed slot is ignored, never read as slot 0', async () => {
+  const { newPeerSlots } = await import('../src/offer.mjs')
+  // Number(null) === 0, so the earlier lax version silently opted a client into slot 0; the Node side
+  // and the Go port now both require a real integer (app-android/core/offer TestParsePeersIsStrict)
+  assert.deepEqual(
+    newPeerSlots([], [{ slot: null }, { slot: '2' }, {}, { ts: 5 }, { slot: 0 }]),
+    [0],
+    'only the entry with a real integer slot survives'
+  )
+})

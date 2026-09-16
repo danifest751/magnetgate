@@ -37,12 +37,17 @@ export function mergeOffer(prev, incoming) {
 // Multi-node Phase 1: which slots a client should start polling because a node advertised them in
 // `peers`. Returns only slots that are in range and not already known. Pure, so the caller decides
 // what to do with them — and logs it, because a node holding the PSK can advertise any slot.
+//
+// A peer entry counts only when `slot` is a real integer in range: a missing, null, string or
+// fractional value is ignored rather than coerced. `Number(null)` is 0, so the lax version silently
+// turned a malformed entry into "slot 0" — exactly the silent default the slot validation elsewhere
+// exists to prevent. The Go port (app-android/core/offer) uses the same rule.
 export function newPeerSlots(known, peers, maxSlots = 16) {
   const seen = new Set((known ?? []).map(Number))
   const found = []
   for (const peer of Array.isArray(peers) ? peers : []) {
-    const slot = Number(peer?.slot)
-    if (!Number.isInteger(slot) || slot < 0 || slot >= maxSlots) continue
+    const slot = peer?.slot
+    if (typeof slot !== 'number' || !Number.isInteger(slot) || slot < 0 || slot >= maxSlots) continue
     if (seen.has(slot)) continue
     seen.add(slot)
     found.push(slot)

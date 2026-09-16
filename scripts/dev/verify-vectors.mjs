@@ -20,7 +20,7 @@ import {
   OFFER_SCHEMA,
   MAX_SLOTS
 } from '../../src/common.mjs'
-import { genVectorsIfStale } from './gen-vectors.mjs'
+import { genVectorsIfStale, vectorsFile } from './gen-vectors.mjs'
 
 // Cross-implementation check between the Node client and the Android Go core, in BOTH directions.
 //
@@ -36,7 +36,7 @@ import { genVectorsIfStale } from './gen-vectors.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const coreDir = path.join(root, 'app-android', 'core')
-const vectorsFile = path.join(coreDir, 'proto', 'testdata', 'v1.json')
+// path comes from gen-vectors.mjs: one source of truth for where the tracked vectors live
 const go = process.env.MG_GO || 'go'
 
 const checks = []

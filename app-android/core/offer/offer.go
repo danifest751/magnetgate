@@ -1,0 +1,180 @@
+// Package offer holds the rendezvous-offer policy: merging the two channels, picking a data plane and
+// learning further slots from `peers`. It mirrors src/offer.mjs and is pure, so it can be tested
+// against the tracked vectors without a network or a DHT.
+package offer
+
+import (
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+)
+
+// Schema is the offer schema version (OFFER_SCHEMA in src/common.mjs).
+const Schema = 3
+
+// Peer is one entry of the `peers` list a node advertises.
+type Peer struct {
+	Slot int   `json:"slot"`
+	TS   int64 `json:"ts"`
+}
+
+// Offer is one rendezvous record. Data-plane entries are kept raw: the transport builder needs their
+// protocol-specific fields (Reality keys, hysteria2 cert), and this layer only cares about their type.
+type Offer struct {
+	V       int               `json:"v"`
+	TS      int64             `json:"ts"`
+	Slot    *int              `json:"slot,omitempty"`
+	Node    string            `json:"node,omitempty"`
+	Country string            `json:"country,omitempty"`
+	Peers   []Peer            `json:"peers,omitempty"`
+	DP      []json.RawMessage `json:"dp"`
+}
+
+// Valid mirrors the validation mergeOffer() performs: a usable v3 offer carrying a timestamp and a
+// data-plane list. A zero timestamp is rejected because a real offer always has one (milliseconds).
+func (o *Offer) Valid() bool {
+	return o != nil && o.V == Schema && o.TS > 0 && o.DP != nil
+}
+
+// TypeOf is the data-plane type of a raw entry ("reality", "hy2", "mgt"), or "" when unreadable.
+func TypeOf(raw json.RawMessage) string {
+	var head struct {
+		T string `json:"t"`
+	}
+	if err := json.Unmarshal(raw, &head); err != nil {
+		return ""
+	}
+	return head.T
+}
+
+// Types lists the data-plane types the offer carries, in order.
+func (o *Offer) Types() []string {
+	if o == nil {
+		return nil
+	}
+	out := make([]string, 0, len(o.DP))
+	for _, raw := range o.DP {
+		if t := TypeOf(raw); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// Pick returns the most preferred data-plane entry this client can use, in `pref` order.
+func (o *Offer) Pick(pref []string) json.RawMessage {
+	if o == nil {
+		return nil
+	}
+	for _, want := range pref {
+		for _, raw := range o.DP {
+			if TypeOf(raw) == want {
+				return raw
+			}
+		}
+	}
+	return nil
+}
+
+// Merge folds an incoming offer into the one currently held:
+//   - a newer generation (larger ts) replaces outright;
+//   - the same generation unions the data planes by type, so the hysteria2 entry that only the Nostr
+//     channel carries survives the compact DHT offer (and vice versa) instead of being clobbered by
+//     whichever channel happens to arrive last;
+//   - an older generation is kept as-is.
+//
+// Returns the offer to hold, or nil when `incoming` is not a usable offer (the caller keeps `prev`).
+func Merge(prev, incoming *Offer) *Offer {
+	if !incoming.Valid() {
+		return nil
+	}
+	if prev == nil || !prev.Valid() || incoming.TS > prev.TS {
+		merged := *incoming
+		merged.DP = append([]json.RawMessage(nil), incoming.DP...)
+		return &merged
+	}
+	if incoming.TS < prev.TS {
+		return prev
+	}
+	byType := make(map[string]json.RawMessage, len(prev.DP)+len(incoming.DP))
+	order := make([]string, 0, len(prev.DP)+len(incoming.DP))
+	for _, raw := range prev.DP {
+		t := TypeOf(raw)
+		if _, seen := byType[t]; !seen {
+			order = append(order, t)
+		}
+		byType[t] = raw
+	}
+	for _, raw := range incoming.DP {
+		t := TypeOf(raw)
+		if _, seen := byType[t]; !seen {
+			order = append(order, t)
+		}
+		byType[t] = raw
+	}
+	merged := *prev
+	merged.DP = make([]json.RawMessage, 0, len(order))
+	for _, t := range order {
+		merged.DP = append(merged.DP, byType[t])
+	}
+	return &merged
+}
+
+// ParsePeers decodes the `peers` list of an offer.
+//
+// An entry is honoured only when it carries a real integer slot: a missing or null slot is skipped
+// rather than read as 0 — `Number(null)` is 0 in JavaScript, and silently opting into "slot 0" is
+// exactly the silent default the slot validation exists to prevent. The Node side follows the same
+// rule (src/offer.mjs). A non-integer value makes the whole list invalid, and the caller logs and
+// ignores it rather than trusting a list it only partly understood.
+func ParsePeers(raw json.RawMessage) ([]Peer, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var entries []struct {
+		Slot json.RawMessage `json:"slot"`
+		TS   int64           `json:"ts"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, err
+	}
+	out := make([]Peer, 0, len(entries))
+	for _, entry := range entries {
+		slotJSON := strings.TrimSpace(string(entry.Slot))
+		if slotJSON == "" || slotJSON == "null" {
+			continue // missing or null: skipped, never read as 0
+		}
+		// only a JSON number counts: a quoted number, bool, object or array is a malformed list, and a
+		// list only partly understood is worse than no list at all
+		if slotJSON[0] != '-' && (slotJSON[0] < '0' || slotJSON[0] > '9') {
+			return nil, fmt.Errorf("peer slot is not a number: %s", slotJSON)
+		}
+		slot, err := json.Number(slotJSON).Int64()
+		if err != nil {
+			return nil, fmt.Errorf("peer slot is not an integer: %s", slotJSON)
+		}
+		out = append(out, Peer{Slot: int(slot), TS: entry.TS})
+	}
+	return out, nil
+}
+
+// NewPeerSlots answers which slots a client should start polling because a node advertised them in
+// `peers`: in range, not already known, sorted and deduplicated. A node holding the PSK can advertise
+// any slot, so the caller decides what to do with the answer and logs it.
+func NewPeerSlots(known []int, peers []Peer, maxSlots int) []int {
+	seen := make(map[int]bool, len(known)+len(peers))
+	for _, slot := range known {
+		seen[slot] = true
+	}
+	found := make([]int, 0, len(peers))
+	for _, peer := range peers {
+		if peer.Slot < 0 || peer.Slot >= maxSlots || seen[peer.Slot] {
+			continue
+		}
+		seen[peer.Slot] = true
+		found = append(found, peer.Slot)
+	}
+	sort.Ints(found)
+	return found
+}
