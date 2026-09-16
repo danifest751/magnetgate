@@ -211,8 +211,12 @@ availability across independent exits and is being designed first, but it does *
   single-node derivation so nothing had to migrate. Verified by `scripts/dev/multi-node-lab.mjs`
   (two loopback nodes, one PSK, kill one, the next request uses the other). Remaining work — peer
   advertisement (`peers`), per-plane health, automatic slot allocation and the desktop settings field —
-  is described in the internal `docs/design-multi-node.md`. This still does **not** hide an egress: every
-  node stays discoverable in the rendezvous, which is the property §4 exists to change.
+  is described in the internal `docs/design-multi-node.md`. **Phase 1 (nodes find each other) landed
+  2026-09-16:** each node scans the other slots (`MAGNETGATE_PEER_SLOTS`) and lists the live ones in
+  `peers`, so a client that knows one slot learns the rest by itself — adding or replacing a node no
+  longer means touching every client. Verified on two live nodes on one PSK. This still does **not**
+  hide an egress: every node stays discoverable in the rendezvous, which is the property §4 exists to
+  change.
 - **Multipath aggregation** — carry one session across several data planes at once (MPTCP-style), so
   blocking one degrades throughput instead of dropping the session.
 - **Cold-fallback tier** — email/IMAP store-and-forward for total-shutdown scenarios; Starlink at the

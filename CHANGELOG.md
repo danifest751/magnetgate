@@ -16,8 +16,26 @@ so losing one of them no longer takes the service down.
 - Verified by `scripts/dev/multi-node-lab.mjs`: a hermetic loopback lab (local DHT, local target,
   loopback SOCKS) that asserts one PSK discovers both nodes and that a request still succeeds after
   the node that served it is killed.
-- The desktop needs no change: a `slots` entry in its config yields one outbound per node, and the
-  existing `urltest` group fails over between them.
+- The desktop needs no change: a `slots` entry in its config yields one outbound per node **per
+  Reality/hysteria2 plane**, and the existing `urltest` group fails over between them. The native
+  `mgt` plane is reached through one shared SOCKS outbound (the child picks the node per connection),
+  so a node that offers only the native channel falls back to that shared path rather than getting an
+  outbound of its own.
+
+Phase 1 — nodes find each other (2026-09-16). Adding or replacing a node no longer means editing
+every client:
+
+- `MAGNETGATE_PEER_SLOTS` (exit, opt-in so an idle single node adds no DHT lookups) makes a node scan
+  the other slots and list the live ones as `peers` in its offer; `MAGNETGATE_EXPECT_PEERS` turns a
+  missing node into an explicit `[alert]`. `peers`/`peersSeen` also appear in the health file.
+- A client that knows one slot adds the rest from `peers` by itself and logs each addition
+  (`MAGNETGATE_SLOT_DISCOVERY=0` disables that, since a node holding the PSK can advertise any slot).
+- The slow DHT poll is 30 s instead of 10 s: the exit republishes once a minute, so the tighter poll
+  was pure load and visibility.
+- `OFFER_SCHEMA` in `src/common.mjs` is now the single definition of the offer version; a drift test
+  fails if either end hardcodes it again.
+- Verified on two real nodes (slot 0 and slot 1, one PSK): each advertises the other as `peers`, a
+  client configured with only slot 0 discovers slot 1 and serves traffic through either node.
 ### 0.11.1 / Desktop 0.3.3 — audit follow-up (2026-09-16)
 
 Security and operations hardening from a full repository audit. No wire-protocol change: the sealed
