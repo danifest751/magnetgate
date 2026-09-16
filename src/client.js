@@ -15,7 +15,8 @@ import {
   bep44Verify,
   BOOTSTRAP,
   pskWarning,
-  hostForLog
+  hostForLog,
+  OFFER_SCHEMA
 } from './common.mjs'
 import { startSocks5Server } from './socks5.mjs'
 import { connectNative } from './native-client.mjs'
@@ -23,7 +24,7 @@ import { encodeAddress } from './address.mjs'
 import { atomicWrite } from './state-file.mjs'
 import { DpPool } from './dp-supervisor.mjs'
 import { validateConfig } from './config.cjs'
-import { pickDp, mergeOffer } from './offer.mjs'
+import { pickDp, mergeOffer, newPeerSlots } from './offer.mjs'
 
 const OFFER_TTL_MS = 12 * 60 * 1000
 const ts = () => new Date().toISOString()
@@ -123,6 +124,30 @@ const exits = wanted.map((e, i) => {
   }
 })
 
+// ---------- multi-node: learn about further slots from the nodes already known ----------
+// A node holding the PSK can advertise any slot in `peers`, so this is a visible event in the log
+// and can be switched off with MAGNETGATE_SLOT_DISCOVERY=0.
+const SLOT_DISCOVERY = process.env.MAGNETGATE_SLOT_DISCOVERY !== '0'
+function addSlotEntry(slot) {
+  const base = cfg.exits[0]
+  if (!base) return null
+  const { pk } = deriveKeys(base.psk)
+  const salt = slotSalt(base.psk, slot)
+  const entry = {
+    id: exits.length,
+    name: `${base.name ?? 'exit'}#${slot}`,
+    slot,
+    psk: base.psk,
+    pk,
+    boxKey: slotBoxKey(base.psk, slot),
+    salt,
+    target: targetOf(pk, salt),
+    offer: null
+  }
+  exits.push(entry)
+  return entry
+}
+
 const dht = new DHT({ bootstrap: cfg.bootstrap, verify: bep44Verify })
 
 // returns the exit's current fresh offer object, or null (dead exits go on cooldown)
@@ -162,7 +187,7 @@ function writeDpOut() {
 // data-plane type (mergeOffer), so the pinned hy2 endpoint that only the Nostr channel carries is
 // not clobbered by the compact DHT offer.
 function handleOffer(e, o) {
-  if (!o || o.v !== 3 || !Number.isFinite(o.ts)) return
+  if (!o || o.v !== OFFER_SCHEMA || !Number.isFinite(o.ts)) return
   if (Date.now() - o.ts >= OFFER_TTL_MS || o.ts - Date.now() > 60000) return
   // A slot-derived entry accepts only the record published for its own slot. Every node holds the
   // shared PSK, so it can read any slot, but each writes just its own (and under its own per-slot
@@ -184,6 +209,21 @@ function handleOffer(e, o) {
     const planes = merged.dp.map((d) => d.t).join('+')
     const label = merged.node ? `${e.name}=${merged.node}` : e.name
     console.log(ts(), `[rv] offer[${label}] via ${dp.t}: ${dp.host}:${dp.port} (planes: ${planes})`)
+    // Phase 1: learn the rest of the node set from the node we are already talking to, so adding or
+    // replacing a node stops requiring a config change on every client. A node holding the PSK can
+    // advertise any slot, which is why this is a visible log line (see design-multi-node.md §13.6).
+    if (SLOT_DISCOVERY && cfg.slots?.length && Array.isArray(merged.peers)) {
+      const known = exits.map((x) => x.slot).filter((slot) => slot !== undefined)
+      for (const slot of newPeerSlots(known, merged.peers)) {
+        if (!addSlotEntry(slot)) continue
+        console.log(
+          ts(),
+          `[rv] discovered slot ${slot} via ${merged.node ?? e.name} — ${exits.length} node(s) now known`
+        )
+        lookupAll()
+        if (DP_OUT) writeDpOut()
+      }
+    }
   }
   // publish the merged endpoints for an external engine; fires on the first offer and whenever the
   // set changes (a same-generation Nostr offer adding hy2, or a rotation changing creds).
@@ -191,7 +231,9 @@ function handleOffer(e, o) {
 }
 
 const POLL_FAST_MS = 3000
-const POLL_SLOW_MS = 10000
+// The exit republishes once a minute, so 30 s is a 2x margin; a tighter poll only adds DHT lookups
+// and makes this client easier to notice in the shared DHT (see docs/design-multi-node.md §5.2).
+const POLL_SLOW_MS = 30000
 let pollDelay = POLL_FAST_MS
 let pollTimer = null
 

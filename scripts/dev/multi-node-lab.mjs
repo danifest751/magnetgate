@@ -147,6 +147,9 @@ async function main() {
         MAGNETGATE_ALLOW_PRIVATE: '1',
         MAGNETGATE_NOSTR: 'off',
         MAGNETGATE_TRANSPORT: 'tcp',
+        // Phase 1: each node watches the other slot and advertises it in `peers`
+        MAGNETGATE_PEER_SLOTS: NODES.map((n) => n.slot).join(','),
+        MAGNETGATE_PUBLISH_MS: '5000',
         MAGNETGATE_SEQ_FILE: path.join(tmp, `seq-${node.slot}`),
         MAGNETGATE_HEALTH_FILE: path.join(tmp, `health-${node.slot}.json`),
         DHT_BOOTSTRAP: bootstrap
@@ -171,13 +174,23 @@ async function main() {
     check(h?.slot === node.slot, `${node.name} reports its own slot`)
   }
 
+  // nodes must find each other: each one scans the other slot and advertises it in `peers`
+  for (const node of NODES) {
+    const h = await waitFor(`${node.name} to see a peer`, () => {
+      const v = health(node.slot)
+      return v && v.peers >= 1 ? v : null
+    })
+    check(!!h, `${node.name} sees its peer and advertises it (peers=${h?.peers ?? 0})`)
+  }
+
   // 4. client: one PSK expanded into both slots, native plane only
   const cfgPath = path.join(tmp, 'client.json')
   fs.writeFileSync(
     cfgPath,
     JSON.stringify({
       exits: [{ name: 'lab', psk: PSK }],
-      slots: NODES.map((n) => n.slot),
+      // ONLY the first slot: the second node must be learned from `peers`, not from config
+      slots: [NODES[0].slot],
       bootstrap: DHT_PORTS.map((p) => `127.0.0.1:${p}`),
       rules: { direct: [], proxy: [] },
       dataPlane: 'mgt',
@@ -191,11 +204,21 @@ async function main() {
     'client.log'
   )
 
-  const discovery = await waitFor('the client to see both slots', () => {
+  const firstSeen = await waitFor('the client to see its configured slot', () => {
+    const text = logText('client.log')
+    return text.includes(`=${NODES[0].name}`) ? text : null
+  })
+  check(!!firstSeen, 'the client found the node it was configured for')
+  const discovery = await waitFor('the client to discover the peer slot', () => {
+    const text = logText('client.log')
+    return text.includes(`discovered slot ${NODES[1].slot}`) ? text : null
+  })
+  check(!!discovery, `the client discovered slot ${NODES[1].slot} from peers without config`)
+  const bothSeen = await waitFor('offers from both nodes', () => {
     const text = logText('client.log')
     return NODES.every((n) => text.includes(`=${n.name}`)) ? text : null
   })
-  check(!!discovery, 'one PSK discovered BOTH nodes (slot space works)')
+  check(!!bothSeen, 'both nodes are usable, one of them learned automatically')
 
   // 5. traffic flows, and we learn which node carried it
   const request = `GET / HTTP/1.0\r\nHost: target\r\n\r\n`

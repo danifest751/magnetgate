@@ -57,6 +57,10 @@ export const targetOf = (pk, salt) =>
     .update(Buffer.concat([pk, salt]))
     .digest()
 
+// Sealed-offer JSON schema version. ONE definition for both sides: a drift test fails if either end
+// hardcodes it again, which is how "the exit seals v3 but the client wants v4" would go unnoticed.
+export const OFFER_SCHEMA = 3
+
 // ---------- multi-node slots ----------
 // Several exits can share one PSK by occupying different slots of one rendezvous space, so a client
 // finds all of them without knowing addresses in advance (see docs/design-multi-node.md).

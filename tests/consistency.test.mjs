@@ -36,15 +36,29 @@ test('drift: every wire version in the code agrees with the advertised one', () 
   assert.equal(required, frame, 'the client requires a different protocol than the exit advertises')
 })
 
-test('drift: the sealed offer schema version matches on both sides', () => {
-  const sealed = pick(exit, /JSON\.stringify\(\{ v: (\d+), ts: now, slot:/, 'the sealed offer schema')
-  const accepted = pick(client, /o\.v !== (\d+)/, 'the offer schema the client accepts')
-  assert.equal(sealed, accepted, 'the exit seals offer v' + sealed + ' but the client only accepts v' + accepted)
+test('drift: the sealed offer schema has exactly one definition', () => {
+  // The version used to be hardcoded at both ends, which is how "the exit seals v3 while the client
+  // wants v4" would go unnoticed. It is now a shared constant; this test keeps it that way.
+  const value = pick(common, /export const OFFER_SCHEMA = (\d+)/, 'OFFER_SCHEMA')
+  assert.ok(value > 0, 'OFFER_SCHEMA must be a positive version')
+  assert.match(exit, /v: OFFER_SCHEMA/, 'the exit must seal with the shared OFFER_SCHEMA')
+  assert.match(client, /o\.v !== OFFER_SCHEMA/, 'the client must accept the shared OFFER_SCHEMA')
+  const offerSrc = read('src/offer.mjs')
+  assert.match(offerSrc, /incoming\.v !== OFFER_SCHEMA/, 'offer.mjs must validate against it too')
+  for (const [name, src] of [
+    ['src/exit.js', exit],
+    ['src/client.js', client],
+    ['src/offer.mjs', offerSrc]
+  ])
+    assert.ok(
+      !/\.v !== 3\b|v: 3,/.test(src),
+      `${name} hardcodes the offer schema instead of using OFFER_SCHEMA`
+    )
 })
 
 test('drift: the offer freshness window outlives the publication interval', () => {
   const ttlMs = pick(client, /const OFFER_TTL_MS = (\d+) \* 60 \* 1000/, 'OFFER_TTL_MS') * 60_000
-  const publishMs = pick(exit, /setInterval\(publish, (\d+) \* 1000\)/, 'the publish interval') * 1000
+  const publishMs = pick(exit, /MAGNETGATE_PUBLISH_MS \?\? (\d+)/, 'the publish interval')
   // the desktop-only snapshot filter is a second freshness window with the same requirement
   const snapshotMs = pick(config, /now - e\.ts < (\d+)/, 'the snapshot freshness window')
 

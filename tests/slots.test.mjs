@@ -67,3 +67,17 @@ test('merging same-generation offers keeps the slot and node identity', () => {
   const newer = { v: 3, ts: 2000, slot: 1, node: 'nl-9', dp: [{ t: 'mgt', host: 'c', port: 3 }] }
   assert.equal(mergeOffer(older, newer).node, 'nl-9')
 })
+
+test('newPeerSlots: only in-range, not-yet-known slots are added, once', async () => {
+  const { newPeerSlots } = await import('../src/offer.mjs')
+  assert.deepEqual(newPeerSlots([0], [{ slot: 1 }, { slot: 3 }]), [1, 3], 'sorted, new slots')
+  assert.deepEqual(newPeerSlots([0, 1], [{ slot: 1 }, { slot: 0 }]), [], 'known slots are skipped')
+  assert.deepEqual(newPeerSlots([], [{ slot: 2 }, { slot: 2 }]), [2], 'duplicates collapse')
+  // anything a node should not be able to talk a client into
+  assert.deepEqual(
+    newPeerSlots([], [{ slot: -1 }, { slot: 16 }, { slot: 1.5 }, { slot: 'x' }, {}, null, { slot: 4 }]),
+    [4]
+  )
+  assert.deepEqual(newPeerSlots([], undefined), [], 'no peers list is not an error')
+  assert.deepEqual(newPeerSlots([], [{ slot: 15 }], 16), [15], 'the top slot is still valid')
+})

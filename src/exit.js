@@ -14,11 +14,14 @@ import {
   asSlot,
   slotSalt,
   slotBoxKey,
+  targetOf,
   signer,
   seal,
+  unseal,
   bep44Verify,
   BOOTSTRAP,
-  pskWarning
+  pskWarning,
+  OFFER_SCHEMA
 } from './common.mjs'
 
 const SECRET = process.env.MAGNETGATE_PSK ?? process.env.PSK ?? process.argv[2]
@@ -78,6 +81,7 @@ let dhtReady = false
 
 // --- publication health ----------------------------------------------------------------------------
 let failures = 0
+let publishing = false
 const health = {
   startedAt: ts(),
   slot: NODE_SLOT,
@@ -90,6 +94,8 @@ const health = {
   dhtReady: false,
   seq: null,
   failures: 0,
+  peers: 0,
+  peersSeen: [],
   error: null
 }
 function writeHealth(patch = {}) {
@@ -122,7 +128,74 @@ function readExtraDp() {
   }
 }
 
+// --- peer discovery (multi-node Phase 1) -----------------------------------------------------------
+// Scanning other slots is opt-in: an idle single-node deployment must not add DHT lookups nobody
+// asked for. Set MAGNETGATE_PEER_SLOTS=0,1 on each node once there is more than one.
+const PEER_SLOTS = (process.env.MAGNETGATE_PEER_SLOTS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map(Number)
+  .filter((n) => Number.isInteger(n) && n >= 0 && n < 16 && n !== NODE_SLOT)
+const EXPECT_PEERS = Number(process.env.MAGNETGATE_EXPECT_PEERS ?? 0)
+const PEER_FRESH_MS = 12 * 60 * 1000 // must match the client's freshness window
+const PEER_TIMEOUT_MS = 5000
+let scanning = false
+
+function lookupSlot(slot) {
+  return new Promise((resolve) => {
+    const salt = slotSalt(SECRET, slot)
+    let done = false
+    const finish = (value) => {
+      if (!done) {
+        done = true
+        resolve(value)
+      }
+    }
+    const timer = setTimeout(() => finish(null), PEER_TIMEOUT_MS)
+    try {
+      dht.get(targetOf(pk, salt), { salt }, (err, res) => {
+        clearTimeout(timer)
+        if (err || !res?.v) return finish(null)
+        const plain = unseal(slotBoxKey(SECRET, slot), res.v, res.seq)
+        if (!plain) return finish(null)
+        try {
+          const o = JSON.parse(plain.toString())
+          if (!Number.isFinite(o?.ts) || Date.now() - o.ts >= PEER_FRESH_MS) return finish(null)
+          if (Number(o.slot ?? slot) !== slot) return finish(null)
+          finish({ slot, ts: o.ts, node: String(o.node ?? `slot${slot}`).slice(0, 40) })
+        } catch {
+          finish(null)
+        }
+      })
+    } catch {
+      clearTimeout(timer)
+      finish(null)
+    }
+  })
+}
+
+async function scanPeers() {
+  if (!PEER_SLOTS.length || !dhtReady || scanning) return null
+  scanning = true
+  try {
+    return (await Promise.all(PEER_SLOTS.map(lookupSlot))).filter(Boolean)
+  } finally {
+    scanning = false
+  }
+}
+
 function publish() {
+  if (publishing) return
+  publishing = true
+  return publishOnce().finally(() => {
+    publishing = false
+  })
+}
+
+async function publishOnce() {
+  // who else is alive in the slot space (only when PEER_SLOTS is configured)
+  const peers = (await scanPeers()) ?? health.peersSeen ?? []
   let seq
   try {
     seq = nextSequence()
@@ -140,24 +213,25 @@ function publish() {
   //   - DHT: compact, omits hy2 (its pinned cert is too large for the ~1000 B BEP44 limit);
   //   - Nostr: superset, includes the pinned hy2 endpoint (cert carried in dp.ca).
   // Each envelope has a random nonce and an authenticated channel/sequence domain.
+  // `peers` (compact: slot + ts) lets a client that knows one slot learn the others without config.
+  const peerList = peers.map((p) => ({ slot: p.slot, ts: p.ts }))
+  const base = { v: OFFER_SCHEMA, ts: now, slot: NODE_SLOT, node: NODE_NAME, peers: peerList }
   const dhtDp = [...extra.filter((d) => d.t !== 'hy2'), mgt]
-  const sealed = seal(
-    boxKey,
-    Buffer.from(JSON.stringify({ v: 3, ts: now, slot: NODE_SLOT, node: NODE_NAME, dp: dhtDp })),
-    seq
-  )
+  const sealed = seal(boxKey, Buffer.from(JSON.stringify({ ...base, dp: dhtDp })), seq)
   if (sealed.length > 950)
     console.log(ts(), `[warn] DHT offer ${sealed.length}B may exceed the ~1000B limit`)
   if (nostr) {
     const nostrDp = [...extra, mgt]
     const nseq = 'n' + seq
-    const sealedNostr = seal(
-      boxKey,
-      Buffer.from(JSON.stringify({ v: 3, ts: now, slot: NODE_SLOT, node: NODE_NAME, dp: nostrDp })),
-      nseq
-    )
+    const sealedNostr = seal(boxKey, Buffer.from(JSON.stringify({ ...base, dp: nostrDp })), nseq)
     nostr.publish(sealedNostr, nseq)
   }
+  writeHealth({ peers: peers.length, peersSeen: peerList })
+  if (EXPECT_PEERS > 0 && peers.length < EXPECT_PEERS)
+    console.log(
+      ts(),
+      `[alert] only ${peers.length}/${EXPECT_PEERS} peer slot(s) answered - a node may be down`
+    )
   if (!dhtReady) return
   dht.put(
     {
@@ -174,7 +248,7 @@ function publish() {
         dhtNodes = dht.nodes.toArray().length
       } catch {}
       if (err) console.log(ts(), `[dht] put failed: ${err.message}`)
-      else console.log(ts(), `[dht] published (n=${nodes})`)
+      else console.log(ts(), `[dht] published (n=${nodes}, peers=${peers.length})`)
       failures = !err && nodes > 0 ? 0 : failures + 1
       if (failures >= ALERT_AFTER)
         console.log(
@@ -202,10 +276,12 @@ dht.on('ready', () => {
   writeHealth({ dhtReady: true })
   setTimeout(publish, 2000)
 })
-
 // Nostr publication is independent of DHT readiness. Poll file contents across atomic replacements.
 setTimeout(publish, 100)
-setInterval(publish, 60 * 1000)
+// Republish cadence. Overridable so tests and the multi-node lab do not have to wait a minute; the
+// client's freshness window (12 min) must stay far above whatever is set here.
+const PUBLISH_MS = Number(process.env.MAGNETGATE_PUBLISH_MS ?? 60000)
+setInterval(publish, PUBLISH_MS)
 let lastDp = JSON.stringify(readExtraDp())
 setInterval(() => {
   const value = JSON.stringify(readExtraDp())
