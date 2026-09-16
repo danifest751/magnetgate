@@ -120,6 +120,8 @@ Exit публикует sealed-offer в оба канала — одно пок�
 |---|---|
 | `MAGNETGATE_PSK` | PSK exit'а из окружения, чтобы не попадать в argv/`ps` (argv — запасной вариант) |
 | `MAGNETGATE_PORT` / `MAGNETGATE_PUBLIC_HOST` | порт нативного канала и публичный хост в offer'е |
+| `MAGNETGATE_NODE_SLOT` / `MAGNETGATE_NODE_NAME` | exit: какой слот рандеву занимает нода (по умолчанию `0` — одиночная схема) и её имя в offer'е; две ноды делят один PSK, занимая разные слоты |
+| `MAGNETGATE_SLOTS` | клиент: слоты через запятую, например `0,1` — тогда один PSK находит все ноды набора (то же, что `slots` в файле конфигурации) |
 | `DHT_BOOTSTRAP` | CSV bootstrap-нод; **первой IPv4-ноду**, свой `:20001` рекомендуется |
 | `MAGNETGATE_SEQ_FILE` | персистентность `seq` (обязательно на exit: рестарты инкрементируют, иначе нонс offer может повториться) |
 | `MAGNETGATE_NOSTR` / `MAGNETGATE_NOSTR_RELAYS` | отключить Nostr-канал / переопределить пул релеев |

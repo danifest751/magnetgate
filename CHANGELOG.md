@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Multi-node slots (unreleased)
+
+Phase 0 of `docs/design-multi-node.md` (internal): two exits can share one PSK and a client finds both,
+so losing one of them no longer takes the service down.
+
+- `MAGNETGATE_NODE_SLOT` / `MAGNETGATE_NODE_NAME` (exit) and `MAGNETGATE_SLOTS` / `slots` (client).
+  **Slot 0 is by definition today's single-node derivation**, so nothing changes for an existing
+  deployment and an older client keeps working against a node on slot 0.
+- Each slot gets its own salt, target and box key; the offer carries `slot`/`node` as optional fields
+  (schema stays v3, so old clients ignore them), and a client only accepts the record for the slot it
+  asked about. The per-slot box key means one node cannot forge another node's offer.
+- Verified by `scripts/dev/multi-node-lab.mjs`: a hermetic loopback lab (local DHT, local target,
+  loopback SOCKS) that asserts one PSK discovers both nodes and that a request still succeeds after
+  the node that served it is killed.
+- The desktop needs no change: a `slots` entry in its config yields one outbound per node, and the
+  existing `urltest` group fails over between them.
 ### 0.11.1 / Desktop 0.3.3 — audit follow-up (2026-09-16)
 
 Security and operations hardening from a full repository audit. No wire-protocol change: the sealed

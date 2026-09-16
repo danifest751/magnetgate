@@ -203,10 +203,16 @@ availability across independent exits and is being designed first, but it does *
 - **Third rendezvous channel** — a DoH / ENS dead-drop, so Layer 1 has ≥3 independent mechanisms.
 - **Multi-exit fan-out** — several exits, each rotating Reality/hysteria2; the client load-balances
   and fails over across them (a lighter cousin of the overlay when full entry/egress split is not
-  needed). **Chosen next step:** it needs no relay protocol and the client is already most of the way
+  needed). **Chosen next step:** it needs no relay protocol and the client was already most of the way
   there (`exits[]` takes a shared PSK with a per-node salt; per-connection fail-over and the desktop
-  `urltest` exist). The only real gap is that an exit cannot be assigned a slot today. Design,
-  including what deliberately stays out of scope: internal `docs/design-multi-node.md`.
+  `urltest` exist). **Phase 0 landed 2026-09-16:** an exit occupies a rendezvous slot
+  (`MAGNETGATE_NODE_SLOT`, `MAGNETGATE_NODE_NAME`), a client can look for several slots from one PSK
+  (`MAGNETGATE_SLOTS`), each slot has its own salt/target/box key, and slot 0 is byte-identical to the
+  single-node derivation so nothing had to migrate. Verified by `scripts/dev/multi-node-lab.mjs`
+  (two loopback nodes, one PSK, kill one, the next request uses the other). Remaining work — peer
+  advertisement (`peers`), per-plane health, automatic slot allocation and the desktop settings field —
+  is described in the internal `docs/design-multi-node.md`. This still does **not** hide an egress: every
+  node stays discoverable in the rendezvous, which is the property §4 exists to change.
 - **Multipath aggregation** — carry one session across several data planes at once (MPTCP-style), so
   blocking one degrades throughput instead of dropping the session.
 - **Cold-fallback tier** — email/IMAP store-and-forward for total-shutdown scenarios; Starlink at the
