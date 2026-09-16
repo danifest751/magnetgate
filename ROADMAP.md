@@ -35,6 +35,13 @@ scale) is its enemy. Keep that boundary explicit in every design decision below.
   full tunnel off, since both use Wintun). Driven by the Electron app (`app/`).
 - Plus the security-audit remediation (forward-secret handshake, non-root sandbox, SSRF egress
   filter, SOCKS loopback bind, DHT IPv4 bootstrap, pinned binaries) — see [CHANGELOG.md](CHANGELOG.md).
+- **Multi-node** — several exits share one PSK through rendezvous slots, advertise each other as
+  `peers` so a client learns the set by itself, and are tracked for health per (node, plane) rather
+  than per node. Verified on two live nodes.
+- **Android client** (`app-android/`) — the Node core ported to Go, bound together with sing-box into
+  a single AAR, driving a `VpnService`: it discovers nodes over DHT and Nostr, carries traffic over
+  Reality/hysteria2/native, and excludes chosen applications from the tunnel. Runs on an emulator;
+  not yet released.
 
 ## 3. Near-term — Phase 3
 
@@ -221,8 +228,8 @@ availability across independent exits and is being designed first, but it does *
   blocking one degrades throughput instead of dropping the session.
 - **Cold-fallback tier** — email/IMAP store-and-forward for total-shutdown scenarios; Starlink at the
   physical layer.
-- **Cross-platform clients** — Linux/macOS/Android (sing-box is cross-platform) packaged as a
-  service; automated exit provisioning + health/metrics.
+- **Cross-platform clients** — Linux/macOS packaged as a service; automated exit provisioning +
+  health/metrics. (Android is no longer on this list — see the Android client under Status.)
 
 ## 6. Suggested sequencing
 

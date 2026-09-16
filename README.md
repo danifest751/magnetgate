@@ -143,6 +143,8 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_UDP_IDLE_MS` | exit: drop a reliable-UDP stream after this much silence (default 600000); a vanishing peer otherwise holds a slot forever |
 | `MAGNETGATE_HEALTH_FILE` | exit: write publication health (last put, node count, consecutive failures) to this file |
 | `MAGNETGATE_ALERT_AFTER` | exit: warn after N consecutive publications that reached no DHT node (default 5) |
+| `MAGNETGATE_DHT_PORT` | exit: UDP port for its DHT node. **Set this in production.** Left unset (`0`) the node takes an ephemeral port, which no firewall can open: it still publishes, because replies to its own queries come back through conntrack, but nothing outside can query it, so its routing table never grows and the offer is stored on peers no client walks to |
+| `MAGNETGATE_MIN_DHT_NODES` | healthcheck: routing tables smaller than this mean the node is unreachable from outside (default 100) |
 | `MAGNETGATE_ALERT_WEBHOOK` | exit: POST `{"text": ...}` to this endpoint when the publication health check fails, and once when it recovers |
 | `MAGNETGATE_ALERT_TG_TOKEN` / `MAGNETGATE_ALERT_TG_CHAT` | exit: send those notifications to Telegram instead (or as well) |
 | `MAGNETGATE_ALERT_COOLDOWN_MIN` | exit: how often a still-broken exit may repeat its alert (default 30) |

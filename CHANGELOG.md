@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Rendezvous, slots and the Android package (2026-09-17)
+
+- **The exit's DHT node was unreachable from outside, and that looked healthy.** It bound an
+  ephemeral UDP port while the firewall opens a fixed range, so its own queries still got replies
+  through conntrack and it reported `published (n=16)` with zero failures — while no peer could ever
+  query it, its routing table stayed at a couple of dozen nodes, and the offer was therefore stored
+  on the nodes nearest the target *in a table that knew almost nothing*. Those are not the nodes a
+  client walks to, so clients saw a stale record or none at all. `MAGNETGATE_DHT_PORT` binds the node
+  to a port that can actually be opened, the startup log says outright that an ephemeral port cannot
+  be firewalled, and `healthcheck.mjs` now fails when the routing table is below
+  `MAGNETGATE_MIN_DHT_NODES` (default 100).
+- **`MAGNETGATE_SLOTS` never worked.** The documented way to turn multi-node on split the variable
+  into strings while `validateConfig` accepts only numbers, so every documented value died at startup
+  with `invalid slot: 0`. Both halves had tests; the seam between them did not. `slotsFromEnv` is now
+  the single conversion point and throws on a bad entry rather than dropping it, because a silently
+  ignored slot is a node the client never looks for.
+- The slot range had drifted into four copies (`common.mjs`, `config.cjs`, `core/proto/keys.go`,
+  `Settings.kt`, the last of which accepted `0..255` and let a user enter a slot the core refuses).
+  The drift guard now keeps all four equal, checks that the env var is converted through the shared
+  helper, and checks that the documented test counts are the ones that actually run.
+- **The Android package is split by ABI.** One `libmgcore.so` is ~82 MB, so shipping every ABI came
+  to ~188 MB of mostly dead weight: it is now 82.9 MB for `arm64-v8a` and 87.5 MB for `x86_64`, and
+  `app-core-check.ps1` installs the package matching the device's own ABI.
+
 ### Multi-node phase 2 — per-plane health and node visibility (2026-09-16)
 
 - **Health is tracked per (node, plane), not per node.** A node can be alive while one of its planes is
