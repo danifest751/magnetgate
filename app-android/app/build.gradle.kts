@@ -37,6 +37,9 @@ android {
 dependencies {
   // The core is built from source by scripts/android/build-core-aar.ps1, not committed
   implementation(files("../libs/magnetgate.aar"))
+  // The engine (reality/hysteria2 transports and the TUN) is built from the sing-box commit pinned in
+  // scripts/pins.json by scripts/android/build-libbox-aar.ps1
+  implementation(files("../libs/libbox.aar"))
 
   implementation("androidx.core:core-ktx:1.13.1")
   implementation("androidx.activity:activity-compose:1.9.3")

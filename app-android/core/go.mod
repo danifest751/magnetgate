@@ -29,6 +29,7 @@ require (
 	github.com/edsrzf/mmap-go v1.1.0 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
 	github.com/rs/dnscache v0.0.0-20211102005908-e0241e321417 // indirect
+	github.com/sagernet/gomobile v0.1.13 // indirect
 	golang.org/x/exp v0.0.0-20221217163422-3c43f8badb15 // indirect
 	golang.org/x/mobile v0.0.0-20260908204917-8b95e45f8d3e // indirect
 	golang.org/x/mod v0.41.0 // indirect
@@ -38,4 +39,4 @@ require (
 	golang.org/x/tools v0.50.0 // indirect
 )
 
-tool golang.org/x/mobile/cmd/gobind
+tool github.com/sagernet/gomobile/cmd/gobind

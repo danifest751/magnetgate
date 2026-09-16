@@ -59,5 +59,22 @@
     "dllSha256": "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce",
     "dllPathInZip": "wintun/bin/amd64/wintun.dll",
     "verifiedOn": "2026-09-12"
+  },
+  "singBoxSource": {
+    "_comment": [
+      "libbox.aar - the engine the Android app runs in-process - is built from this source, not",
+      "downloaded: upstream publishes no AAR. The tag AND the commit are pinned together, so a moved",
+      "tag stops the build instead of silently changing the engine. The Go build tags and linker flags",
+      "used are the ones cmd/internal/build_libbox/main.go uses at this commit.",
+      "scripts/android/build-libbox-aar.ps1 reads this entry."
+    ],
+    "version": "1.14.0",
+    "tag": "v1.14.0",
+    "commit": "0b8995879f29a9b98ee027bc17b75e101445b238",
+    "url": "https://github.com/SagerNet/sing-box.git",
+    "gomobileFork": "github.com/sagernet/gomobile",
+    "gomobileVersion": "v0.1.13",
+    "role": "reality/hysteria2 transports and the TUN engine inside the Android app",
+    "verifiedOn": "2026-09-16"
   }
 }
