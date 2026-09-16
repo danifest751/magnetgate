@@ -47,6 +47,9 @@ class MgVpnService : VpnService() {
   private var watching = false
   private var corePort = 0
 
+  /** The packages the tunnel must leave alone, read from settings when the tunnel comes up. */
+  private var excludedPackages: List<String> = emptyList()
+
   override fun onCreate() {
     super.onCreate()
     current = this
@@ -94,7 +97,8 @@ class MgVpnService : VpnService() {
       try {
         val port = if (coreless) 0 else startCoreAndWaitForNode(bootstrap, relays)
         val nodes = if (coreless) emptyList() else discoveredNodes()
-        val built = SingBoxConfig.build(port, coreless, nodes)
+        excludedPackages = Settings.excluded(this)
+        val built = SingBoxConfig.build(port, coreless, nodes, excludedPackages)
 
         Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
         Mgbox.startEngine(built.json, MgTunPlatform(this))
@@ -104,7 +108,7 @@ class MgVpnService : VpnService() {
         running = true
         corePort = port
         watching = true
-        Log.i(TAG, "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size})")
+        Log.i(TAG, "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size}, excluded apps ${excludedPackages.size})")
         notify(notification("connected"))
         watchNodes()
       } catch (error: Throwable) {
@@ -134,7 +138,7 @@ class MgVpnService : VpnService() {
       signature = next
       try {
         val nodes = discoveredNodes()
-        val built = SingBoxConfig.build(corePort, false, nodes)
+        val built = SingBoxConfig.build(corePort, false, nodes, excludedPackages)
         Mgbox.forgetPlaneSocksPorts()
         Mgbox.reloadEngine(built.json)
         for (plane in built.planes) {

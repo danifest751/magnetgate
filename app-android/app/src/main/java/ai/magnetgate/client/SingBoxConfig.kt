@@ -25,7 +25,12 @@ object SingBoxConfig {
   /** The configuration, and the plane-to-port mapping the core has to be told about. */
   data class Built(val json: String, val planes: List<EnginePlane>)
 
-  fun build(socksPort: Int, coreless: Boolean, nodes: List<DiscoveredNode> = emptyList()): Built {
+  fun build(
+    socksPort: Int,
+    coreless: Boolean,
+    nodes: List<DiscoveredNode> = emptyList(),
+    excludePackages: List<String> = emptyList(),
+  ): Built {
     val outbounds = JSONArray()
     val planeInbounds = JSONArray()
     val rules = JSONArray()
@@ -73,6 +78,11 @@ object SingBoxConfig {
       .put("strict_route", false)
       // a userspace stack: no kernel module, no root, and it is what libbox is being used for
       .put("stack", "gvisor")
+      .apply {
+        // The engine passes these to the platform, which turns them into addDisallowedApplication: an
+        // excluded app keeps using the normal network and never enters the tunnel.
+        if (excludePackages.isNotEmpty()) put("exclude_package", JSONArray(excludePackages))
+      }
     val inbounds = JSONArray().put(tun)
     for (index in 0 until planeInbounds.length()) inbounds.put(planeInbounds.get(index))
 
