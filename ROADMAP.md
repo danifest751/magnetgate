@@ -93,12 +93,20 @@ code delivers today.
 The blocker for item 1 is concrete, not a priority call: §4 assumes a private overlay of the
 operator's own nodes (at minimum a cheap entry plus the existing egress), and **there is currently no
 capacity to run additional nodes**. Nothing in §4 can be built for a single host, because a second
-address is exactly what the overlay exists to provide. Consequence to keep in mind while this holds:
-the only mitigation available today is changing the existing exit's address (a different host or IP),
-which is a manual outage, and — because `pk`/`salt` derive from the PSK — it cannot be done without
-redistributing the PSK to every client. So the honest operational rule until then is "if the address
-gets blocked, the exit must move, and that is a coordinated client+server change", not "it recovers
-by itself".
+address is exactly what the overlay exists to provide.
+
+What that does *not* mean (an earlier revision of this paragraph got it wrong): moving the exit to
+another address is **not** a client-side change and does **not** require redistributing the PSK. The
+address travels inside the sealed offer (`MAGNETGATE_PUBLIC_HOST` is only a field of the published
+record), while the rendezvous key derives from the PSK, so a client that reads the record follows the
+new `host` with no reconfiguration — it re-reads the offer every 10 s, though an established session
+keeps the old address until it drops. The real cost of having one node is therefore downtime and
+manual work, not broken clients.
+
+Two caveats worth knowing before a move: the client's `bootstrap` list should be checked, because it
+currently leads with the exit's own IP (`<exit-ip>:20001`), which goes stale the moment the exit
+moves; and a blocked address is still a hard stop rather than something routed around, which is what
+§4 would add.
 
 ## 4. The exit overlay — entry/egress split & control-plane mesh
 
