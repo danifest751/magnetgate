@@ -2,8 +2,18 @@
 // Rotates the Reality/hysteria2 credentials on the exit, keeping the previous generation valid for
 // a grace window (one rotation interval) so clients that have not rediscovered yet keep working.
 //
+// Run it MANUALLY while the timers are held:
+//     systemctl start magnetgate-rotate.service        (one node at a time; prints nothing on success)
+//     journalctl -u magnetgate-rotate -n 20            (what happened)
+// Rotating restarts sing-box, so in-flight connections blip and reconnect; that is inherent to a
+// credential change, and every client reconnects from the rendezvous record within a poll interval.
+// Verify after each run: `systemctl is-active sing-box`, both listeners, and that a client still
+// reaches the internet — the grace slot is what keeps clients that have not rediscovered working.
+//
 // Stable identity (kept across rotations): the Reality x25519 keypair, the hy2 obfs password and the
-// hy2 TLS cert. Rotated each run: the Reality shortId + uuid and the hy2 auth password.
+// hy2 TLS cert. Rotated each run: the Reality shortId + uuid and the hy2 auth password. The cert is
+// NOT touched here: if it ever has to be replaced, write the cert and the key together and then
+// restart sing-box (the file watcher can otherwise catch a mismatched pair).
 //
 // Writes /etc/sing-box/config.json (users/short_id = [new, previous]) and /etc/magnetgate-dp.json
 // (advertising only the NEW generation), validates the config, and restarts sing-box. The magnetgate

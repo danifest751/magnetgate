@@ -26,11 +26,22 @@ install -d -o root -g sing-box -m 750 /etc/sing-box
 
 # 3. hy2 self-signed EC cert (once). Include a subjectAltName so clients can PIN it and still pass
 # Go's TLS hostname check (which ignores the legacy CN) with server_name=magnetgate.
+# The key and the cert are generated into a temp directory and only then moved into /etc/sing-box as
+# a pair: sing-box watches these files and reloads on change, and replacing one file before the other
+# makes it log "reload certificate: ... private key does not match public key" (observed 2026-09-12)
+# and keep serving the previous pair. If you ever replace them by hand, write both files and then
+# `systemctl restart sing-box` instead of relying on the reload.
 if [ ! -f /etc/sing-box/hy2.crt ]; then
+  tmpcrt="$(mktemp -d)"
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
-    -keyout /etc/sing-box/hy2.key -out /etc/sing-box/hy2.crt -days 3650 -nodes \
+    -keyout "$tmpcrt/hy2.key" -out "$tmpcrt/hy2.crt" -days 3650 -nodes \
     -subj "/CN=magnetgate" -addext "subjectAltName=DNS:magnetgate" >/dev/null 2>&1
+  # back-to-back moves, then an explicit restart so the pair is loaded once, whole
+  mv -f "$tmpcrt/hy2.key" /etc/sing-box/hy2.key
+  mv -f "$tmpcrt/hy2.crt" /etc/sing-box/hy2.crt
+  rmdir "$tmpcrt"
   chgrp sing-box /etc/sing-box/hy2.key /etc/sing-box/hy2.crt; chmod 640 /etc/sing-box/hy2.key /etc/sing-box/hy2.crt
+  sing-box reload >/dev/null 2>&1 || systemctl restart sing-box 2>/dev/null || true
 fi
 
 # 4. stable identity (once): Reality keypair + hy2 obfs password
