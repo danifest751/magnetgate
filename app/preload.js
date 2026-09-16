@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('mg', {
   openConfigDir: () => ipcRenderer.invoke('openConfigDir'),
   openLogs: () => ipcRenderer.invoke('openLogs'),
   getLogPath: () => ipcRenderer.invoke('getLogPath'),
+  clearLog: () => ipcRenderer.invoke('clearLog'),
   onLog: (cb) => ipcRenderer.on('log', (_e, line) => cb(line)),
   onStatus: (cb) => ipcRenderer.on('status', (_e, s) => cb(s)),
 })

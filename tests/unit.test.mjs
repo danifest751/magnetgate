@@ -348,3 +348,12 @@ test('S7: stale engine configs of dead processes are swept, live and unrelated f
   fs.unlinkSync(live)
   fs.unlinkSync(unrelated)
 })
+
+test('S8: log lines fingerprint the destination instead of writing it in clear', async () => {
+  const { hostForLog } = await import('../src/common.mjs')
+  const a = hostForLog('example.com')
+  assert.match(a, /^[0-9a-f]{8}$/, 'default log form is an 8-hex fingerprint')
+  assert.equal(a, hostForLog('example.com'), 'the fingerprint is stable')
+  assert.notEqual(a, hostForLog('example.org'), 'different hosts stay distinguishable')
+  assert.notEqual(a, 'example.com', 'the host itself must not appear')
+})

@@ -11,7 +11,8 @@ import {
   unseal,
   bep44Verify,
   BOOTSTRAP,
-  pskWarning
+  pskWarning,
+  hostForLog
 } from './common.mjs'
 import { startSocks5Server } from './socks5.mjs'
 import { connectNative } from './native-client.mjs'
@@ -245,7 +246,7 @@ async function routeFn(target, app) {
           throw new Error('request cancelled')
         }
         rr = (rr + i + 1) % candidates.length
-        console.log(ts(), '[socks]', target.host, 'via', type, 'exit', exit.name)
+        console.log(ts(), '[socks]', hostForLog(target.host), 'via', type, 'exit', exit.name)
         return result
       } catch (err) {
         lastError = err

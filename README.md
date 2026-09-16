@@ -127,6 +127,7 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_TRANSPORT` | native channel: `tcp` (default) or `udp` (experimental reliable-UDP) |
 | `MAGNETGATE_REALITY_SNI` | exit: the site whose TLS Reality borrows (default `www.microsoft.com`) |
 | `MAGNETGATE_STATS` | client: log per-exit traffic counters every N seconds |
+| `MAGNETGATE_LOG_TARGETS` | client: `1` logs full destination host names; by default only an 8-hex fingerprint is logged, so a log file is not a browsing history |
 
 ## Configuration and autostart
 

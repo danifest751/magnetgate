@@ -72,6 +72,21 @@ function pushLog(line) {
   diskLog.append(text)
   safeSend('log', text)
 }
+// A tunnel client's log records where the user went: make it removable from the UI.
+async function clearLogs() {
+  await diskLog.clear()
+  let names = []
+  try {
+    names = fs.readdirSync(LOG_DIR)
+  } catch {}
+  for (const name of names) {
+    if (!name.endsWith('.log') && !name.endsWith('.log.1')) continue
+    try {
+      fs.unlinkSync(path.join(LOG_DIR, name))
+    } catch {}
+  }
+  logs.length = 0
+}
 function pushStatus() {
   state.engineReady = engine.ready
   state.stopRecoveryRequired = !state.vpnOn && !!(engine.running || clientProc)
@@ -589,6 +604,10 @@ handle('disconnect', () => runVpn(true))
 handle('openConfigDir', () => shell.openPath(path.dirname(CONFIG)))
 handle('openLogs', () => shell.openPath(LOG_DIR))
 handle('getLogPath', () => LOG_FILE)
+handle('clearLog', async () => {
+  await clearLogs()
+  return true
+})
 function createWindow() {
   win = new BrowserWindow({
     width: 940,

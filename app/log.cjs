@@ -21,6 +21,16 @@ function rotatingLog(file, maxBytes = 5 * 1024 * 1024) {
         queued -= size
       })
   }
-  return { append, flush: () => chain }
+  const clear = () => {
+    // serialized on the same chain so a pending append cannot resurrect the file afterwards
+    chain = chain
+      .then(async () => {
+        await fs.unlink(file + '.1').catch(() => {})
+        await fs.unlink(file).catch(() => {})
+      })
+      .catch(() => {})
+    return chain
+  }
+  return { append, clear, flush: () => chain }
 }
 module.exports = { rotatingLog }

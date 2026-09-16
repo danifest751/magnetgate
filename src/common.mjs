@@ -36,6 +36,15 @@ export function pskWarning(psk) {
   return 'weak PSK — use a >=128-bit random secret (e.g. `openssl rand -hex 16`)'
 }
 
+// A tunnel client's log is the most sensitive file it can leave on disk: a plain list of everything
+// the user visited. Log a short fingerprint by default; MAGNETGATE_LOG_TARGETS=1 restores host names
+// for diagnosis.
+export const LOG_TARGETS = process.env.MAGNETGATE_LOG_TARGETS === '1'
+export function hostForLog(host) {
+  if (LOG_TARGETS) return String(host)
+  return crypto.createHash('sha256').update(String(host)).digest('hex').slice(0, 8)
+}
+
 export const saltOf = (s) =>
   crypto
     .createHash('sha1')

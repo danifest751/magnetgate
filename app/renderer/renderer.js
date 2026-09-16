@@ -457,6 +457,30 @@ window.addEventListener('DOMContentLoaded', async () => {
   }
   $('btnOpenDir').onclick = () => window.mg.openConfigDir().catch(showError)
   $('btnLogs').onclick = () => window.mg.openLogs().catch(showError)
+  // two-step confirm instead of a modal: the first click only arms the button
+  let clearArmed = false
+  const clearBtn = $('btnClearLog')
+  clearBtn.onclick = async () => {
+    if (!clearArmed) {
+      clearArmed = true
+      clearBtn.textContent = 'Точно очистить? Нажмите ещё раз'
+      setTimeout(() => {
+        clearArmed = false
+        clearBtn.textContent = 'Очистить журнал'
+      }, 5000)
+      return
+    }
+    clearArmed = false
+    clearBtn.textContent = 'Очистить журнал'
+    try {
+      await window.mg.clearLog()
+      const box = $('log')
+      if (box) box.textContent = ''
+      text('diagMessage', 'Журнал очищен.')
+    } catch (err) {
+      showError(err)
+    }
+  }
   $('btnRefresh').onclick = async () => {
     try {
       const version = statusVersion
