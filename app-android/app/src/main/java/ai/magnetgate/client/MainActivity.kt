@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
             coreless = extras?.getStringExtra("coreless") == "true",
             bootstrapExtra = extras?.getStringExtra("bootstrap").orEmpty(),
             relaysExtra = extras?.getStringExtra("relays").orEmpty(),
+            checkUrlExtra = extras?.getStringExtra("checkurl").orEmpty(),
           )
         }
       }

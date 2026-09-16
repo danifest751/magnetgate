@@ -120,7 +120,10 @@ try {
 
   $extras = @('-e', 'autotest', 'true', '-e', 'bootstrap', $Bootstrap)
   if ($Relays) { $extras += @('-e', 'relays', $Relays) }
-  Say "launching the app (bootstrap $Bootstrap)"
+  # -Url reaches the app, so a run against a hermetic stand can check its own target instead of a
+  # public echo service the stand cannot route to.
+  $extras += @('-e', 'checkurl', $Url)
+  Say "launching the app (bootstrap $Bootstrap, check $Url)"
   Invoke-Native $adb (@('-s', $Serial, 'shell', 'am', 'start', '-n', "$appId/.MainActivity") + $extras) | Out-Null
 
   $until = (Get-Date).AddSeconds($TimeoutSeconds)

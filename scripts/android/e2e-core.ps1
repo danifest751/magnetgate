@@ -128,6 +128,19 @@ require('http').createServer((q, s) => {
   Start-Sleep -Seconds 2
 
   # 3. two exits, one PSK, different slots; each watches the other's slot
+  #
+  # The slot-0 node also advertises a REALITY endpoint that nothing listens on. That is the only way to
+  # exercise the per-plane policy end to end: a node that is alive on one plane and dead on another must
+  # pause just the dead plane and keep carrying traffic over the live one, rather than being cooled off
+  # as a whole. A unit test covers the policy; this covers the wiring around it.
+  $deadRealityPort = 29699
+  $dpFile = Join-Path $tmp 'dp-dead-reality.json'
+  $dpDoc = @{ dp = @(@{
+      t = 'reality'; host = '127.0.0.1'; port = $deadRealityPort; protocol = 4
+      pbk = ('0' * 64); sni = 'example.com'; sid = '00'; flow = 'xtls-rprx-vision'; uuid = '00000000-0000-4000-8000-000000000000'
+    }) }
+  [System.IO.File]::WriteAllText($dpFile, ($dpDoc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+
   $exitBySlot = @{}
   foreach ($node in $Nodes) {
     $exitBySlot[$node.slot] = Start-Node @((Join-Path $root 'src\exit.js')) @{
@@ -145,6 +158,7 @@ require('http').createServer((q, s) => {
       MAGNETGATE_SEQ_FILE      = Join-Path $tmp "seq-$($node.slot)"
       MAGNETGATE_HEALTH_FILE   = Join-Path $tmp "health-$($node.slot).json"
       DHT_BOOTSTRAP            = $bootstrap
+      MAGNETGATE_DP_FILE       = $(if ($node.slot -eq 0) { $dpFile } else { Join-Path $tmp 'dp-none.json' })
     } $node.name
   }
 
@@ -153,7 +167,7 @@ require('http').createServer((q, s) => {
       'MAGNETGATE_NODE_NAME', 'MAGNETGATE_ALLOW_PRIVATE', 'MAGNETGATE_NOSTR', 'MAGNETGATE_NOSTR_RELAYS',
       'MAGNETGATE_TRANSPORT',
       'MAGNETGATE_PEER_SLOTS', 'MAGNETGATE_PUBLISH_MS', 'MAGNETGATE_SEQ_FILE', 'MAGNETGATE_HEALTH_FILE',
-      'DHT_BOOTSTRAP')) {
+      'MAGNETGATE_DP_FILE', 'DHT_BOOTSTRAP')) {
     Remove-Item -Path "env:$key" -ErrorAction SilentlyContinue
   }
 
@@ -198,6 +212,14 @@ require('http').createServer((q, s) => {
   Check ($slot0.Text -match 'target-ok') 'a request through the core reached the local target over the found endpoint'
   Check ($slot0.Text -match 'discovered slot 1 from peers') 'the second slot was learned from the first node, not from config'
   Check ($slot0.Code -eq 0) "the harness exited cleanly (code $($slot0.Code))"
+
+  # The slot-0 node advertises reality (dead) and mgt (live). Preference order is reality, hy2, mgt, so
+  # the core must try reality first, fail, pause THAT PAIR ONLY, and carry the request over the same
+  # node's mgt - not cool the node off and go elsewhere.
+  Check ($slot0.Text -match 'via mgt slot 0') `
+    'a node whose reality is dead still carried the request over its own mgt'
+  Check ($slot0.Text -notmatch 'via reality slot') `
+    'no stream was carried over the reality endpoint nothing listens on'
 
   # 5. the same run against slot 1. Every exit seals its handshake with the key of its own slot, so this
   # fails if the core dials every node with slot 0's key. The command line also learns slot 0 from the

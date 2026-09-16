@@ -59,6 +59,10 @@ private const val TAG = "magnetgate"
 /** How often the screens re-read what the core and the service report. */
 private const val REFRESH_MS = 1500L
 
+// A public echo service is the only way to see the egress address from the device; a run against a
+// hermetic stand overrides it, because such a stand has no route to the internet at all.
+private const val DEFAULT_CHECK_URL = "https://api.ipify.org"
+
 private enum class Screen(val label: String) {
   CONNECT("Connect"),
   SETTINGS("Settings"),
@@ -83,6 +87,9 @@ fun AppRoot(
   coreless: Boolean,
   bootstrapExtra: String,
   relaysExtra: String,
+  // Where the egress check goes. A hermetic stand has no internet, so a run against one points this
+  // at its own target (http://10.0.2.2:<port>/) instead of a public echo service.
+  checkUrlExtra: String = "",
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -134,7 +141,8 @@ fun AppRoot(
   suspend fun checkEgress(port: Int) {
     if (port == 0) return
     busy = true
-    egress = runCatching { "egress ${fetchThroughCore(port, "https://api.ipify.org")}" }
+    val url = checkUrlExtra.ifBlank { DEFAULT_CHECK_URL }
+    egress = runCatching { "egress ${fetchThroughCore(port, url)}" }
       .getOrElse { "egress check failed: ${it.message}" }
     busy = false
   }
