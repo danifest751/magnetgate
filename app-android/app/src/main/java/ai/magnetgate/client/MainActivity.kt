@@ -30,6 +30,21 @@ class MainActivity : ComponentActivity() {
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
     Log.i(TAG, "app started, core ${Mgbox.coreVersion()}, autotest=$autotest")
+
+    // `-e save true` writes the discovery extras into the settings store instead of applying them to
+    // this launch only, so a device can be provisioned from the command line rather than typed into on
+    // a phone keyboard. Done here, before the screens read the store, and once per intent rather than
+    // once per recomposition. The PSK is deliberately not accepted this way: an intent extra is visible
+    // to other applications and in logs, and it already reaches the Keystore through files/psk.txt.
+    if (extras?.getStringExtra("save") == "true") {
+      extras.getStringExtra("bootstrap")?.takeIf { it.isNotBlank() }?.let { Settings.setBootstrap(this, it) }
+      extras.getStringExtra("relays")?.takeIf { it.isNotBlank() }?.let { Settings.setRelays(this, it) }
+      extras.getStringExtra("slots")?.takeIf { it.isNotBlank() }
+        ?.let { Settings.setSlots(this, Settings.parseSlots(it)) }
+      extras.getStringExtra("mode")?.takeIf { it.isNotBlank() }
+        ?.let { Settings.setMode(this, Settings.Mode.of(it)) }
+      Log.i(TAG, "settings saved from extras: bootstrap/relays/slots/mode")
+    }
     setContent {
       MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
