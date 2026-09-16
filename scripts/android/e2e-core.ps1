@@ -37,6 +37,7 @@ $goExe = if ($Go) { $Go } elseif ($env:MG_GO) { $env:MG_GO } else { 'go' }
 # Not a secret: the same lab PSK scripts/dev/multi-node-lab.mjs uses, and it never leaves loopback.
 $Psk = 'lab-psk-0123456789abcdef0123456789abcdef'
 $DhtPorts = @(29501, 29502, 29503)
+$NostrPort = 29603
 $Nodes = @(
   @{ name = 'lab-a'; slot = 0; port = 29601 },
   @{ name = 'lab-b'; slot = 1; port = 29602 }
@@ -64,13 +65,13 @@ function Start-Node([string[]]$arguments, [hashtable]$environment, [string]$logN
   return $process
 }
 
-# Invoke-Harness runs the core with the rendezvous enabled and returns its output and exit code.
+# Invoke-Harness runs the core with the given channel flags and returns its output and exit code.
 #
 # The harness logs to stderr on purpose. PowerShell 5.1 turns a native command's stderr into error
 # records, so merge the two streams in cmd instead and read the file.
-function Invoke-Harness([string]$logName, [string]$slots) {
+function Invoke-Harness([string]$logName, [string[]]$channelFlags) {
   $outFile = Join-Path $tmp $logName
-  $commandLine = '"{0}" -slots {1} -bootstrap {2} -discover 45s -check "http://127.0.0.1:{3}/" > "{4}" 2>&1' -f $binary, $slots, $bootstrap, $TargetPort, $outFile
+  $commandLine = '"{0}" {1} -discover 45s -check "http://127.0.0.1:{2}/" > "{3}" 2>&1' -f $binary, ($channelFlags -join ' '), $TargetPort, $outFile
   $oldPsk = $env:MG_PSK
   $env:MG_PSK = $Psk
   try {
@@ -115,6 +116,9 @@ require('http').createServer((q, s) => {
 "@ | Set-Content -LiteralPath $targetJs -Encoding ASCII
   Start-Node @($targetJs) @{} 'target' | Out-Null
 
+  # 1b. a local NIP-01 relay: the second rendezvous channel, hermetic like the rest of the stand
+  Start-Node @((Join-Path $root 'scripts\dev\nostr-relay.mjs'), [string]$NostrPort) @{} 'relay' | Out-Null
+
   # 2. three local DHT nodes: the first is the bootstrap for the other two
   for ($i = 0; $i -lt $DhtPorts.Count; $i++) {
     $args = @((Join-Path $root 'src\dht-node.mjs'), [string]$DhtPorts[$i])
@@ -133,7 +137,8 @@ require('http').createServer((q, s) => {
       MAGNETGATE_NODE_SLOT     = [string]$node.slot
       MAGNETGATE_NODE_NAME     = $node.name
       MAGNETGATE_ALLOW_PRIVATE = '1'
-      MAGNETGATE_NOSTR         = 'off'
+      MAGNETGATE_NOSTR         = 'on'
+      MAGNETGATE_NOSTR_RELAYS  = "ws://127.0.0.1:$NostrPort"
       MAGNETGATE_TRANSPORT     = 'tcp'
       MAGNETGATE_PEER_SLOTS    = ($Nodes | ForEach-Object { $_.slot }) -join ','
       MAGNETGATE_PUBLISH_MS    = '5000'
@@ -145,7 +150,8 @@ require('http').createServer((q, s) => {
 
   # the exits only need their environment at spawn time: do not leak it into the harness below
   foreach ($key in @('MAGNETGATE_PSK', 'MAGNETGATE_PORT', 'MAGNETGATE_PUBLIC_HOST', 'MAGNETGATE_NODE_SLOT',
-      'MAGNETGATE_NODE_NAME', 'MAGNETGATE_ALLOW_PRIVATE', 'MAGNETGATE_NOSTR', 'MAGNETGATE_TRANSPORT',
+      'MAGNETGATE_NODE_NAME', 'MAGNETGATE_ALLOW_PRIVATE', 'MAGNETGATE_NOSTR', 'MAGNETGATE_NOSTR_RELAYS',
+      'MAGNETGATE_TRANSPORT',
       'MAGNETGATE_PEER_SLOTS', 'MAGNETGATE_PUBLISH_MS', 'MAGNETGATE_SEQ_FILE', 'MAGNETGATE_HEALTH_FILE',
       'DHT_BOOTSTRAP')) {
     Remove-Item -Path "env:$key" -ErrorAction SilentlyContinue
@@ -168,13 +174,23 @@ require('http').createServer((q, s) => {
     Check ($null -ne $learned) "$($node.name) sees the other slot and advertises it (peers=$($learned.peers))"
   }
 
+  # the publisher half of the second channel: both slots on the local relay, one replaceable event each
+  $stored = Wait-For 'both exits to publish to the relay' {
+    $text = Log-Text 'relay'
+    if (-not $text) { return $null }
+    $count = ([regex]::Matches($text, 'stored kind 30078')).Count
+    if ($count -ge 2) { return $count }
+    return $null
+  } 60
+  Check ($null -ne $stored) "both slots published to the local relay ($stored event(s))"
+
   # 4. build the core and run it with the rendezvous: no exit address is given
   $binary = Join-Path $tmp 'agent-cli.exe'
   Push-Location $core
   try { & $goExe build -o $binary ./cmd/agent-cli } finally { Pop-Location }
   if ($LASTEXITCODE -ne 0) { throw 'go build failed' }
 
-  $slot0 = Invoke-Harness 'agent-cli-slot0.log' '0'
+  $slot0 = Invoke-Harness 'agent-cli-slot0.log' @('-slots','0','-bootstrap',$bootstrap)
   Say '--- core output (slot 0) ---'
   foreach ($line in ($slot0.Text -split "`r?`n")) { if ($line.Trim()) { Say "  $line" } }
 
@@ -183,15 +199,30 @@ require('http').createServer((q, s) => {
   Check ($slot0.Text -match 'discovered slot 1 from peers') 'the second slot was learned from the first node, not from config'
   Check ($slot0.Code -eq 0) "the harness exited cleanly (code $($slot0.Code))"
 
-  # 5. the same run against slot 1 only. Every exit seals its handshake with the key of its own slot, so
-  # this fails if the core dials every node with slot 0's key.
-  $slot1 = Invoke-Harness 'agent-cli-slot1.log' '1'
+  # 5. the same run against slot 1. Every exit seals its handshake with the key of its own slot, so this
+  # fails if the core dials every node with slot 0's key. The command line also learns slot 0 from the
+  # first offer, so the check has to see a stream actually carried by slot 1, not just discovered.
+  $slot1 = Invoke-Harness 'agent-cli-slot1.log' @('-slots', '1', '-bootstrap', $bootstrap, '-hold', '6s', '-every', '1s')
   Say '--- core output (slot 1) ---'
   foreach ($line in ($slot1.Text -split "`r?`n")) { if ($line.Trim()) { Say "  $line" } }
 
-  Check ($slot1.Text -match 'exit slot 1 at ') 'a node on slot 1 is usable, so its key was derived per slot'
+  Check ($slot1.Text -match 'exit slot 1 at ') 'the core discovered the slot it was configured for'
+  Check ($slot1.Text -match '\[dp\] stream to [^\r\n]* slot 1') 'a request was carried by the slot-1 node, so its key was derived per slot'
   Check ($slot1.Text -match 'target-ok') 'a request through the slot-1 node reached the local target'
   Check ($slot1.Code -eq 0) "the slot-1 run exited cleanly (code $($slot1.Code))"
+
+
+  # 4b. the second channel on its own: no DHT bootstrap is given, so anything that is found came over
+  # Nostr, and the absence of DHT lookups in the log says so
+  $nostrRun = Invoke-Harness 'agent-cli-nostr.log' @('-slots', '0', '-relays', "ws://127.0.0.1:$NostrPort")
+  Say '--- core output (Nostr only) ---'
+  foreach ($line in ($nostrRun.Text -split "`r?`n")) { if ($line.Trim()) { Say "  $line" } }
+
+  Check ($nostrRun.Text -match 'exit slot 0 at ') 'the core found a node over the second channel alone'
+  Check ($nostrRun.Text -match 'target-ok') 'a request over the Nostr-discovered endpoint reached the target'
+  Check ($nostrRun.Text -notmatch 'dht: lookup finished') 'no DHT was configured, so the offer came from the relay'
+  Check ($nostrRun.Code -eq 0) "the Nostr-only run exited cleanly (code $($nostrRun.Code))"
+
 
   # 6. failover: keep a client running, kill the node that carried the first stream, and require the
   # core to notice the dead pair, pause it in diagnostics and keep serving through the other node
@@ -282,3 +313,4 @@ require('http').createServer((q, s) => {
   Say 'ALL CHECKS PASSED'
   exit 0
 }
+
