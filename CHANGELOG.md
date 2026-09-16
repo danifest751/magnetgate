@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Android: verified on a real phone, and what that found (2026-09-17)
+
+- **IPv6 left the device outside the tunnel.** The tun carried an IPv4 address only, so no `::/0`
+  route was ever claimed and every IPv6 destination was reached in the clear while the app reported a
+  full tunnel. The tun now also carries `fdfe:dcba:9876::1/126` and an `ip_version` rule rejects the
+  traffic, so applications fall back to IPv4 instead of leaking. An emulator cannot show this - its
+  network is IPv4 only.
+- **The egress was measured before the tunnel existed**, using the core's own native plane, which this
+  mobile carrier blocks: the screen showed a failure for a tunnel that then worked through reality. It
+  is measured once the tunnel is up, and the screen re-checks when the service starts.
+- **The core's SOCKS port was cached across a restart.** The core is started twice on every ordinary
+  connect - once by the screen, once by the service - and the second start hands out a new port, so the
+  kept one refused connections. The port is read from the live status at the moment of use.
+- The tun MTU is 1400, the value the desktop uses; 1500 left no room for what reality wraps around it.
+- First run on real hardware (Xiaomi, Android 16, arm64): the tunnel carries ordinary application
+  traffic over reality on mobile data and on Wi-Fi and survives switching between them, and DHT
+  rendezvous works there - something the development machine cannot test, since it has no route to the
+  public DHT at all.
+
 ### Android: routing by site rules (2026-09-17)
 
 - The phone client sent every packet through the exit: its engine configuration had a single rule,
