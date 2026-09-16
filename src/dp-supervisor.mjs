@@ -26,6 +26,51 @@ function buildConfig(dp, socksPort) {
 
 const dpKey = (dp) => JSON.stringify(dp)
 
+// --- temp-config housekeeping ---------------------------------------------------------------------
+// Each engine writes a sing-box config holding Reality/hysteria2 credentials into the temp dir. A hard
+// kill (crash, kill -9, power loss) leaves it behind, so clean up after dead processes at startup and
+// remove our own file on a clean exit.
+const liveConfigs = new Set()
+process.on('exit', () => {
+  for (const p of liveConfigs) {
+    try {
+      fs.unlinkSync(p)
+    } catch {}
+  }
+})
+
+export function sweepStaleConfigs() {
+  const dir = os.tmpdir()
+  let names = []
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return 0
+  }
+  let removed = 0
+  for (const name of names) {
+    const m = /^magnetgate-dp-(\d+)-[0-9a-f]+\.json$/.exec(name)
+    if (!m) continue
+    const pid = Number(m[1])
+    if (pid === process.pid) continue
+    let alive = false
+    try {
+      process.kill(pid, 0)
+      alive = true
+    } catch (err) {
+      alive = err && err.code === 'EPERM' // exists but owned by someone else
+    }
+    if (alive) continue
+    try {
+      fs.unlinkSync(path.join(dir, name))
+      removed++
+    } catch {}
+  }
+  return removed
+}
+
+let swept = false
+
 function waitPort(host, port, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   return new Promise((resolve) => {
@@ -57,6 +102,7 @@ export class DpSupervisor {
       os.tmpdir(),
       'magnetgate-dp-' + process.pid + '-' + crypto.randomBytes(8).toString('hex') + '.json'
     )
+    liveConfigs.add(this.cfgPath)
   }
 
   available() {
@@ -68,6 +114,11 @@ export class DpSupervisor {
   // rotations) can't spawn two sing-box that fight over the SOCKS port.
   ensure(dp) {
     if (!this.available()) return Promise.resolve(false)
+    if (!swept) {
+      swept = true
+      const removed = sweepStaleConfigs()
+      if (removed) this.log(`[dp] removed ${removed} stale engine config(s) from the temp dir`)
+    }
     const key = dpKey(dp)
     this.chain = (this.chain || Promise.resolve())
       .then(() => this._ensure(key, dp))

@@ -17,6 +17,8 @@ const { DEFAULT_CONFIG, validateConfig, freshEndpoints } = require(
 )
 const CONFIG = path.join(app.getPath('userData'), 'magnetgate.config.json')
 const DP_FILE = path.join(app.getPath('userData'), 'current-dp.json')
+// holds every exit PSK while the client child runs, so it must not outlive the session
+const RUNTIME_FILE = path.join(app.getPath('userData'), 'runtime-client.json')
 const LOG_DIR = path.join(app.getPath('userData'), 'logs')
 fs.mkdirSync(LOG_DIR, { recursive: true })
 const LOG_FILE = path.join(LOG_DIR, 'magnetgate.log'),
@@ -98,6 +100,24 @@ function atomicJson(file, value) {
     fs.closeSync(fd)
   }
   fs.renameSync(temp, file)
+}
+// A crash or a kill can leave copies of the client config (every exit PSK) and of the engine's
+// candidate config behind: drop them at startup, since both are recreated when connecting.
+function sweepLeftovers() {
+  const dir = app.getPath('userData')
+  try {
+    fs.unlinkSync(RUNTIME_FILE)
+  } catch (err) {
+    if (err.code !== 'ENOENT') pushLog('[app] could not remove a stale runtime config: ' + err.message)
+  }
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.candidate') && !name.endsWith('.tmp')) continue
+      try {
+        fs.unlinkSync(path.join(dir, name))
+      } catch {}
+    }
+  } catch {}
 }
 function loadConfig() {
   if (!fs.existsSync(CONFIG)) {
@@ -214,7 +234,7 @@ async function startClient() {
       throw new Error('Add an exit PSK first')
     }
     const runtime = { ...cfg, dataPlane: 'mgt', rules: { direct: [], proxy: [] } }
-    const runtimeFile = path.join(app.getPath('userData'), 'runtime-client.json')
+    const runtimeFile = RUNTIME_FILE
     atomicJson(runtimeFile, runtime)
     const child = spawn(process.execPath, [path.join(RES, 'src', 'client.js'), runtimeFile], {
       cwd: RES,
@@ -262,6 +282,12 @@ async function stopClient() {
   if (clientProc === old) clientProc = null
   clientSig = null
   state.clientRunning = false
+  // the runtime config carries every PSK: remove it as soon as the child is gone
+  try {
+    fs.unlinkSync(RUNTIME_FILE)
+  } catch (err) {
+    if (err.code !== 'ENOENT') pushLog('[client] could not remove the runtime config: ' + err.message)
+  }
 }
 async function applyVpn() {
   if (!state.vpnOn) return
@@ -611,6 +637,7 @@ else {
   app.whenReady().then(async () => {
     createWindow()
     pushLog('magnetgate ' + app.getVersion() + ' started')
+    sweepLeftovers()
     try {
       await firewall(false, true)
       if (guardReady)

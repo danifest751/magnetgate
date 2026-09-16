@@ -321,3 +321,30 @@ test('mergeOffer: newer generation replaces, older is ignored, invalid keeps pre
   )
   assert.equal(mergeOffer(prev, null), null)
 })
+
+test('S7: stale engine configs of dead processes are swept, live and unrelated files are kept', async () => {
+  const os = await import('node:os')
+  const fs = await import('node:fs')
+  const path = await import('node:path')
+  const { spawnSync } = await import('node:child_process')
+  const { sweepStaleConfigs } = await import('../src/dp-supervisor.mjs')
+
+  const dir = os.tmpdir()
+  const tag = crypto.randomBytes(4).toString('hex')
+  // a pid that has certainly exited by the time sweepStaleConfigs() runs
+  const gone = spawnSync(process.execPath, ['-e', '0'])
+  const dead = path.join(dir, `magnetgate-dp-${gone.pid}-${tag}.json`)
+  const live = path.join(dir, `magnetgate-dp-${process.pid}-${tag}.json`)
+  const unrelated = path.join(dir, `zz-not-a-magnetgate-config-${tag}.json`)
+  for (const f of [dead, live, unrelated]) fs.writeFileSync(f, '{"credentials":"x"}')
+
+  const before = fs.existsSync(dead)
+  sweepStaleConfigs()
+
+  assert.equal(before, true, 'precondition: the dead-pid config exists')
+  assert.equal(fs.existsSync(dead), false, 'a dead process config must be removed')
+  assert.equal(fs.existsSync(live), true, 'our own live config must be kept')
+  assert.equal(fs.existsSync(unrelated), true, 'unrelated temp files must be kept')
+  fs.unlinkSync(live)
+  fs.unlinkSync(unrelated)
+})
