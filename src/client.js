@@ -295,7 +295,11 @@ function lookupAll() {
   for (const e of exits) {
     if (e.lookupPending) continue
     e.lookupPending = true
-    dht.get(e.target, { salt: e.salt }, (err, res) => {
+    // cache: false forces the network walk. bittorrent-dht answers a get from its own store first,
+    // and that store is filled by whatever other nodes put to us - so a client that once received a
+    // stale copy of this target would keep serving it to itself forever, never seeing a newer offer.
+    // The walk itself already keeps the highest seq it is offered.
+    dht.get(e.target, { salt: e.salt, cache: false }, (err, res) => {
       e.lookupPending = false
       if (err || !res?.v) return
       const plain = unseal(e.boxKey, res.v, res.seq)

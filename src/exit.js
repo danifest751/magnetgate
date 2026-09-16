@@ -176,7 +176,9 @@ function lookupSlot(slot) {
     }
     const timer = setTimeout(() => finish(null), PEER_TIMEOUT_MS)
     try {
-      dht.get(targetOf(pk, salt), { salt }, (err, res) => {
+      // cache: false for the same reason as in client.js: a locally cached copy would freeze this
+      // node's view of its peer and make a departed node look alive.
+      dht.get(targetOf(pk, salt), { salt, cache: false }, (err, res) => {
         clearTimeout(timer)
         if (err || !res?.v) return finish(null)
         const plain = unseal(slotBoxKey(SECRET, slot), res.v, res.seq)
