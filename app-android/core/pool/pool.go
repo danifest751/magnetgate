@@ -1,0 +1,265 @@
+// Package pool is the client's data plane: it holds the nodes the rendezvous found, remembers which
+// (node, plane) pairs are usable and opens streams with failover.
+//
+// Health is tracked per pair, never per node, mirroring src/health.mjs: a node can be perfectly alive
+// while one of its planes is unreachable from this network, and writing the whole node off would hide a
+// usable endpoint on the same machine — which is the entire point of a node advertising several planes.
+//
+// Which transport a plane actually uses is not decided here. A Connector is injected per plane type:
+// the native mux is the one this repository ships (see Native), the app adds libbox outbounds for
+// Reality and hysteria2, and tests inject fakes so the policy can be checked without a network.
+package pool
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
+
+	"magnetgate/core/health"
+	"magnetgate/core/offer"
+)
+
+// DefaultFresh is how long an offer stays usable: the same window the Node client applies
+// (OFFER_TTL_MS), because a node publishes every minute.
+const DefaultFresh = 12 * time.Minute
+
+var (
+	// ErrNoNode means nothing fresh has been discovered yet.
+	ErrNoNode = errors.New("pool: no exit discovered yet")
+	// ErrAllCooling means every plane of every node is sitting out its cooldown.
+	ErrAllCooling = errors.New("pool: every plane is cooling down")
+	// ErrNoPlane means the nodes that are left do not carry a plane this client can speak.
+	ErrNoPlane = errors.New("pool: no usable plane in the offer")
+)
+
+// Conn is one proxied stream. socks.Conn has exactly this shape, so a Conn can be handed to the SOCKS
+// entry point as is; a test asserts that at compile time.
+type Conn interface {
+	io.Reader
+	io.Writer
+	CloseWrite() error
+	io.Closer
+}
+
+// Target is where a stream should end up, as the exit resolves it.
+type Target struct {
+	Host string
+	Port int
+}
+
+// Node is one exit as the data plane sees it.
+type Node struct {
+	Slot  int
+	Name  string
+	Offer *offer.Offer
+	Seen  time.Time
+}
+
+// Connector opens a stream through one plane of one node. `plane` is the raw offer entry, because only
+// the connector for that type knows its fields (Reality keys, a pinned certificate, a port).
+type Connector interface {
+	Open(ctx context.Context, node Node, plane json.RawMessage, target Target) (Conn, error)
+}
+
+// ConnectorFunc adapts a function to Connector.
+type ConnectorFunc func(ctx context.Context, node Node, plane json.RawMessage, target Target) (Conn, error)
+
+func (f ConnectorFunc) Open(ctx context.Context, node Node, plane json.RawMessage, target Target) (Conn, error) {
+	return f(ctx, node, plane, target)
+}
+
+// Config is what a pool needs to run.
+type Config struct {
+	// Preference is the plane order, e.g. {"reality", "hy2", "mgt"}: the first one that works wins.
+	Preference []string
+	// Connectors maps a plane type to the thing that can speak it. A type with no connector is skipped
+	// without any health effect — we never tried it, so we have nothing to report about it.
+	Connectors map[string]Connector
+	Health     *health.Health
+	Fresh      time.Duration
+	Now        func() time.Time
+	Logf       func(format string, args ...any)
+}
+
+// Pool is the data plane.
+type Pool struct {
+	cfg  Config
+	now  func() time.Time
+	logf func(string, ...any)
+
+	mu    sync.Mutex
+	nodes map[int]Node
+	rr    int
+}
+
+// New prepares a pool. With no preference the native plane is the only one, which is what a build
+// without libbox can actually speak.
+func New(cfg Config) *Pool {
+	if len(cfg.Preference) == 0 {
+		cfg.Preference = []string{"mgt"}
+	}
+	if cfg.Health == nil {
+		cfg.Health = health.New(cfg.Now)
+	}
+	if cfg.Fresh <= 0 {
+		cfg.Fresh = DefaultFresh
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.Logf == nil {
+		cfg.Logf = func(string, ...any) {}
+	}
+	return &Pool{
+		cfg:   cfg,
+		now:   cfg.Now,
+		logf:  cfg.Logf,
+		nodes: make(map[int]Node),
+	}
+}
+
+// Update records a node (or replaces what was known about it). Called on every poll, so it must stay
+// cheap: nodes carry the offer that was just merged by the rendezvous.
+func (p *Pool) Update(record Node) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nodes[record.Slot] = record
+}
+
+// Nodes lists the fresh nodes, in slot order, for diagnostics.
+func (p *Pool) Nodes() []Node {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]Node, 0, len(p.nodes))
+	for _, node := range p.nodes {
+		if p.stale(node) {
+			continue
+		}
+		out = append(out, node)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slot < out[j].Slot })
+	return out
+}
+
+// Cooling lists the planes of one node that are paused, for the diagnostics table.
+func (p *Pool) Cooling(slot int) []health.Cooling { return p.cfg.Health.Cooling(idOf(slot)) }
+
+// Fresh reports whether a node holds a usable offer right now.
+func (p *Pool) Fresh(slot int) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	node, ok := p.nodes[slot]
+	return ok && !p.stale(node)
+}
+
+// Dial opens one stream, preferring the configured planes and falling through to the next candidate
+// when a plane or a whole node fails.
+//
+// This is the policy the desktop client applies (src/client.js): round robin over the nodes, plane
+// preference within each node, a pair that failed recently is skipped instead of retried, and the
+// cooldown grows with consecutive failures.
+func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
+	target := Target{Host: host, Port: port}
+	candidates := p.Nodes()
+	if len(candidates) == 0 {
+		return nil, ErrNoNode
+	}
+
+	p.mu.Lock()
+	start := p.rr % len(candidates)
+	p.mu.Unlock()
+
+	var lastErr error
+	attempts, cooling := 0, 0
+	for i := range candidates {
+		node := candidates[(start+i)%len(candidates)]
+		for _, plane := range p.cfg.Preference {
+			connector := p.cfg.Connectors[plane]
+			if connector == nil {
+				continue // we cannot speak this plane, so there is nothing to report about it
+			}
+			if !p.cfg.Health.Usable(idOf(node.Slot), plane) {
+				cooling++
+				continue
+			}
+			raw := node.Offer.Pick([]string{plane})
+			if raw == nil {
+				continue // this node does not offer that plane
+			}
+			attempts++
+			conn, err := connector.Open(ctx, node, raw, target)
+			if err == nil {
+				p.cfg.Health.Ok(idOf(node.Slot), plane)
+				p.mu.Lock()
+				p.rr = (start + i + 1) % len(candidates)
+				p.mu.Unlock()
+				p.logf("stream to %s:%d via %s slot %d", host, port, plane, node.Slot)
+				return conn, nil
+			}
+			lastErr = err
+			record := p.cfg.Health.Fail(idOf(node.Slot), plane)
+			p.logf("transport failed: %s slot %d (paused %s after %d failure(s)): %v",
+				plane, node.Slot, time.Duration(record.BackoffMs)*time.Millisecond, record.Fails, err)
+		}
+	}
+	if attempts == 0 {
+		if cooling > 0 {
+			return nil, ErrAllCooling
+		}
+		return nil, ErrNoPlane
+	}
+	return nil, lastErr
+}
+
+// Snapshot is the diagnostics view: every fresh node with the planes it advertises and the ones this
+// client is sitting out. It mirrors what the desktop writes to MAGNETGATE_DP_OUT.
+type Snapshot struct {
+	V     int           `json:"v"`
+	Exits []SnapshotRow `json:"exits"`
+}
+
+// SnapshotRow is one node in the diagnostics view.
+type SnapshotRow struct {
+	ID      string            `json:"id"`
+	Name    string            `json:"name"`
+	Slot    int               `json:"slot"`
+	TS      int64             `json:"ts"`
+	Node    string            `json:"node,omitempty"`
+	Country string            `json:"country,omitempty"`
+	DP      []json.RawMessage `json:"dp"`
+	Cooling []health.Cooling  `json:"cooling"`
+}
+
+// Snapshot builds the diagnostics view.
+func (p *Pool) Snapshot() Snapshot {
+	out := Snapshot{V: 4, Exits: []SnapshotRow{}}
+	for _, node := range p.Nodes() {
+		row := SnapshotRow{
+			ID:      idOf(node.Slot),
+			Name:    node.Name,
+			Slot:    node.Slot,
+			TS:      node.Offer.TS,
+			Node:    node.Offer.Node,
+			Country: node.Offer.Country,
+			DP:      node.Offer.DP,
+			Cooling: p.Cooling(node.Slot),
+		}
+		if row.Cooling == nil {
+			row.Cooling = []health.Cooling{}
+		}
+		out.Exits = append(out.Exits, row)
+	}
+	return out
+}
+
+func (p *Pool) stale(node Node) bool {
+	return p.now().Sub(node.Seen) > p.cfg.Fresh
+}
+
+// idOf is the node identity the health policy keys on, matching the slot-derived id the desktop uses.
+func idOf(slot int) string { return strconv.Itoa(slot) }
