@@ -7,6 +7,7 @@ import fs from 'node:fs'
 import {
   deriveKeys,
   asSlot,
+  slotsFromEnv,
   saltOf,
   slotSalt,
   slotBoxKey,
@@ -76,7 +77,8 @@ let cfg = {
 // entry that carries its own `salt` still wins over the slot derivation.
 {
   const env = process.env.MAGNETGATE_SLOTS
-  if (env && !cfg.slots?.length) cfg.slots = env.split(',').map((s) => s.trim()).filter(Boolean)
+  // slotsFromEnv turns the strings an env var always arrives as into the numbers validateConfig takes
+  if (env && !cfg.slots?.length) cfg.slots = slotsFromEnv(env)
   if (cfg.slots?.length && !cfg.exits.length)
     console.log(ts(), '[warn] slots are set but no PSK was configured — ignoring them')
 }

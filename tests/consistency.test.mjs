@@ -98,4 +98,47 @@ test('drift: the slot range is the same on both sides', () => {
     configLimit,
     'the client/protocol slot range and the config validator disagree'
   )
+  // exit.js used to carry a third copy of the bound as a literal, where nothing would notice it
+  // drifting away from the other two.
+  assert.ok(
+    /n < MAX_SLOTS/.test(exit),
+    'exit.js hardcodes its peer-slot bound instead of using MAX_SLOTS'
+  )
+})
+
+test('drift: the slot env var is converted before it reaches the validator', () => {
+  // This is the seam that broke on 2026-09-16: client.js split MAGNETGATE_SLOTS into strings while
+  // validateConfig accepts only numbers, so every documented value died at startup with
+  // "invalid slot: 0". Both halves had tests; the join between them did not.
+  const block = /MAGNETGATE_SLOTS[\s\S]{0,800}/.exec(client)
+  assert.ok(block, 'drift guard: could not find the MAGNETGATE_SLOTS block in client.js')
+  assert.ok(
+    block[0].includes('slotsFromEnv('),
+    'client.js parses MAGNETGATE_SLOTS by hand again instead of using slotsFromEnv'
+  )
+  assert.ok(
+    /export const slotsFromEnv/.test(common),
+    'slotsFromEnv is gone from common.mjs but client.js still expects it'
+  )
+})
+
+test('drift: STATUS.md states the number of tests that actually run', () => {
+  // docs/ is gitignored, so this only runs on a machine that has the internal documentation.
+  // STATUS.md declares itself the one document that must match the code, and these two numbers are
+  // exactly the kind that rot quietly: nothing breaks when they are wrong, they just mislead.
+  const statusPath = path.join(root, 'docs/STATUS.md')
+  if (!fs.existsSync(statusPath)) return
+  const status = fs.readFileSync(statusPath, 'utf8')
+  const countTests = (dir, ext) =>
+    fs
+      .readdirSync(path.join(root, dir))
+      .filter((f) => f.endsWith(ext))
+      .reduce(
+        (n, f) => n + (fs.readFileSync(path.join(root, dir, f), 'utf8').match(/^test\(/gm)?.length ?? 0),
+        0
+      )
+  const core = countTests('tests', '.test.mjs')
+  const app = countTests('app/tests', '.test.cjs')
+  assert.equal(pick(status, /# (\d+) тест[а-яё]* ядра/, 'the core test count in STATUS.md'), core)
+  assert.equal(pick(status, /# (\d+) тест[а-яё]* десктопа/, 'the desktop test count in STATUS.md'), app)
 })

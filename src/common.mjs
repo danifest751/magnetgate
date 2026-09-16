@@ -75,6 +75,15 @@ export const asSlot = (value) => {
     throw new Error(`invalid node slot: ${value}`)
   return typed
 }
+// An env var carries a slot list as one string ("0,1"), while validateConfig takes the numbers a JSON
+// config yields. Converting in between is what this does; a bad entry throws rather than being dropped,
+// because a silently ignored slot means a node the client never looks for.
+export const slotsFromEnv = (value) =>
+  String(value ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(asSlot)
 export const slotSalt = (secret, slot = 0) =>
   asSlot(slot) === 0
     ? saltOf(secret)

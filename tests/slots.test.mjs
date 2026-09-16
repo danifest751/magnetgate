@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import {
   MAX_SLOTS,
   asSlot,
+  slotsFromEnv,
   deriveKeys,
   saltOf,
   slotSalt,
@@ -54,6 +55,31 @@ test('config normalises the slot list and rejects out-of-range values', async ()
   assert.deepEqual(validateConfig({}).slots, [], 'no slots by default')
   for (const bad of [{ slots: '0,1' }, { slots: [MAX_SLOTS] }, { slots: [-1] }, { slots: [1.5] }, { slots: Array(MAX_SLOTS + 1).fill(0) }])
     assert.throws(() => validateConfig(bad), /invalid slot/)
+})
+
+// MAGNETGATE_SLOTS is the documented way to turn multi-node on, and it is the one input that does
+// NOT arrive as JSON. The two halves were added together and still disagreed: the client split the env
+// var into strings while validateConfig took only numbers, so every documented value threw on startup
+// ("invalid slot: 0"). Testing the halves apart is what hid it — this test walks the whole seam.
+test('the slot env var survives the trip into a validated config', async () => {
+  const mod = await import('../src/config.cjs')
+  const validateConfig = mod.validateConfig ?? mod.default.validateConfig
+  for (const [env, expected] of [
+    ['0', [0]],
+    ['0,1', [0, 1]],
+    [' 1 , 0 ,', [0, 1]],
+    ['2,2,1', [1, 2]]
+  ])
+    assert.deepEqual(
+      validateConfig({ slots: slotsFromEnv(env) }).slots,
+      expected,
+      `MAGNETGATE_SLOTS=${env} must reach the config as numbers`
+    )
+  assert.deepEqual(slotsFromEnv(''), [], 'an unset variable asks for nothing')
+  assert.deepEqual(slotsFromEnv(undefined), [], 'a missing variable asks for nothing')
+  // a bad entry must be loud: a silently dropped slot is a node the client never looks for
+  for (const bad of ['x', '1,x', '-1', String(MAX_SLOTS), '1.5'])
+    assert.throws(() => slotsFromEnv(bad), /invalid node slot/, `MAGNETGATE_SLOTS=${bad}`)
 })
 
 test('merging same-generation offers keeps the slot and node identity', () => {

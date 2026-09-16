@@ -12,6 +12,7 @@ import { sequenceStore, atomicWrite } from './state-file.mjs'
 import {
   deriveKeys,
   asSlot,
+  MAX_SLOTS,
   slotSalt,
   slotBoxKey,
   targetOf,
@@ -152,7 +153,7 @@ const PEER_SLOTS = (process.env.MAGNETGATE_PEER_SLOTS ?? '')
   .map((s) => s.trim())
   .filter(Boolean)
   .map(Number)
-  .filter((n) => Number.isInteger(n) && n >= 0 && n < 16 && n !== NODE_SLOT)
+  .filter((n) => Number.isInteger(n) && n >= 0 && n < MAX_SLOTS && n !== NODE_SLOT)
 const EXPECT_PEERS = Number(process.env.MAGNETGATE_EXPECT_PEERS ?? 0)
 // A single missed scan is normal: a DHT lookup is best-effort and occasionally comes back empty for a
 // node that is perfectly alive (observed on 2026-09-16). Only a sustained shortfall is worth an alert,
