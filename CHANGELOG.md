@@ -36,6 +36,17 @@ every client:
   fails if either end hardcodes it again.
 - Verified on two real nodes (slot 0 and slot 1, one PSK): each advertises the other as `peers`, a
   client configured with only slot 0 discovers slot 1 and serves traffic through either node.
+
+Phase 1 fixes found by running it for real (2026-09-16):
+
+- **Each slot needs its own Nostr `d` tag.** It was derived from the PSK alone while a kind-30078
+  event is replaceable per `(kind, pubkey, d)`, so two nodes overwrote each other and only the last
+  publisher was visible — the other node lost its hysteria2 endpoint (which travels only on Nostr,
+  because the pinned cert does not fit the ~1000 B DHT record) and, with it, was invisible to a client
+  that discovered it through `peers`. Slot 0 keeps the old tag.
+- A slot discovered through `peers` now gets a Nostr subscription as well; before, it stayed DHT-only.
+- Second node brought up with the full data plane (Reality + hysteria2 + native, all verified from a
+  client) and with rotation held on both nodes, as on the first one.
 ### 0.11.1 / Desktop 0.3.3 — audit follow-up (2026-09-16)
 
 Security and operations hardening from a full repository audit. No wire-protocol change: the sealed
