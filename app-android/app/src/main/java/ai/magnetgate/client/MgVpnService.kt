@@ -64,8 +64,10 @@ class MgVpnService : VpnService() {
       stopSelf()
       return START_NOT_STICKY
     }
-    val bootstrap = intent?.getStringExtra("bootstrap").orEmpty()
-    val relays = intent?.getStringExtra("relays").orEmpty()
+    // The extras exist for the acceptance scripts, which point a run at their own stand; the screens
+    // leave them empty, and then the saved settings decide what this client looks for.
+    val bootstrap = intent?.getStringExtra("bootstrap").orEmpty().ifBlank { Settings.bootstrap(this) }
+    val relays = intent?.getStringExtra("relays").orEmpty().ifBlank { Settings.relays(this) }
     val coreless = intent?.getBooleanExtra("coreless", false) == true
     try {
       startTunnel(bootstrap, relays, coreless)
@@ -157,7 +159,12 @@ class MgVpnService : VpnService() {
     val psk = CoreConfig.readPsk(this)
     if (psk.isBlank()) throw IllegalStateException("no PSK: put it in files/psk.txt or the settings screen")
     val port = Mgbox.startCore(
-      CoreConfig.json(psk, CoreConfig.splitList(bootstrap), CoreConfig.splitList(relays)),
+      CoreConfig.json(
+        psk = psk,
+        slots = Settings.slots(this),
+        bootstrap = CoreConfig.splitList(bootstrap),
+        relays = CoreConfig.splitList(relays),
+      ),
     ).toInt()
     Log.i(TAG, "core listening on 127.0.0.1:$port")
 
