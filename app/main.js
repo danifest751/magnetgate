@@ -10,6 +10,7 @@ const { buildVpnConfig } = require('./vpn-config.cjs')
 const { switchMode, engineSignature } = require('./mode.cjs')
 const { rotatingLog } = require('./log.cjs')
 const { accumulate, rate } = require('./stats.cjs')
+const { summarize: summarizeCountries, select: selectCountry } = require('./countries.cjs')
 if (process.env.MAGNETGATE_APP_TEST_DIR)
   app.setPath('userData', process.env.MAGNETGATE_APP_TEST_DIR)
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
@@ -61,7 +62,10 @@ const state = {
   phase: 'idle',
   viaExit: false,
   trafficProtected: false,
-  stats: { conns: 0, up: 0, down: 0, upTotal: 0, downTotal: 0, upBps: 0, downBps: 0, planes: [] }
+  stats: { conns: 0, up: 0, down: 0, upTotal: 0, downTotal: 0, upBps: 0, downBps: 0, planes: [] },
+  countries: [],
+  country: '',
+  countryFallback: false
 }
 function safeSend(channel, value) {
   if (win && !win.isDestroyed() && !quitting) win.webContents.send(channel, value)
@@ -342,15 +346,26 @@ async function applyVpn() {
     if (engine.running) await engine.stop()
     state.vpnHealthy = false
     state.route = null
+    state.countries = []
+    state.countryFallback = false
     lastSig = null
     pushStatus()
     return
   }
-  const cfg = loadConfig(),
-    sig = JSON.stringify({ dp, cfg })
+  const cfg = loadConfig()
+  // Country preference: only the chosen country's endpoints are offered to the engine, while every
+  // endpoint's address still bypasses the TUN (the client's own uplinks must never be captured).
+  const selection = selectCountry(dp, cfg.country)
+  state.countries = selection.available
+  state.country = cfg.country
+  state.countryFallback = selection.fallback
+  const chosen = selection.endpoints
+  const sig = JSON.stringify({ dp: chosen, cfg })
   if (sig === lastSig && engine.running && !state.modePending) return
   if (Date.now() < retryAt) return
-  const engineSig = engineSignature(cfg, dp)
+  if (selection.fallback)
+    pushLog(`Страна ${cfg.country}: живых выходов нет — используется любая`)
+  const engineSig = engineSignature(cfg, chosen)
   const token = intent
   const startedAt = Date.now()
   invalidateHealth()
@@ -394,7 +409,7 @@ async function applyVpn() {
   const conf = buildVpnConfig({
     root: RES,
     cfg,
-    dp,
+    dp: chosen,
     bypass: bypassIps(dp),
     clashPort: CLASH_PORT,
     clashSecret: CLASH_SECRET,
@@ -414,7 +429,12 @@ async function applyVpn() {
     state.activeMode = cfg.vpnMode
     state.route = 'auto'
     state.vpnHealthy = false
-    pushLog('VPN engine ready with ' + dp.length + ' endpoints')
+    pushLog(
+      'VPN engine ready with ' +
+        chosen.length +
+        ' endpoints' +
+        (cfg.country ? ` (country ${cfg.country}${selection.fallback ? ', no live exit — any' : ''})` : '')
+    )
   }
   pushStatus()
   if (started) void pollEgress()

@@ -39,7 +39,7 @@ function text(id, value) {
 function renderStatus() {
   const view = MGView.connectionView(cfg, st)
   all(
-    '[data-mode], #btnAddSite, #domain, #killSwitch, #btnAddExit, #btnSaveServers, #btnSaveAdvanced, #localPort, #singboxPort, #probePort, #bootstrap, #directProcesses'
+    '[data-mode], #btnAddSite, #domain, #killSwitch, #btnAddExit, #btnSaveServers, #btnSaveAdvanced, #localPort, #singboxPort, #probePort, #bootstrap, #directProcesses, #country'
   ).forEach((el) => (el.disabled = !loaded))
   $('mg-app').dataset.state = view.connected ? 'connected' : 'idle'
   text('phase', view.title)
@@ -111,6 +111,7 @@ function renderStatus() {
   const planes = st.stats && Array.isArray(st.stats.planes) ? st.stats.planes : []
   text('diagPlanes', st.vpnOn ? planes.length ? planes.join(', ') : 'ожидание трафика' : '—')
   $('traffic').hidden = !view.connected
+  renderCountries(st, view)
   const stats = st.stats || {}
   text(
     'traffic',
@@ -127,6 +128,39 @@ function bytes(value = 0) {
     index++
   }
   return value.toFixed(index ? 1 : 0) + ' ' + units[index]
+}
+function renderCountries(st, view) {
+  // the list comes from what the nodes advertise (a two-letter code and how many nodes are behind
+  // it) — never an address. Hidden while disconnected or when no exit publishes a country.
+  const countries = Array.isArray(st.countries) ? st.countries : []
+  $('countryRow').hidden = !view.connected || !countries.length
+  if (!countries.length) return
+  const select = $('country')
+  const options = [
+    ['', 'Любая'],
+    ...countries.map((c) => [c.cc, `${c.cc} · ${c.nodes} ${c.nodes === 1 ? 'нода' : 'нод'}`])
+  ]
+  // rebuild only when the set changed, so an open dropdown is not fought while the user chooses
+  const signature = JSON.stringify(options)
+  if (select.dataset.options !== signature) {
+    select.dataset.options = signature
+    select.textContent = ''
+    for (const [value, label] of options) {
+      const option = document.createElement('option')
+      option.value = value
+      option.textContent = label
+      select.append(option)
+    }
+  }
+  select.value = st.country || ''
+  text(
+    'countryMsg',
+    st.country
+      ? st.countryFallback
+        ? `В ${st.country} нет живых нод — используется любая`
+        : `Выход через ${st.country}`
+      : 'Любая страна с живой нодой'
+  )
 }
 function renderRules() {
   all('[data-mode]').forEach((el) =>
@@ -349,6 +383,11 @@ window.addEventListener('DOMContentLoaded', async () => {
           saveChange((current) => ({ ...current, vpnMode: el.dataset.mode })).catch(() => {})
       })
   )
+  $('country').onchange = (event) => {
+    if (!loaded) return
+    const value = event.target.value
+    saveChange((current) => ({ ...current, country: value })).catch(() => {})
+  }
   $('btnEditSites').onclick = () => {
     list = cfg.vpnMode === 'full' ? 'directDomains' : 'tunnelDomains'
     renderRules()

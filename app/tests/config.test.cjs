@@ -204,3 +204,49 @@ test('named processes are validated and routed outside the tunnel', () => {
     false
   )
 })
+
+test('endpoints carry the node country, and a country filter narrows the outbounds', () => {
+  const now = Date.now()
+  // reality endpoints, because those get one outbound per exit (the native `mgt` plane is a single
+  // shared outbound, so it cannot show which node an outbound belongs to)
+  const reality = (host) => ({
+    t: 'reality',
+    host,
+    port: 443,
+    uuid: '11111111-2222-3333-4444-555555555555',
+    pbk: 'pbk-fixture',
+    sni: 'www.microsoft.com',
+    sid: 'aabbccdd',
+    fp: 'chrome'
+  })
+  const snapshot = {
+    v: 4,
+    exits: [
+      { id: 'nl-1', name: 'nl-1', ts: now, node: 'nl-1', country: 'NL', dp: [reality('203.0.113.10')] },
+      { id: 'fi-1', name: 'fi-1', ts: now, node: 'fi-1', country: 'FI', dp: [reality('203.0.113.11')] }
+    ]
+  }
+  const endpoints = freshEndpoints(snapshot, now)
+  assert.deepEqual(
+    [...new Set(endpoints.map((e) => e.country))].sort(),
+    ['FI', 'NL'],
+    'the country must survive into the endpoint list the app builds its config from'
+  )
+  assert.equal(endpoints.find((e) => e.country === 'FI').node, 'fi-1')
+
+  const { select } = require('../countries.cjs')
+  const chosen = select(endpoints, 'FI').endpoints
+  // assert on the servers, not on tags: a lone endpoint's tag is renamed to `proxy`
+  const servers = build({ vpnMode: 'full', country: 'FI' }, chosen)
+    .outbounds.map((o) => o.server)
+    .filter(Boolean)
+  assert.ok(
+    servers.includes('203.0.113.11'),
+    'the chosen country must be reachable: ' + JSON.stringify(servers)
+  )
+  assert.equal(
+    servers.includes('203.0.113.10'),
+    false,
+    'the other country must not be offered to the engine: ' + JSON.stringify(servers)
+  )
+})

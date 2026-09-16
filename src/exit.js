@@ -56,11 +56,26 @@ const NODE_SLOT = (() => {
   }
 })()
 const NODE_NAME = String(process.env.MAGNETGATE_NODE_NAME ?? `slot${NODE_SLOT}`).slice(0, 40)
+// ISO-3166 alpha-2 code the client may show so a user can pick a country without ever seeing an
+// address. Optional: an exit without it simply does not appear in the country list.
+const NODE_COUNTRY = (() => {
+  const value = String(process.env.MAGNETGATE_NODE_COUNTRY ?? '')
+    .trim()
+    .toUpperCase()
+  if (!value) return null
+  if (!/^[A-Z]{2}$/.test(value)) {
+    console.error('[fatal] MAGNETGATE_NODE_COUNTRY must be a two-letter code (e.g. NL, FI)')
+    process.exit(1)
+  }
+  return value
+})()
 const boxKey = slotBoxKey(SECRET, NODE_SLOT)
 const SALT = slotSalt(SECRET, NODE_SLOT)
 console.log(
   ts(),
-  `[node] ${NODE_NAME} on slot ${NODE_SLOT}${NODE_SLOT === 0 ? ' (single-node layout)' : ''}`
+  `[node] ${NODE_NAME} on slot ${NODE_SLOT}${NODE_COUNTRY ? ` in ${NODE_COUNTRY}` : ''}${
+    NODE_SLOT === 0 ? ' (single-node layout)' : ''
+  }`
 )
 
 // ---------- signaling (rendezvous: DHT + optional Nostr, same sealed offer) ----------
@@ -86,6 +101,7 @@ const health = {
   startedAt: ts(),
   slot: NODE_SLOT,
   node: NODE_NAME,
+  country: NODE_COUNTRY,
   nostr: nostr ? 'enabled' : 'disabled',
   publishedAt: null,
   ok: null,
@@ -215,7 +231,7 @@ async function publishOnce() {
   // Each envelope has a random nonce and an authenticated channel/sequence domain.
   // `peers` (compact: slot + ts) lets a client that knows one slot learn the others without config.
   const peerList = peers.map((p) => ({ slot: p.slot, ts: p.ts }))
-  const base = { v: OFFER_SCHEMA, ts: now, slot: NODE_SLOT, node: NODE_NAME, peers: peerList }
+  const base = { v: OFFER_SCHEMA, ts: now, slot: NODE_SLOT, node: NODE_NAME, country: NODE_COUNTRY, peers: peerList }
   const dhtDp = [...extra.filter((d) => d.t !== 'hy2'), mgt]
   const sealed = seal(boxKey, Buffer.from(JSON.stringify({ ...base, dp: dhtDp })), seq)
   if (sealed.length > 950)

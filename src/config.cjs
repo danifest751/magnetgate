@@ -13,7 +13,8 @@ const DEFAULT_CONFIG = {
   transport: 'tcp',
   killSwitch: false,
   directProcesses: [],
-  slots: []
+  slots: [],
+  country: ''
 }
 const domains = (list) => {
   if (!Array.isArray(list) || list.length > 10000) throw new Error('invalid domain list')
@@ -44,6 +45,16 @@ const processes = (list) => {
       })
     )
   ]
+}
+// Which exit country to prefer, as an ISO-3166 alpha-2 code; empty means "any". The desktop shows a
+// list built from what the nodes advertise (see app/countries.cjs) — never an address.
+const country = (value) => {
+  const s = String(value ?? '')
+    .trim()
+    .toUpperCase()
+  if (!s) return ''
+  if (!/^[A-Z]{2}$/.test(s)) throw new Error('invalid country')
+  return s
 }
 // Multi-node: which rendezvous slots to look for or publish on. 0 is the single-node slot; the
 // upper bound must stay equal to MAX_SLOTS in src/common.mjs (tests/consistency.test.mjs checks it).
@@ -104,6 +115,7 @@ function validateConfig(value) {
   cfg.tunnelDomains = domains(cfg.tunnelDomains)
   cfg.directProcesses = processes(cfg.directProcesses)
   cfg.slots = slots(cfg.slots)
+  cfg.country = country(cfg.country)
   cfg.rules = { direct: domains(cfg.rules?.direct || []), proxy: domains(cfg.rules?.proxy || []) }
   return cfg
 }
@@ -127,7 +139,13 @@ function freshEndpoints(snapshot, now = Date.now()) {
             d.port > 0 &&
             d.port <= 65535
         )
-        .map((d) => ({ ...d, exitId: String(e.id), exitName: e.name }))
+        .map((d) => ({
+          ...d,
+          exitId: String(e.id),
+          exitName: e.name,
+          node: e.node,
+          country: e.country
+        }))
     )
 }
 module.exports = { DEFAULT_CONFIG, validateConfig, freshEndpoints }
