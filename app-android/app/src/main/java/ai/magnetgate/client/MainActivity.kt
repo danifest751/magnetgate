@@ -1,9 +1,15 @@
 package ai.magnetgate.client
 
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.net.VpnService
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -49,13 +55,26 @@ class MainActivity : ComponentActivity() {
     val extras = intent
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
-    val bootstrap = extras?.getStringExtra("bootstrap").orEmpty()
-    val relays = extras?.getStringExtra("relays").orEmpty()
+    if (extras?.getStringExtra("dump") == "true") {
+      // diagnostics on demand: whoever is debugging the tunnel wants what the core saw, and the ring is
+      // in this process
+      val status = runCatching { Mobile.status() }.getOrElse { "status failed: ${it.message}" }
+      runCatching { File(filesDir, "status.txt").writeText(status) }
+      Log.i(TAG, "status dumped")
+      finish()
+      return
+    }
     Log.i(TAG, "app started, core ${Mobile.Version}, autotest=$autotest")
     setContent {
       MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
-          CoreScreen(autotest, bootstrap, relays)
+          CoreScreen(
+            autotest = autotest,
+            vpn = intent?.getStringExtra("vpn") == "true",
+            coreless = intent?.getStringExtra("coreless") == "true",
+            bootstrapExtra = intent?.getStringExtra("bootstrap").orEmpty(),
+            relaysExtra = intent?.getStringExtra("relays").orEmpty(),
+          )
         }
       }
     }
@@ -89,35 +108,10 @@ private fun statusLines(statusJson: String): List<String> {
   return lines
 }
 
-private fun pskFromDevice(context: android.content.Context): String {
-  // The test harness drops the PSK here; the settings screen will own this properly later
-  val file = File(context.filesDir, "psk.txt")
-  return if (file.exists()) file.readText().trim() else ""
-}
-
-private fun joinArray(values: List<String>): JSONArray {
-  val array = JSONArray()
-  for (value in values) array.put(value)
-  return array
-}
-
-private fun configJson(psk: String, bootstrap: List<String>, relays: List<String>): String {
-  val config = JSONObject()
-  config.put("psk", psk)
-  // slots are numbers: the core decodes them as []int
-  config.put("slots", JSONArray().put(0))
-  config.put("bootstrap", joinArray(bootstrap))
-  config.put("relays", joinArray(relays))
-  return config.toString()
-}
-
-private fun splitList(value: String): List<String> =
-  value.split(',', ' ').map { it.trim() }.filter { it.isNotEmpty() }
-
 private suspend fun startCore(psk: String, bootstrap: List<String>, relays: List<String>): Result<Int> =
   withContext(Dispatchers.IO) {
     runCatching {
-      val port = Mobile.start(configJson(psk, bootstrap, relays))
+      val port = Mobile.start(CoreConfig.json(psk, bootstrap, relays))
       Log.i(TAG, "core started, socks port $port")
       port.toInt()
     }.onFailure { Log.e(TAG, "core failed to start: ${it.message}") }
@@ -141,18 +135,47 @@ private fun recordAutotest(context: android.content.Context, text: String) {
   runCatching { File(context.filesDir, "autotest.txt").writeText(text) }
 }
 
+/** Hands the tunnel to the service, which owns the core and the engine while it runs. */
+private fun startVpn(context: Context, bootstrap: String, relays: String, coreless: Boolean) {
+  val intent = Intent(context, MgVpnService::class.java)
+    .setAction(MgVpnService.ACTION_START)
+    .putExtra("bootstrap", bootstrap)
+    .putExtra("relays", relays)
+    .putExtra("coreless", coreless)
+  context.startForegroundService(intent)
+}
+
+private fun stopVpn(context: Context) {
+  context.startService(Intent(context, MgVpnService::class.java).setAction(MgVpnService.ACTION_STOP))
+}
+
 @Composable
-private fun CoreScreen(autotest: Boolean, bootstrapExtra: String, relaysExtra: String) {
+private fun CoreScreen(
+  autotest: Boolean,
+  vpn: Boolean,
+  coreless: Boolean,
+  bootstrapExtra: String,
+  relaysExtra: String,
+) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
 
-  var psk by remember { mutableStateOf(pskFromDevice(context)) }
+  var psk by remember { mutableStateOf(CoreConfig.readPsk(context)) }
   var bootstrap by remember { mutableStateOf(bootstrapExtra.ifEmpty { "127.0.0.1:20001" }) }
   var relays by remember { mutableStateOf(relaysExtra) }
   var port by remember { mutableStateOf(0) }
   var status by remember { mutableStateOf("core not started") }
   var egress by remember { mutableStateOf("") }
   var busy by remember { mutableStateOf(false) }
+  var vpnRequested by remember { mutableStateOf(MgVpnService.isRunning()) }
+  val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    if (result.resultCode == Activity.RESULT_OK) {
+      startVpn(context, bootstrap, relays, coreless)
+    } else {
+      vpnRequested = false
+      Log.w(TAG, "the user refused the VPN consent")
+    }
+  }
 
   suspend fun refreshStatus() {
     status = runCatching { Mobile.status() }.getOrElse { "status failed: ${it.message}" }
@@ -160,7 +183,7 @@ private fun CoreScreen(autotest: Boolean, bootstrapExtra: String, relaysExtra: S
 
   suspend fun start() {
     busy = true
-    val result = startCore(psk, splitList(bootstrap), splitList(relays))
+    val result = startCore(psk, CoreConfig.splitList(bootstrap), CoreConfig.splitList(relays))
     result.onSuccess { port = it }
     refreshStatus()
     busy = false
@@ -176,6 +199,18 @@ private fun CoreScreen(autotest: Boolean, bootstrapExtra: String, relaysExtra: S
 
   if (autotest) {
     LaunchedEffect(Unit) {
+      if (coreless) {
+        // diagnostic path: the engine alone, with no second Go runtime in the process
+        val consent = VpnService.prepare(context)
+        if (consent != null) {
+          vpnConsent.launch(consent)
+        } else {
+          startVpn(context, bootstrap, relays, true)
+          vpnRequested = true
+        }
+        recordAutotest(context, "coreless vpn-requested")
+        return@LaunchedEffect
+      }
       if (psk.isBlank()) {
         recordAutotest(context, "fail no-psk")
         return@LaunchedEffect
@@ -198,6 +233,19 @@ private fun CoreScreen(autotest: Boolean, bootstrapExtra: String, relaysExtra: S
       checkEgress()
       refreshStatus()
       recordAutotest(context, "port=$port $egress")
+      if (vpn) {
+        // the consent dialog cannot be answered by a script, so a test run pre-grants the app-op; when
+        // it was not granted, prepare() returns the intent and the tunnel simply does not come up
+        val consent = VpnService.prepare(context)
+        if (consent != null) {
+          vpnConsent.launch(consent)
+          Log.w(TAG, "AUTOTEST vpn=consent-required")
+        } else {
+          startVpn(context, bootstrap, relays, coreless)
+          vpnRequested = true
+          Log.i(TAG, "AUTOTEST vpn=requested")
+        }
+      }
     }
   }
 
@@ -247,6 +295,32 @@ private fun CoreScreen(autotest: Boolean, bootstrapExtra: String, relaysExtra: S
     }
 
     if (egress.isNotEmpty()) Text(egress, style = MaterialTheme.typography.bodyLarge)
+
+    Text("VPN", style = MaterialTheme.typography.titleMedium)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Button(
+        onClick = {
+          // Android requires the user's consent once; VpnService.prepare returns null when it is already
+          // granted, which is also the path a pre-granted app-op takes on an emulator.
+          val consent = VpnService.prepare(context)
+          if (consent != null) {
+            vpnConsent.launch(consent)
+          } else {
+            startVpn(context, bootstrap, relays, coreless)
+          }
+          vpnRequested = true
+        },
+        enabled = !vpnRequested && psk.isNotBlank(),
+      ) { Text("Connect VPN") }
+      Button(
+        onClick = {
+          stopVpn(context)
+          vpnRequested = false
+        },
+        enabled = vpnRequested,
+      ) { Text("Disconnect VPN") }
+    }
+    Text(if (vpnRequested) "tunnel: requested (all apps except this one)" else "tunnel: off")
 
     Text(
       statusLines(status).joinToString("\n"),
