@@ -83,7 +83,7 @@ object SingBoxConfig {
       JSONObject()
         .put("rules", JSONArray())
         .put("final", "core")
-        .put("auto_detect_interface", true),
+        .put("auto_detect_interface", false),
     )
 
     return config.toString(2)

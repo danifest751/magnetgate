@@ -8,7 +8,6 @@
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
   <application
-    android:name=".MagnetGateApp"
     android:label="@string/app_name"
     android:theme="@android:style/Theme.Material.Light.NoActionBar"
     android:allowBackup="false"

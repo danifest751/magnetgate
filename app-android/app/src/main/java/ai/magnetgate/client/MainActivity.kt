@@ -38,7 +38,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import mobile.Mobile
+import ai.magnetgate.core.mgbox.Mgbox
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -56,15 +56,10 @@ class MainActivity : ComponentActivity() {
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
     if (extras?.getStringExtra("dump") == "true") {
-      // diagnostics on demand: whoever is debugging the tunnel wants what the core saw, and the ring is
-      // in this process
-      val status = runCatching { Mobile.status() }.getOrElse { "status failed: ${it.message}" }
-      runCatching { File(filesDir, "status.txt").writeText(status) }
-      Log.i(TAG, "status dumped")
-      finish()
+      dumpStatus()
       return
     }
-    Log.i(TAG, "app started, core ${Mobile.Version}, autotest=$autotest")
+    Log.i(TAG, "app started, core ${Mgbox.coreVersion()}, autotest=$autotest")
     setContent {
       MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -78,6 +73,23 @@ class MainActivity : ComponentActivity() {
         }
       }
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    // the app is usually already running when someone wants its state, so the dump hook has to work here
+    // and not only in onCreate
+    if (intent.getStringExtra("dump") == "true") dumpStatus()
+  }
+
+  /**
+   * Writes what the core currently reports to the app's files directory: the diagnostics screen and the
+   * acceptance scripts both want it, and the core's log ring only exists in this process.
+   */
+  private fun dumpStatus() {
+    val status = runCatching { Mgbox.coreStatus() }.getOrElse { "status failed: ${it.message}" }
+    runCatching { File(filesDir, "status.txt").writeText(status) }
+    Log.i(TAG, "status dumped")
   }
 }
 
@@ -111,7 +123,7 @@ private fun statusLines(statusJson: String): List<String> {
 private suspend fun startCore(psk: String, bootstrap: List<String>, relays: List<String>): Result<Int> =
   withContext(Dispatchers.IO) {
     runCatching {
-      val port = Mobile.start(CoreConfig.json(psk, bootstrap, relays))
+      val port = Mgbox.startCore(CoreConfig.json(psk, bootstrap, relays))
       Log.i(TAG, "core started, socks port $port")
       port.toInt()
     }.onFailure { Log.e(TAG, "core failed to start: ${it.message}") }
@@ -178,7 +190,7 @@ private fun CoreScreen(
   }
 
   suspend fun refreshStatus() {
-    status = runCatching { Mobile.status() }.getOrElse { "status failed: ${it.message}" }
+    status = runCatching { Mgbox.coreStatus() }.getOrElse { "status failed: ${it.message}" }
   }
 
   suspend fun start() {
@@ -254,7 +266,7 @@ private fun CoreScreen(
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     Text("MagnetGate core", style = MaterialTheme.typography.titleLarge)
-    Text("core ${Mobile.Version}", style = MaterialTheme.typography.bodySmall)
+    Text("core ${Mgbox.coreVersion()}", style = MaterialTheme.typography.bodySmall)
 
     OutlinedTextField(
       value = psk,
@@ -284,7 +296,7 @@ private fun CoreScreen(
       Button(
         onClick = {
           scope.launch {
-            withContext(Dispatchers.IO) { Mobile.stop() }
+            withContext(Dispatchers.IO) { Mgbox.stopCore() }
             port = 0
             egress = ""
             refreshStatus()
