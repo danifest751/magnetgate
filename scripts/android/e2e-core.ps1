@@ -89,10 +89,13 @@ function Log-Text([string]$name) {
   return ''
 }
 
+# Wait-For polls a probe until it returns anything that is not $null. Probes signal "not yet" with
+# $null: a value is tested for null and not for truthiness, because 0 is a perfectly good answer here
+# (slot 0) and PowerShell would treat it as false.
 function Wait-For([string]$label, [scriptblock]$probe, [int]$Seconds = 60) {
   $until = (Get-Date).AddSeconds($Seconds)
   while ((Get-Date) -lt $until) {
-    try { $value = & $probe; if ($value) { return $value } } catch {}
+    try { $value = & $probe; if ($null -ne $value) { return $value } } catch {}
     Start-Sleep -Milliseconds 400
   }
   Say "timeout waiting for $label"
@@ -121,8 +124,9 @@ require('http').createServer((q, s) => {
   Start-Sleep -Seconds 2
 
   # 3. two exits, one PSK, different slots; each watches the other's slot
+  $exitBySlot = @{}
   foreach ($node in $Nodes) {
-    Start-Node @((Join-Path $root 'src\exit.js')) @{
+    $exitBySlot[$node.slot] = Start-Node @((Join-Path $root 'src\exit.js')) @{
       MAGNETGATE_PSK           = $Psk
       MAGNETGATE_PORT          = [string]$node.port
       MAGNETGATE_PUBLIC_HOST   = '127.0.0.1'
@@ -136,7 +140,7 @@ require('http').createServer((q, s) => {
       MAGNETGATE_SEQ_FILE      = Join-Path $tmp "seq-$($node.slot)"
       MAGNETGATE_HEALTH_FILE   = Join-Path $tmp "health-$($node.slot).json"
       DHT_BOOTSTRAP            = $bootstrap
-    } $node.name | Out-Null
+    } $node.name
   }
 
   # the exits only need their environment at spawn time: do not leak it into the harness below
@@ -188,6 +192,72 @@ require('http').createServer((q, s) => {
   Check ($slot1.Text -match 'exit slot 1 at ') 'a node on slot 1 is usable, so its key was derived per slot'
   Check ($slot1.Text -match 'target-ok') 'a request through the slot-1 node reached the local target'
   Check ($slot1.Code -eq 0) "the slot-1 run exited cleanly (code $($slot1.Code))"
+
+  # 6. failover: keep a client running, kill the node that carried the first stream, and require the
+  # core to notice the dead pair, pause it in diagnostics and keep serving through the other node
+  $snapshot = Join-Path $tmp 'snapshot.json'
+  $runOut = Join-Path $tmp 'failover.out.log'
+  $runErr = Join-Path $tmp 'failover.err.log'
+  $oldPsk = $env:MG_PSK
+  $env:MG_PSK = $Psk
+  try {
+    $long = Start-Process -FilePath $binary -WindowStyle Hidden -PassThru `
+      -ArgumentList @('-slots', '0', '-bootstrap', $bootstrap, '-discover', '45s',
+        '-check', "http://127.0.0.1:$TargetPort/", '-hold', '40s', '-every', '2s', '-snapshot', $snapshot) `
+      -RedirectStandardOutput $runOut -RedirectStandardError $runErr
+  } finally {
+    $env:MG_PSK = $oldPsk
+  }
+
+  function Run-Log {
+    $text = ''
+    foreach ($path in @($runOut, $runErr)) {
+      if (Test-Path -LiteralPath $path) { $text += (Get-Content -LiteralPath $path -Raw) }
+    }
+    return $text
+  }
+
+  try {
+    $served = Wait-For 'the first stream' {
+      $match = [regex]::Match((Run-Log), '\[dp\] stream to [^\r\n]* slot (\d)')
+      if ($match.Success) { return [int]$match.Groups[1].Value }
+      return $null
+    } 60
+    Check ($null -ne $served) "the core carried a stream through slot $served"
+
+    if ($null -ne $served) {
+      $other = @($Nodes | Where-Object { $_.slot -ne $served } | ForEach-Object { $_.slot })[0]
+      Write-Host "[e2e]   killing the node on slot $served"
+      Stop-Process -Id $exitBySlot[$served].Id -Force -ErrorAction SilentlyContinue
+
+      $noticed = Wait-For "the core to notice slot $served died" {
+        if ((Run-Log) -match "transport failed: mgt slot $served") { return $true }
+        return $null
+      } 60
+      Check ($null -ne $noticed) "the dead node was detected as a plane failure, not as a node failure"
+
+      $paused = Wait-For "slot $served to appear as paused in diagnostics" {
+        if (-not (Test-Path -LiteralPath $snapshot)) { return $null }
+        try { $parsed = Get-Content -LiteralPath $snapshot -Raw | ConvertFrom-Json } catch { return $null }
+        $row = $parsed.exits | Where-Object { $_.slot -eq $served }
+        if ($row -and @($row.cooling | Where-Object { $_.t -eq 'mgt' }).Count -ge 1) { return $true }
+        return $null
+      } 30
+      Check ($null -ne $paused) "the paused plane is published for diagnostics (node $served, plane mgt)"
+
+      $moved = Wait-For "streams to keep working through slot $other" {
+        $text = Run-Log
+        $index = $text.IndexOf("transport failed: mgt slot $served")
+        if ($index -lt 0) { return $null }
+        $after = $text.Substring($index)
+        if ($after -match 'check http://[^\r\n]*-> 200' -and $after -match "slot $other") { return $true }
+        return $null
+      } 60
+      Check ($null -ne $moved) "requests kept being served, through slot $other, without a restart"
+    }
+  } finally {
+    if ($long -and -not $long.HasExited) { Stop-Process -Id $long.Id -Force -ErrorAction SilentlyContinue }
+  }
 } catch {
   Say "error: $($_.Exception.Message)"
   $failures += $_.Exception.Message
