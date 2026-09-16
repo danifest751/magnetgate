@@ -145,6 +145,10 @@ function addSlotEntry(slot) {
     offer: null
   }
   exits.push(entry)
+  if (nostrFactory) {
+    entry.nostr = nostrFactory(entry.psk, entry.boxKey, (o) => handleOffer(entry, o), slot)
+    console.log(ts(), `[nostr] subscribed for slot ${slot} (discovered)`)
+  }
   return entry
 }
 
@@ -263,11 +267,17 @@ dht.on('ready', () => {
   scheduleLookup()
 })
 
-// second rendezvous channel: Nostr (push, instant), independent of the DHT
+// second rendezvous channel: Nostr (push, instant), independent of the DHT. The factory is kept so a
+// slot discovered later through `peers` also gets its own subscription — without it a discovered node
+// would only ever be seen over the DHT, and the hysteria2 endpoint travels exclusively on Nostr
+// (the pinned cert does not fit the ~1000 B BEP44 record).
+let nostrFactory = null
 if (process.env.MAGNETGATE_NOSTR !== 'off') {
   import('./nostr.mjs')
     .then(({ nostrSubscriber }) => {
-      for (const e of exits) e.nostr = nostrSubscriber(e.psk, e.boxKey, (o) => handleOffer(e, o))
+      nostrFactory = nostrSubscriber
+      for (const e of exits)
+        e.nostr = nostrSubscriber(e.psk, e.boxKey, (o) => handleOffer(e, o), e.slot ?? 0)
       console.log(ts(), `[nostr] subscribed for ${exits.length} exit(s)`)
     })
     .catch((err) => console.log(ts(), `[nostr] disabled: ${err.message}`))

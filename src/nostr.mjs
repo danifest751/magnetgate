@@ -31,12 +31,19 @@ export function nostrKeys(psk) {
   return { sk, pkHex }
 }
 
-const dTagOf = (psk) =>
+// The `d` tag is the replaceable-event key a relay keeps: it MUST differ per slot, otherwise two
+// nodes publishing under one PSK overwrite each other and only the last writer survives. Slot 0
+// keeps the original derivation so existing deployments and older clients are unaffected.
+const dTagOf = (psk, slot = 0) =>
   crypto
     .createHash('sha256')
-    .update('mgt-nostr-d:' + psk)
+    .update(Number(slot) === 0 ? 'mgt-nostr-d:' + psk : `mgt-nostr-d:${Number(slot)}:${psk}`)
     .digest('hex')
     .slice(0, 32)
+
+// exported so a test can assert the per-slot separation (two nodes on one PSK must not share a
+// replaceable-event key) and that slot 0 still derives the legacy tag
+export const nostrTagOf = (psk, slot = 0) => dTagOf(psk, slot)
 
 export function buildEvent(sk, pkHex, tags, content) {
   const created_at = Math.floor(Date.now() / 1000)
@@ -109,9 +116,9 @@ function relayConn(url, onData, subReq) {
 }
 
 // exit side: publish the sealed offer to the whole relay pool
-export function nostrPublisher(psk, relays = NOSTR_RELAYS) {
+export function nostrPublisher(psk, slot = 0, relays = NOSTR_RELAYS) {
   const { sk, pkHex } = nostrKeys(psk)
-  const d = dTagOf(psk)
+  const d = dTagOf(psk, slot)
   const conns = relays.map((url) => relayConn(url))
   return {
     publish(sealedBuf, seq) {
@@ -135,9 +142,9 @@ export function nostrPublisher(psk, relays = NOSTR_RELAYS) {
 }
 
 // client side: subscribe across the pool; decrypt each event and hand the offer object to onOffer
-export function nostrSubscriber(psk, boxKey, onOffer) {
+export function nostrSubscriber(psk, boxKey, onOffer, slot = 0) {
   const { pkHex } = nostrKeys(psk)
-  const d = dTagOf(psk)
+  const d = dTagOf(psk, slot)
   const subId = 'mgt'
   const req = JSON.stringify([
     'REQ',

@@ -91,7 +91,7 @@ test(
         else complete()
       })
     )
-    const publisher = nostrPublisher('test fixture PSK', [`ws://127.0.0.1:${relay.address().port}`])
+    const publisher = nostrPublisher('test fixture PSK', 0, [`ws://127.0.0.1:${relay.address().port}`])
     t.after(() => {
       publisher.close()
       for (const c of relay.clients) c.terminate()

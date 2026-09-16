@@ -81,3 +81,19 @@ test('newPeerSlots: only in-range, not-yet-known slots are added, once', async (
   assert.deepEqual(newPeerSlots([], undefined), [], 'no peers list is not an error')
   assert.deepEqual(newPeerSlots([], [{ slot: 15 }], 16), [15], 'the top slot is still valid')
 })
+
+test('nostr: two slots never share a replaceable-event key, and slot 0 keeps the old tag', async () => {
+  const crypto = await import('node:crypto')
+  const { nostrTagOf } = await import('../src/nostr.mjs')
+  const legacy = crypto
+    .createHash('sha256')
+    .update('mgt-nostr-d:' + PSK)
+    .digest('hex')
+    .slice(0, 32)
+  assert.equal(nostrTagOf(PSK, 0), legacy, 'slot 0 must keep the legacy d tag (old clients)')
+  assert.equal(nostrTagOf(PSK), legacy, 'no slot means slot 0')
+  const tags = new Set()
+  for (let slot = 0; slot < 4; slot++) tags.add(nostrTagOf(PSK, slot))
+  assert.equal(tags.size, 4, 'every slot needs its own d tag or the nodes overwrite each other')
+  assert.notEqual(nostrTagOf(PSK, 1), nostrTagOf('another-psk', 1), 'different PSKs stay separate')
+})

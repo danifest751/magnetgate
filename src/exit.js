@@ -68,7 +68,7 @@ let nostr = null
 if (process.env.MAGNETGATE_NOSTR !== 'off') {
   try {
     const { nostrPublisher } = await import('./nostr.mjs')
-    nostr = nostrPublisher(SECRET)
+    nostr = nostrPublisher(SECRET, NODE_SLOT)
     console.log(ts(), `[nostr] publishing offers to ${nostr.relays} relay(s)`)
   } catch (e) {
     console.log(ts(), `[nostr] disabled: ${e.message}`)
