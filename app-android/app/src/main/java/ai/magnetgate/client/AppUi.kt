@@ -118,15 +118,6 @@ fun AppRoot(
   val wantedBootstrap = bootstrapExtra.ifBlank { bootstrap }
   val wantedRelays = relaysExtra.ifBlank { relays }
 
-  LaunchedEffect(Unit) {
-    while (true) {
-      status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }
-        .getOrElse { CoreStatus(error = it.message.orEmpty()) }
-      vpnUp = MgVpnService.isRunning()
-      delay(REFRESH_MS)
-    }
-  }
-
   val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     if (result.resultCode == Activity.RESULT_OK) {
       startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
@@ -162,6 +153,25 @@ fun AppRoot(
     if (consent != null) vpnConsent.launch(consent) else startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
   }
 
+  LaunchedEffect(Unit) {
+    var wasUp = vpnUp
+    while (true) {
+      status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }
+        .getOrElse { CoreStatus(error = it.message.orEmpty()) }
+      vpnUp = MgVpnService.isRunning()
+      // Check the egress once the tunnel is actually up, not before it. Without the engine the core
+      // can only use its own native plane, and on a mobile network that port is often blocked - so a
+      // check run first reports a failure for a tunnel that then works perfectly through reality.
+      if (vpnUp && !wasUp) {
+        egress = ""
+        if (status.socksPort != 0) checkEgress(status.socksPort)
+      }
+      if (!vpnUp && wasUp) egress = ""
+      wasUp = vpnUp
+      delay(REFRESH_MS)
+    }
+  }
+
   if (autotest) {
     LaunchedEffect(Unit) {
       if (coreless) {
@@ -188,8 +198,9 @@ fun AppRoot(
         delay(1500)
         status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(status)
       }
-      checkEgress(port)
-      recordAutotest(context, "port=$port $egress")
+      // When a tunnel is asked for, bring it up BEFORE measuring the egress. Without the engine the
+      // core can only use its own native plane, and on a mobile network that port is often blocked -
+      // measuring first then reports a failure for a tunnel that works perfectly through reality.
       if (vpn) {
         // the consent dialog cannot be answered by a script, so a test run pre-grants the app-op; when
         // it was not granted, prepare() returns the intent and the tunnel simply does not come up
@@ -200,8 +211,22 @@ fun AppRoot(
         } else {
           startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
           Log.i(TAG, "AUTOTEST vpn=requested")
+          var waited = 0
+          while (waited < 60 && !MgVpnService.isRunning()) {
+            waited++
+            delay(1000)
+          }
+          Log.i(TAG, "AUTOTEST vpn=${if (MgVpnService.isRunning()) "up after ${waited}s" else "not up"}")
+          status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(status)
         }
       }
+      // Never reuse the port this call was handed: the core replaces itself on a second Start, and
+      // there are two callers - this screen and MgVpnService. Bringing the tunnel up above does exactly
+      // that, so the port from before is dead. The status document is the live truth.
+      val live = status.socksPort.takeIf { it != 0 } ?: port
+      if (live != port) Log.i(TAG, "the core moved from port $port to $live")
+      checkEgress(live)
+      recordAutotest(context, "port=$live $egress")
     }
   }
 

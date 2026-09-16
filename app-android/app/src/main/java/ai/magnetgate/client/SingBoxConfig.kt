@@ -77,7 +77,11 @@ object SingBoxConfig {
       .put("type", "tun")
       .put("tag", "tun")
       .put("address", JSONArray().put(TUN_ADDRESS_V4))
-      .put("mtu", 1500)
+      // 1400, the same as the desktop (app/vpn-config.cjs). A full 1500 leaves no room for what the
+      // data plane wraps around it - reality adds TLS and TCP headers - so the outer packet exceeds the
+      // path MTU and is dropped. Small packets still pass, which is why a connection opens and then
+      // delivers nothing: on a phone this looked like "the tunnel is up and the internet is dead".
+      .put("mtu", 1400)
       .put("auto_route", true)
       .put("strict_route", false)
       // a userspace stack: no kernel module, no root, and it is what libbox is being used for
