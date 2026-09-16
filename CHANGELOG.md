@@ -56,6 +56,25 @@ exits stay compatible.
 
 **Testing**: 50 core tests and 47 desktop tests pass; `npm audit` reports 0 in both trees.
 
+### 0.11.2 — log analysis follow-up (2026-09-16)
+
+Five days of logs showed that the tunnel was fine; what was pushed through it was not, and the log
+could not say so.
+
+- **Named processes can bypass the tunnel** (`directProcesses`, validated and emitted as a
+  `process_name` rule, with a field in Settings). The exit had relayed BitTorrent: 2 144 142 sing-box
+  ERRORS in 5 days, ~881 619 failed peer dials per day, destination ports 51413/6881 — the classic way
+  to get a VPS suspended. The desktop config now excludes `qbittorrent.exe`.
+- **Repetitive connection errors are collapsed** into a summary every 5 minutes or 1000 lines
+  (`MAGNETGATE_PERSIST_NOISE=1` keeps them all). The desktop log held only ~3 hours because ~20k such
+  lines per 1.5 h rotated it away; a three-day history did not exist.
+- The rendezvous line now lists the planes the offer advertises instead of always claiming `via mgt`
+  (the child runs with `MAGNETGATE_NATIVE_ONLY=1`, so its own preference is not the tunnel's).
+- Server side (operator record in `manual-release.txt`): journald capped at 200 MB (was unbounded,
+  1.3 GB), the release-directory indirection removed so the exit and rotation run from the same
+  checkout as the DHT node and the scripts, `magnetgate-health.timer` enabled, 0.11.1 deployed.
+  The sing-box data plane was not restarted.
+
 ### Desktop 0.3.2 — remove hidden Full bypasses
 
 - Stop loading the bundled inside-russia domain list as direct exceptions in Full. It contains
