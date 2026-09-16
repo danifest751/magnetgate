@@ -24,6 +24,7 @@ import (
 	"magnetgate/core/dht"
 	"magnetgate/core/nostr"
 	"magnetgate/core/pool"
+	"magnetgate/core/proto"
 	"magnetgate/core/socks"
 )
 
@@ -66,18 +67,20 @@ var (
 )
 
 type instance struct {
-	cfg      Config
-	started  time.Time
-	native   *pool.Native
-	planes   *pool.Pool
-	server   *socks.Server
-	rendez   *agent.Agent
-	channel  *nostr.Channel
-	dhtNode  *dht.Client
-	cancel   context.CancelFunc
-	logs     *logRing
-	started_ bool
-	startErr error
+	cfg     Config
+	started time.Time
+	native  *pool.Native
+	planes  *pool.Pool
+	// enginePlanes carries the planes the engine speaks for us (reality, hysteria2) through its own
+	// loopback SOCKS listeners; the app fills the mapping in once the engine is configured
+	enginePlanes *pool.SocksPlanes
+	server       *socks.Server
+	rendez       *agent.Agent
+	channel      *nostr.Channel
+	dhtNode      *dht.Client
+	cancel       context.CancelFunc
+	logs         *logRing
+	startErr     error
 }
 
 // Start brings the core up and returns the loopback SOCKS port the engine should dial through. Starting
@@ -118,10 +121,17 @@ func (inst *instance) bringUp(logf func(string, ...any)) error {
 		return err
 	}
 	inst.native = native
+	inst.enginePlanes = pool.NewSocksPlanes()
 	inst.planes = pool.New(pool.Config{
 		Preference: inst.cfg.Preference,
-		Connectors: map[string]pool.Connector{"mgt": native},
-		Logf:       logf,
+		Connectors: map[string]pool.Connector{
+			// the native mux is ours; the rest the engine speaks for us, one loopback listener per node
+			// and plane, and the app fills in which port belongs to which
+			"mgt":     native,
+			"reality": inst.enginePlanes,
+			"hy2":     inst.enginePlanes,
+		},
+		Logf: logf,
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,6 +221,42 @@ func (inst *instance) teardown() {
 	if inst.native != nil {
 		inst.native.Close()
 		inst.native = nil
+	}
+}
+
+// SetPlaneSocksPort tells the core where the engine exposes one node's plane.
+//
+// The engine speaks transports the core does not implement (reality, hysteria2) and can serve each node's
+// plane on a loopback SOCKS listener; the core then uses that plane like any other. The app calls this once
+// the engine's configuration is in place.
+func SetPlaneSocksPort(slot int, plane string, port int) error {
+	mu.Lock()
+	inst := current
+	mu.Unlock()
+	if inst == nil || inst.enginePlanes == nil {
+		return errors.New("the core is not running")
+	}
+	if err := proto.ValidSlot(slot); err != nil {
+		return err
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid port %d", port)
+	}
+	inst.enginePlanes.Set(slot, plane, port)
+	inst.logs.addf("slot %d: plane %s through the engine on 127.0.0.1:%d", slot, plane, port)
+	return nil
+}
+
+// ForgetPlaneSocksPorts drops every engine plane mapping, for when the engine is rebuilt.
+func ForgetPlaneSocksPorts() {
+	mu.Lock()
+	inst := current
+	mu.Unlock()
+	if inst == nil || inst.enginePlanes == nil {
+		return
+	}
+	for _, node := range inst.planes.Nodes() {
+		inst.enginePlanes.Forget(node.Slot)
 	}
 }
 

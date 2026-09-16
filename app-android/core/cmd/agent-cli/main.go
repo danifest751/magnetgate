@@ -37,6 +37,7 @@ import (
 	"magnetgate/core/pool"
 	"magnetgate/core/proto"
 	"magnetgate/core/socks"
+	"magnetgate/core/socks5client"
 )
 
 // The data plane itself lives in core/pool: this tool only wires it, because the same wiring is what
@@ -364,7 +365,7 @@ func (l *stringList) Set(value string) error {
 func check(ctx context.Context, proxyAddr, url string) error {
 	client := &http.Client{
 		Timeout:   0, // the context carries the budget
-		Transport: &http.Transport{DialContext: socksDial(proxyAddr), DisableKeepAlives: true},
+		Transport: &http.Transport{DialContext: socks5client.DialContext(proxyAddr), DisableKeepAlives: true},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -384,110 +385,6 @@ func check(ctx context.Context, proxyAddr, url string) error {
 		return fmt.Errorf("unexpected status %s", resp.Status)
 	}
 	return nil
-}
-
-// socksDial is a minimal RFC 1928 client: enough to prove the listener works from an independent
-// implementation. The host is sent unresolved, so the exit does the DNS lookup.
-func socksDial(proxyAddr string) func(context.Context, string, string) (net.Conn, error) {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if network != "tcp" && network != "tcp4" && network != "tcp6" {
-			return nil, fmt.Errorf("unsupported network %q", network)
-		}
-		host, portText, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, err
-		}
-		port, err := strconv.Atoi(portText)
-		if err != nil || port < 1 || port > 65535 {
-			return nil, fmt.Errorf("invalid port %q", portText)
-		}
-		var dialer net.Dialer
-		conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
-		if err != nil {
-			return nil, err
-		}
-		if deadline, ok := ctx.Deadline(); ok {
-			conn.SetDeadline(deadline)
-		}
-		if err := socksConnect(conn, host, port); err != nil {
-			conn.Close()
-			return nil, err
-		}
-		conn.SetDeadline(time.Time{})
-		return conn, nil
-	}
-}
-
-func socksConnect(conn net.Conn, host string, port int) error {
-	if _, err := conn.Write([]byte{5, 1, 0}); err != nil {
-		return err
-	}
-	greeting := make([]byte, 2)
-	if _, err := io.ReadFull(conn, greeting); err != nil {
-		return err
-	}
-	if greeting[0] != 5 || greeting[1] != 0 {
-		return fmt.Errorf("socks: greeting rejected (%v)", greeting)
-	}
-
-	request := []byte{5, 1, 0}
-	if ip := net.ParseIP(host); ip != nil && ip.To4() != nil {
-		request = append(request, 1)
-		request = append(request, ip.To4()...)
-	} else if ip != nil {
-		request = append(request, 4)
-		request = append(request, ip.To16()...)
-	} else {
-		if len(host) == 0 || len(host) > 255 {
-			return fmt.Errorf("socks: invalid host %q", host)
-		}
-		request = append(request, 3, byte(len(host)))
-		request = append(request, host...)
-	}
-	request = append(request, byte(port>>8), byte(port))
-	if _, err := conn.Write(request); err != nil {
-		return err
-	}
-	return readReply(conn)
-}
-
-// readReply parses the variable-length reply instead of assuming a 10-byte one.
-func readReply(conn net.Conn) error {
-	head := make([]byte, 4)
-	if _, err := io.ReadFull(conn, head); err != nil {
-		return err
-	}
-	if head[0] != 5 {
-		return fmt.Errorf("socks: reply version %d", head[0])
-	}
-	if head[1] != 0 {
-		return fmt.Errorf("socks: request failed with code %d", head[1])
-	}
-	switch head[3] {
-	case 1:
-		_, err := io.ReadFull(conn, make([]byte, 4+2))
-		return err
-	case 4:
-		_, err := io.ReadFull(conn, make([]byte, 16+2))
-		return err
-	case 3:
-		length, err := readByte(conn)
-		if err != nil {
-			return err
-		}
-		_, err = io.ReadFull(conn, make([]byte, int(length)+2))
-		return err
-	default:
-		return fmt.Errorf("socks: reply address type %d", head[3])
-	}
-}
-
-func readByte(conn net.Conn) (byte, error) {
-	buf := make([]byte, 1)
-	if _, err := io.ReadFull(conn, buf); err != nil {
-		return 0, err
-	}
-	return buf[0], nil
 }
 
 func readPSK(file string) (string, error) {

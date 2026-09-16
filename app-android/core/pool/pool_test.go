@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -314,5 +317,103 @@ func TestSnapshotCarriesPlanesAndCooling(t *testing.T) {
 	}
 	if !strings.Contains(string(encodedEmpty), `"exits":[]`) {
 		t.Fatalf("empty snapshot json: %s", encodedEmpty)
+	}
+}
+
+// startEchoTarget is a TCP target that echoes what it receives.
+func startEchoTarget(t *testing.T) (string, int) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				io.Copy(conn, conn)
+			}()
+		}
+	}()
+	t.Cleanup(func() { listener.Close() })
+	host, portText, _ := net.SplitHostPort(listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	return host, port
+}
+
+// A plane the engine speaks (reality, hysteria2) reaches the network through a loopback SOCKS listener the
+// engine exposes for that node; the core has to use it exactly like any other plane.
+func TestPlanesThroughTheEngine(t *testing.T) {
+	echoHost, echoPort := startEchoTarget(t)
+	proxy, err := socks.Listen(0, func(ctx context.Context, host string, port int) (socks.Conn, error) {
+		conn, err := net.Dial("tcp", net.JoinHostPort(echoHost, strconv.Itoa(echoPort)))
+		if err != nil {
+			return nil, err
+		}
+		return socks.WrapConn(conn), nil
+	})
+	if err != nil {
+		t.Fatalf("listen proxy: %v", err)
+	}
+	defer proxy.Close()
+	_, proxyPortText, _ := net.SplitHostPort(proxy.Addr().String())
+	proxyPort, _ := strconv.Atoi(proxyPortText)
+
+	planes := NewSocksPlanes()
+	planes.Set(0, "reality", proxyPort)
+	native := &fakePlane{plane: "mgt"}
+	p := New(Config{
+		Preference: []string{"reality", "mgt"},
+		Connectors: map[string]Connector{"reality": planes, "mgt": native},
+	})
+	p.Update(node(t, 0, "reality", "mgt"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := p.Dial(ctx, echoHost, echoPort)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	payload := []byte("via the engine")
+	if _, err := conn.Write(payload); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got := make([]byte, len(payload))
+	// the relay only promises Read/Write/Close/CloseWrite; a deadline is a bonus of the concrete stream
+	if deadlines, ok := conn.(interface{ SetReadDeadline(time.Time) error }); ok {
+		deadlines.SetReadDeadline(time.Now().Add(5 * time.Second))
+	}
+	if _, err := io.ReadFull(conn, got); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != string(payload) {
+		t.Fatalf("echo mismatch: %q", got)
+	}
+	if native.count() != 0 {
+		t.Fatalf("the native plane must not have been used, got %d attempt(s)", native.count())
+	}
+}
+
+// While the engine has not told us a port for a node's plane, that plane is simply not available and the
+// next one is used.
+func TestEnginePlaneWithoutAPortFallsThrough(t *testing.T) {
+	planes := NewSocksPlanes()
+	native := &fakePlane{plane: "mgt"}
+	p := New(Config{
+		Preference: []string{"reality", "mgt"},
+		Connectors: map[string]Connector{"reality": planes, "mgt": native},
+	})
+	p.Update(node(t, 0, "reality", "mgt"))
+
+	if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if native.count() != 1 {
+		t.Fatalf("expected the fallback to carry the stream, got %d attempt(s)", native.count())
 	}
 }
