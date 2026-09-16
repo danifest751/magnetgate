@@ -94,8 +94,19 @@ try {
   Invoke-Native (Join-Path $project 'gradlew.bat') $gradleArgs $project | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'gradle assembleDebug failed' }
 
-  $apk = Join-Path $project 'app\build\outputs\apk\debug\app-debug.apk'
-  if (-not (Test-Path -LiteralPath $apk)) { throw "APK not found at $apk" }
+  # The build is split per ABI (see app/build.gradle.kts), so install the package that matches this
+  # device instead of a fat one: ~82 MB of native code per ABI is not worth pushing twice.
+  $abi = ((Invoke-Native $adb @('-s', $Serial, 'shell', 'getprop', 'ro.product.cpu.abi')) -join '').Trim()
+  if (-not $abi) { throw "could not read the ABI of $Serial" }
+  $apkDir = Join-Path $project 'app\build\outputs\apk\debug'
+  $apk = Join-Path $apkDir "app-$abi-debug.apk"
+  if (-not (Test-Path -LiteralPath $apk)) {
+    # a single-ABI or universal build still has to work
+    $fallback = Join-Path $apkDir 'app-debug.apk'
+    if (Test-Path -LiteralPath $fallback) { $apk = $fallback }
+    else { throw "no APK for ABI '$abi' in $apkDir" }
+  }
+  Say "installing $(Split-Path -Leaf $apk) ($([math]::Round((Get-Item $apk).Length / 1MB)) MB, abi $abi)"
   Invoke-Native $adb @('-s', $Serial, 'install', '-r', $apk) | Out-Null
 
   # the PSK goes into the app's private directory, never on a command line

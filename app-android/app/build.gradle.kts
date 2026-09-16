@@ -29,6 +29,19 @@ android {
     jvmTarget = "17"
   }
 
+  // One libmgcore.so is ~82 MB, so a package carrying every ABI came to ~188 MB and most of it was
+  // dead weight on any given device. arm64-v8a is every real phone, x86_64 is the emulator; nothing
+  // else is a target. No universal APK: it would just be the old fat one under a new name, and the
+  // scripts pick the package matching the device's ABI.
+  splits {
+    abi {
+      isEnable = true
+      reset()
+      include("arm64-v8a", "x86_64")
+      isUniversalApk = false
+    }
+  }
+
   packaging {
     resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
   }
