@@ -154,6 +154,11 @@ const PEER_SLOTS = (process.env.MAGNETGATE_PEER_SLOTS ?? '')
   .map(Number)
   .filter((n) => Number.isInteger(n) && n >= 0 && n < 16 && n !== NODE_SLOT)
 const EXPECT_PEERS = Number(process.env.MAGNETGATE_EXPECT_PEERS ?? 0)
+// A single missed scan is normal: a DHT lookup is best-effort and occasionally comes back empty for a
+// node that is perfectly alive (observed on 2026-09-16). Only a sustained shortfall is worth an alert,
+// otherwise the log fills with false "a node may be down" lines.
+const PEER_ALERT_AFTER = Number(process.env.MAGNETGATE_PEER_ALERT_AFTER ?? 3)
+let peerMisses = 0
 const PEER_FRESH_MS = 12 * 60 * 1000 // must match the client's freshness window
 const PEER_TIMEOUT_MS = 5000
 let scanning = false
@@ -243,11 +248,16 @@ async function publishOnce() {
     nostr.publish(sealedNostr, nseq)
   }
   writeHealth({ peers: peers.length, peersSeen: peerList })
-  if (EXPECT_PEERS > 0 && peers.length < EXPECT_PEERS)
-    console.log(
-      ts(),
-      `[alert] only ${peers.length}/${EXPECT_PEERS} peer slot(s) answered - a node may be down`
-    )
+  if (EXPECT_PEERS > 0 && peers.length < EXPECT_PEERS) {
+    peerMisses++
+    if (peerMisses >= PEER_ALERT_AFTER)
+      console.log(
+        ts(),
+        `[alert] only ${peers.length}/${EXPECT_PEERS} peer slot(s) answered ${peerMisses} times in a row - a node may be down`
+      )
+  } else {
+    peerMisses = 0
+  }
   if (!dhtReady) return
   dht.put(
     {
