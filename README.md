@@ -232,7 +232,11 @@ Implemented and tested in production:
 - **Hardening** — exit/DHT/sing-box run unprivileged under systemd sandboxes; the PSK never appears
   on the process command line; the exit blocks egress to loopback/link-local/RFC1918 (SSRF guard)
   and caps concurrent sessions/streams; the SOCKS listener is loopback-only; downloaded binaries are
-  pinned by SHA-256; `npm ci` for reproducible installs.
+  pinned by SHA-256; `npm ci` for reproducible installs. Every downloaded or bundled third-party
+artifact (sing-box, wintun, tun2proxy, the routing rule-sets) is pinned in `scripts/pins.json`,
+which the fetch scripts read — so a changed upstream file stops the fetch instead of silently
+retuning routes. `scripts/check-hygiene.mjs` (wired into a pre-commit hook) refuses to commit
+private keys, tokens, field reports or real host addresses.
 
 Known limitations: obfuscation of the native channel is at PoC level, and the DHT platform sees put/get
 participants' IPs like any BitTorrent node. The rendezvous target is derived from the PSK, so anyone

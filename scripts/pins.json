@@ -1,0 +1,63 @@
+{
+  "_comment": [
+    "Single source of truth for every third-party artifact the project downloads or bundles.",
+    "scripts/get-singbox.ps1, scripts/vpn-windows.ps1 and scripts/vpn-singbox-windows.ps1 read this",
+    "file, so versions and checksums cannot drift between them. Never edit a checksum to make a",
+    "download pass: a changed artifact is either an upstream release or tampering, and both need a",
+    "human decision. Bump the version AND the checksum together in one commit."
+  ],
+  "singBox": {
+    "version": "1.14.0",
+    "url": "https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-windows-amd64.zip",
+    "zipSha256": "3ffb56267da14e287be48bd10cf7e6505260125bad940b75101fbb4d5d58e5d6",
+    "exeSha256": "aad0ede010eafa7b277e520464f3a66fde820103d737eff739f40f3cc9451dcc",
+    "exePathInZip": "sing-box-{version}-windows-amd64/sing-box.exe",
+    "verifiedOn": "2026-09-12"
+  },
+  "ruleSets": {
+    "_comment": [
+      "Routing rule-sets. Their pin matters as much as the binary's: a rule-set decides which",
+      "destinations bypass the tunnel. The upstream 'latest' URL is used on purpose, but the",
+      "checksum is pinned, so an upstream change stops the fetch instead of silently retuning routes."
+    ],
+    "refilter-domains.srs": {
+      "url": "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-domain-refilter_domains.srs",
+      "sha256": "2756235a05407dced55bd362f80daeafd19a87ed9720f98cbf69343023a5b534",
+      "role": "split mode: blocked domains routed through the exit"
+    },
+    "refilter-ip.srs": {
+      "url": "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-ip-refilter_ipsum.srs",
+      "sha256": "381fcfaaf4d2b95b0b3c5ece1cb3525eb2f34f41013930ad25409a29deca3daa",
+      "role": "split mode: blocked IP summaries routed through the exit"
+    }
+  },
+  "localAssets": {
+    "_comment": [
+      "Files that are supplied locally (not downloadable) but are bundled into the desktop app.",
+      "Their expected hash is checked when present so a swapped or stale file cannot be packaged",
+      "silently. Update the hash together with the file."
+    ],
+    "tunnel-userlist.srs": {
+      "sha256": "f2c3ec5700b1c6a6aaa7074ae1b24479c969b9bed60e8353f5948000854ba330",
+      "role": "split mode: operator-curated tunnel list"
+    },
+    "wintun.dll": {
+      "sha256": "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce",
+      "role": "TUN driver used by the Windows launchers"
+    }
+  },
+  "tun2proxy": {
+    "version": "v0.6.5",
+    "url": "https://github.com/tun2proxy/tun2proxy/releases/download/{version}/tun2proxy-x86_64-pc-windows-msvc.zip",
+    "zipSha256": "88f358b30ccf69f8439918e1f805b3482f2b033ff073a82e819ec532aa05c0d1",
+    "verifiedOn": "2026-09-12"
+  },
+  "wintun": {
+    "version": "0.14.1",
+    "url": "https://www.wintun.net/builds/wintun-{version}.zip",
+    "zipSha256": "07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51",
+    "dllSha256": "e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce",
+    "dllPathInZip": "wintun/bin/amd64/wintun.dll",
+    "verifiedOn": "2026-09-12"
+  }
+}

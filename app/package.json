@@ -40,7 +40,7 @@
       {
         "from": "../tools/sing-box",
         "to": "tools/sing-box",
-        "filter": ["sing-box.exe", "wintun.dll", "*.srs"]
+        "filter": ["sing-box.exe", "wintun.dll", "refilter-domains.srs", "refilter-ip.srs", "tunnel-userlist.srs"]
       },
       {
         "from": "../magnetgate.config.example.json",

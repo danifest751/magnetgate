@@ -7,10 +7,10 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off       # disconnect (adapter removed on exit)
 param(
   [switch]$Off,
-  [string]$Version = 'v0.6.5',
-  # SHA-256 of tun2proxy-x86_64-pc-windows-msvc.zip for the pinned $Version (verified 2026-09-12).
-  # For any other $Version you MUST pass the matching -Sha256, or the download is rejected.
-  [string]$Sha256 = '88f358b30ccf69f8439918e1f805b3482f2b033ff073a82e819ec532aa05c0d1',
+  # Version/checksum come from scripts\pins.json (single source of truth). Override only together
+  # with a matching entry there, otherwise the download is rejected.
+  [string]$Version,
+  [string]$Sha256,
   # IPs to keep OFF the tunnel. The magnetgate client's own uplink to the exit/DHT must bypass the
   # TUN — otherwise that connection is captured and looped back into 127.0.0.1:1080 and nothing
   # connects. Auto-filled from the config bootstrap; add the exit IP here if it is not there.
@@ -19,6 +19,14 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $tools = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\tun2proxy'
+$pinsPath = Join-Path $PSScriptRoot 'pins.json'
+if (Test-Path $pinsPath) {
+  $pins = Get-Content $pinsPath -Raw | ConvertFrom-Json
+  if (-not $Version) { $Version = [string]$pins.tun2proxy.version }
+  if (-not $Sha256) { $Sha256 = [string]$pins.tun2proxy.zipSha256 }
+}
+if (-not $Version) { Write-Error "no pinned tun2proxy version (scripts\pins.json is missing) - pass -Version"; exit 1 }
+if (-not $Sha256) { Write-Error "no pinned tun2proxy checksum (scripts\pins.json is missing) - pass -Sha256"; exit 1 }
 
 if ($Off) {
   $ownedExe = Join-Path $tools 'tun2proxy-bin.exe'

@@ -23,13 +23,11 @@ param(
   [int]$SocksPort = 1080,
   [string]$DohServer = '1.1.1.1',
   # wintun.dll (required by sing-box TUN on Windows). If missing, it is auto-downloaded from
-  # wintun.net and verified against the pinned zip hash below; the extracted amd64 dll is checked
-  # too. Pass -WintunSha256 for a different $WintunVersion, or drop wintun.dll (amd64) in by hand.
-  [string]$WintunVersion = '0.14.1',
-  # SHA-256 of wintun-0.14.1.zip (verified 2026-09-12).
-  [string]$WintunSha256 = '07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51',
-  # SHA-256 of the extracted bin\amd64\wintun.dll for 0.14.1 (verified 2026-09-12).
-  [string]$WintunDllSha256 = 'e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce',
+  # wintun.net; version and both checksums come from scripts\pins.json. Drop wintun.dll (amd64) in
+  # by hand instead if you prefer.
+  [string]$WintunVersion,
+  [string]$WintunSha256,
+  [string]$WintunDllSha256,
   # where sing-box (vpn.log) and this launcher (vpn-launcher.log) write, so a field test is readable
   # afterwards. Defaults to the app's log folder (Electron userData for productName "magnetgate").
   [string]$LogDir = (Join-Path $env:APPDATA 'magnetgate\logs'),
@@ -54,6 +52,15 @@ $tools = Join-Path $root 'tools\sing-box'
 $exe   = Join-Path $tools 'sing-box.exe'
 $cfgOut = Join-Path $tools 'vpn-config.json'
 
+# version/checksum pins live in one place so they cannot drift from get-singbox.ps1 / vpn-windows.ps1
+$pinsPath = Join-Path $PSScriptRoot 'pins.json'
+if (Test-Path $pinsPath) {
+  $pins = Get-Content $pinsPath -Raw | ConvertFrom-Json
+  if (-not $WintunVersion) { $WintunVersion = [string]$pins.wintun.version }
+  if (-not $WintunSha256) { $WintunSha256 = [string]$pins.wintun.zipSha256 }
+  if (-not $WintunDllSha256) { $WintunDllSha256 = [string]$pins.wintun.dllSha256 }
+}
+
 function Test-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
@@ -72,9 +79,16 @@ if (-not (Test-Path $exe)) { Write-Error "sing-box not found at $exe - run scrip
 
 # wintun.dll is required by sing-box for the TUN inbound on Windows
 $wintun = Join-Path $tools 'wintun.dll'
+if ((-not $DryRun) -and (Test-Path $wintun) -and $WintunDllSha256) {
+  # a swapped or stale driver would silently sit under an elevated TUN: check the pinned hash
+  $present = (Get-FileHash -Algorithm SHA256 -LiteralPath $wintun).Hash.ToLower()
+  if ($present -ne $WintunDllSha256.ToLower()) {
+    Write-Warning "wintun.dll does not match the hash pinned in scripts\pins.json (got $present). Delete it to re-download, or update the pin if the driver was replaced on purpose."
+  }
+}
 if (-not $DryRun -and -not (Test-Path $wintun)) {
   if (-not $WintunSha256) {
-    Write-Error "wintun.dll is missing from $tools. Place wintun.dll (amd64) there manually, or re-run with -WintunSha256 <sha256 of wintun-$WintunVersion.zip> to auto-download from wintun.net."
+    Write-Error "wintun.dll is missing from $tools and scripts\pins.json has no pin. Place wintun.dll (amd64) there manually, or add the pin and re-run."
     exit 1
   }
   $zip = Join-Path $env:TEMP "wintun-$WintunVersion.zip"
@@ -91,7 +105,9 @@ if (-not $DryRun -and -not (Test-Path $wintun)) {
   $tmp = Join-Path $env:TEMP "wintun-$WintunVersion-extract"
   Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
   Expand-Archive $zip -DestinationPath $tmp -Force
-  $srcDll = Join-Path $tmp 'wintun\bin\amd64\wintun.dll'
+  $dllRel = 'wintun\bin\amd64\wintun.dll'
+  if ($pins -and $pins.wintun.dllPathInZip) { $dllRel = ([string]$pins.wintun.dllPathInZip) -replace '/', '\' }
+  $srcDll = Join-Path $tmp $dllRel
   if ($WintunDllSha256) {
     $dllGot = (Get-FileHash -Algorithm SHA256 $srcDll).Hash.ToLower()
     if ($dllGot -ne $WintunDllSha256.ToLower()) {
