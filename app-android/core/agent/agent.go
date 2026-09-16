@@ -24,6 +24,10 @@ import (
 // publishes every 60 s, so twelve minutes of silence means it is gone.
 const DefaultFresh = 12 * time.Minute
 
+// futureSkew is how far ahead of us an offer's timestamp may be before it is refused, matching the
+// tolerance src/client.js applies (60000 ms).
+const futureSkew = time.Minute
+
 // Getter is one rendezvous channel: it reads the sealed offer published for (pk, salt).
 type Getter interface {
 	Get(ctx context.Context, pk [32]byte, salt []byte) ([]byte, int64, error)
@@ -202,6 +206,17 @@ func (a *Agent) Poll(ctx context.Context, slot int) (*Record, error) {
 	if !incoming.Valid() {
 		return nil, fmt.Errorf("agent: slot %d: offer is not usable (schema %d)", slot, incoming.V)
 	}
+	// Freshness comes from the offer's own timestamp, not from when we happened to read it: a record can
+	// be correctly signed and still be a replay of a generation whose node is long gone, and only the
+	// timestamp tells those apart. The Node client applies the same window, plus a minute of tolerance
+	// for a node whose clock runs ahead (src/client.js: OFFER_TTL_MS).
+	age := a.now().Sub(time.UnixMilli(incoming.TS))
+	if age >= a.cfg.Fresh {
+		return nil, fmt.Errorf("agent: slot %d: offer is stale (%s old)", slot, age.Round(time.Second))
+	}
+	if age < -futureSkew {
+		return nil, fmt.Errorf("agent: slot %d: offer is dated %s in the future", slot, (-age).Round(time.Second))
+	}
 	// `peers` is read from the raw field and strictly: a null slot must never be read as slot 0
 	var head struct {
 		Peers json.RawMessage `json:"peers"`
@@ -210,11 +225,8 @@ func (a *Agent) Poll(ctx context.Context, slot int) (*Record, error) {
 	peers, peerErr := offer.ParsePeers(head.Peers)
 
 	a.mu.Lock()
+	// Merge returns nil only for an unusable offer, which was just ruled out
 	merged := offer.Merge(a.currentOffer(slot), &incoming)
-	if merged == nil {
-		a.mu.Unlock()
-		return nil, fmt.Errorf("agent: slot %d: offer was not merged", slot)
-	}
 	record := &Record{
 		Slot:    slot,
 		Seq:     seq,

@@ -2,6 +2,7 @@ package socks
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strconv"
@@ -471,5 +472,66 @@ func TestCloseStopsTheListener(t *testing.T) {
 	if err == nil {
 		conn.Close()
 		t.Fatal("a closed server must not accept connections")
+	}
+}
+
+// flakyListener fails the first `failures` accepts the way the kernel does under an fd shortage or a
+// connect burst, and then blocks until it is closed.
+type flakyListener struct {
+	mu       sync.Mutex
+	calls    int
+	failures int
+	closed   chan struct{}
+}
+
+func (l *flakyListener) Accept() (net.Conn, error) {
+	l.mu.Lock()
+	l.calls++
+	call := l.calls
+	l.mu.Unlock()
+	if call <= l.failures {
+		return nil, errors.New("accept: too many open files")
+	}
+	<-l.closed
+	return nil, net.ErrClosed
+}
+
+func (l *flakyListener) Close() error {
+	close(l.closed)
+	return nil
+}
+
+func (l *flakyListener) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1} }
+
+func (l *flakyListener) accepted() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.calls
+}
+
+// An accept error that is not a shutdown must not end the loop: returning would silently kill the only
+// ingress the tunnel has, and the errors in question (EMFILE, ECONNRESET) come and go on their own.
+func TestTransientAcceptErrorsDoNotStopTheListener(t *testing.T) {
+	listener := &flakyListener{failures: 3, closed: make(chan struct{})}
+	server := newServer(listener, plainDialer())
+	go server.acceptLoop()
+	t.Cleanup(func() { server.Close() })
+
+	deadline := time.Now().Add(5 * time.Second)
+	for listener.accepted() <= listener.failures {
+		if time.Now().After(deadline) {
+			t.Fatalf("the loop stopped after %d accept failure(s)", listener.accepted())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// and it still stops on a real shutdown
+	before := listener.accepted()
+	if err := server.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if after := listener.accepted(); after != before {
+		t.Fatalf("the loop kept accepting after Close (%d -> %d)", before, after)
 	}
 }

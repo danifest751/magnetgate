@@ -119,9 +119,14 @@ func Listen(port int, dial DialFunc) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{ln: ln, dial: dial, conns: make(map[net.Conn]struct{})}
+	s := newServer(ln, dial)
 	go s.acceptLoop()
 	return s, nil
+}
+
+// newServer is Listen without the bind, so a test can drive the accept loop with a listener of its own.
+func newServer(ln net.Listener, dial DialFunc) *Server {
+	return &Server{ln: ln, dial: dial, conns: make(map[net.Conn]struct{})}
 }
 
 // Addr is the address the listener is bound to.
@@ -149,11 +154,26 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) acceptLoop() {
+	var backoff time.Duration
 	for {
 		conn, err := s.ln.Accept()
 		if err != nil {
-			return
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			// Accept fails transiently, and not rarely: EMFILE/ENFILE when the process runs out of
+			// descriptors, ECONNRESET/ECONNABORTED while a client is tearing down mid-handshake.
+			// Returning here would kill the only ingress of the tunnel until a restart, so back off
+			// briefly and keep accepting — the same thing net/http's server does.
+			if backoff == 0 {
+				backoff = 5 * time.Millisecond
+			} else if backoff < time.Second {
+				backoff *= 2
+			}
+			time.Sleep(backoff)
+			continue
 		}
+		backoff = 0
 		// a connection that is not from loopback means the listener was exposed: refuse it
 		if !isLoopbackHost(hostOf(conn.RemoteAddr())) {
 			conn.Close()

@@ -16,7 +16,6 @@ import (
 type fakeChannel struct {
 	mu      sync.Mutex
 	answers map[string]fakeAnswer
-	calls   []int
 }
 
 type fakeAnswer struct {
@@ -60,7 +59,6 @@ func (f *fakeChannel) fail(psk string, slot int, err error) {
 func (f *fakeChannel) Get(_ context.Context, _ [32]byte, salt []byte) ([]byte, int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, len(salt))
 	answer, ok := f.answers[string(salt)]
 	if !ok {
 		return nil, 0, errors.New("nothing published")
@@ -81,6 +79,13 @@ func offerDoc(slot int, node string, peers []map[string]any, port int) map[strin
 	if peers != nil {
 		doc["peers"] = peers
 	}
+	return doc
+}
+
+// offerDocAt is offerDoc with a chosen generation timestamp.
+func offerDocAt(ts int64, slot int, node string, port int) map[string]any {
+	doc := offerDoc(slot, node, nil, port)
+	doc["ts"] = ts
 	return doc
 }
 
@@ -208,6 +213,44 @@ func TestStaleRecordsAreNotEndpoints(t *testing.T) {
 	}
 	if len(a.Records()) != 1 {
 		t.Fatal("the record itself is still known, only its use is refused")
+	}
+}
+
+// A correctly signed record can still be a replay of a generation whose node is gone. Only the offer's
+// own timestamp separates the two, and the Node client refuses the same window.
+func TestReplayedStaleOffersAreRefused(t *testing.T) {
+	channel := newFakeChannel()
+	stale := time.Now().Add(-time.Hour).UnixMilli()
+	channel.put(t, testPSK, 0, 9, offerDocAt(stale, 0, "lab-a", 29601))
+	a := newTestAgent(t, channel, 0)
+
+	if _, err := a.Poll(context.Background(), 0); err == nil {
+		t.Fatal("an offer older than the freshness window must be refused")
+	}
+	if len(a.Endpoints()) != 0 {
+		t.Fatal("a replayed offer must not become an endpoint")
+	}
+	if len(a.Records()) != 0 {
+		t.Fatal("a replayed offer must not be recorded")
+	}
+}
+
+// A node whose clock runs a little ahead is tolerated, one that is minutes ahead is not.
+func TestOffersFromTheFutureAreRefusedBeyondTheSkew(t *testing.T) {
+	channel := newFakeChannel()
+	nearFuture := time.Now().Add(30 * time.Second).UnixMilli()
+	channel.put(t, testPSK, 0, 1, offerDocAt(nearFuture, 0, "lab-a", 29601))
+	a := newTestAgent(t, channel, 0)
+	if _, err := a.Poll(context.Background(), 0); err != nil {
+		t.Fatalf("a slightly ahead clock must be tolerated, got %v", err)
+	}
+
+	far := newFakeChannel()
+	farFuture := time.Now().Add(10 * time.Minute).UnixMilli()
+	far.put(t, testPSK, 0, 1, offerDocAt(farFuture, 0, "lab-a", 29601))
+	b := newTestAgent(t, far, 0)
+	if _, err := b.Poll(context.Background(), 0); err == nil {
+		t.Fatal("an offer dated minutes in the future must be refused")
 	}
 }
 
