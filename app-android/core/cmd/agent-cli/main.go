@@ -48,14 +48,24 @@ type endpoint struct {
 // -exit there is one; otherwise the rendezvous fills the list and a request falls through to the next
 // candidate when one dies, which is what makes a node failure survivable.
 type direct struct {
-	key   *[32]byte
+	psk   string
 	mu    sync.Mutex
 	exits []endpoint
 	live  map[string]*session.Session
+	// connecting holds the in-flight connect per exit, so two requests arriving together share one
+	// handshake without blocking everybody else on it
+	connecting map[string]chan struct{}
+	keys       map[int]*[32]byte
 }
 
-func newDirect(key *[32]byte, exits []endpoint) *direct {
-	return &direct{key: key, exits: exits, live: map[string]*session.Session{}}
+func newDirect(psk string, exits []endpoint) *direct {
+	return &direct{
+		psk:        psk,
+		exits:      exits,
+		live:       map[string]*session.Session{},
+		connecting: map[string]chan struct{}{},
+		keys:       map[int]*[32]byte{},
+	}
 }
 
 func (d *direct) dial(ctx context.Context, host string, port int) (socks.Conn, error) {
@@ -68,7 +78,12 @@ func (d *direct) dial(ctx context.Context, host string, port int) (socks.Conn, e
 		}
 		stream, err := s.OpenStream(ctx, session.Target{Host: host, Port: port})
 		if err != nil {
-			d.drop(exit, s)
+			// A stream failure is usually about this one target — the exit could not reach it, or the
+			// open timed out — and must not cost every other stream its session. Only a dead session
+			// takes the session down; that is exactly what isSessionFailure separates.
+			if isSessionFailure(err) {
+				d.drop(exit, s)
+			}
 			lastErr = err
 			continue
 		}
@@ -80,28 +95,89 @@ func (d *direct) dial(ctx context.Context, host string, port int) (socks.Conn, e
 	return nil, lastErr
 }
 
+// isSessionFailure tells a dead session apart from a refused stream.
+func isSessionFailure(err error) bool {
+	if errors.Is(err, session.ErrSessionClosed) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+		return true
+	}
+	// a write to a socket the peer has reset or closed surfaces as a net operation error
+	var opErr *net.OpError
+	return errors.As(err, &opErr)
+}
+
 func (d *direct) candidates() []endpoint {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]endpoint(nil), d.exits...)
 }
 
-// session returns the live session to an exit, connecting it once. The lock is held across the
-// handshake on purpose: two requests arriving together must not open two sessions to the same node.
-func (d *direct) session(ctx context.Context, exit endpoint) (*session.Session, error) {
-	key := net.JoinHostPort(exit.host, strconv.Itoa(exit.port))
+// boxKey derives the box key of a slot once. Every exit seals its handshake with the key of its own
+// slot, so a node learned on slot 1 is unreachable with slot 0's key.
+func (d *direct) boxKey(slot int) (*[32]byte, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if s := d.live[key]; s != nil {
-		return s, nil
+	if key := d.keys[slot]; key != nil {
+		d.mu.Unlock()
+		return key, nil
 	}
-	s, err := session.Connect(ctx, exit.host, exit.port, d.key)
+	d.mu.Unlock()
+
+	key, err := proto.SlotBoxKey(d.psk, slot)
 	if err != nil {
 		return nil, err
 	}
-	s.SetOnClose(func() { d.drop(exit, s) })
-	d.live[key] = s
-	return s, nil
+	d.mu.Lock()
+	if existing := d.keys[slot]; existing != nil {
+		d.mu.Unlock()
+		return existing, nil
+	}
+	d.keys[slot] = &key
+	d.mu.Unlock()
+	return &key, nil
+}
+
+// session returns the live session to an exit, connecting it once. The handshake runs outside the lock:
+// holding it across a dial would queue every other stream behind one slow or black-holed node.
+func (d *direct) session(ctx context.Context, exit endpoint) (*session.Session, error) {
+	key := net.JoinHostPort(exit.host, strconv.Itoa(exit.port))
+	for {
+		d.mu.Lock()
+		if s := d.live[key]; s != nil {
+			d.mu.Unlock()
+			return s, nil
+		}
+		if pending, ok := d.connecting[key]; ok {
+			d.mu.Unlock()
+			select {
+			case <-pending:
+				continue // the other caller either connected it or failed; look again
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		pending := make(chan struct{})
+		d.connecting[key] = pending
+		d.mu.Unlock()
+
+		boxKey, err := d.boxKey(exit.slot)
+		var s *session.Session
+		if err == nil {
+			s, err = session.Connect(ctx, exit.host, exit.port, boxKey)
+		}
+
+		d.mu.Lock()
+		delete(d.connecting, key)
+		if err == nil {
+			s.SetOnClose(func() { d.drop(exit, s) })
+			d.live[key] = s
+		}
+		d.mu.Unlock()
+		close(pending)
+
+		if err != nil {
+			return nil, err
+		}
+		return s, nil
+	}
 }
 
 func (d *direct) drop(exit endpoint, s *session.Session) {
@@ -147,8 +223,8 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	keys, err := proto.DeriveKeys(psk)
-	if err != nil {
+	// deriving the keys validates the PSK up front rather than halfway into the rendezvous
+	if _, err := proto.DeriveKeys(psk); err != nil {
 		fail(err)
 	}
 
@@ -156,7 +232,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "[rv] "+format+"\n", args...)
 	}
 
-	exits, err := findExits(*exitAddr, *slotsFlag, *bootstrap, psk, keys, *discover, logf)
+	exits, err := findExits(*exitAddr, *slotsFlag, *bootstrap, psk, *discover, logf)
 	if err != nil {
 		fail(err)
 	}
@@ -164,7 +240,7 @@ func main() {
 		fmt.Printf("exit slot %d at %s:%d\n", exit.slot, exit.host, exit.port)
 	}
 
-	plane := newDirect(&keys.BoxKey, exits)
+	plane := newDirect(psk, exits)
 	defer plane.close()
 
 	server, err := socks.Listen(*socksPort, plane.dial)
@@ -199,7 +275,7 @@ func main() {
 
 // findExits resolves where to dial: a known endpoint, or the rendezvous. The rendezvous polls the
 // configured slots until an offer appears, so a node that is slow to publish is not a failure.
-func findExits(exitAddr, slotsFlag, bootstrap, psk string, keys proto.Keys, budget time.Duration, logf func(string, ...any)) ([]endpoint, error) {
+func findExits(exitAddr, slotsFlag, bootstrap, psk string, budget time.Duration, logf func(string, ...any)) ([]endpoint, error) {
 	if exitAddr != "" {
 		host, port, err := splitHostPort(exitAddr)
 		if err != nil {
@@ -305,7 +381,7 @@ func (l *stringList) Set(value string) error {
 func check(ctx context.Context, proxyAddr, url string) error {
 	client := &http.Client{
 		Timeout:   0, // the context carries the budget
-		Transport: &http.Transport{DialContext: socksDial(ctx, proxyAddr), DisableKeepAlives: true},
+		Transport: &http.Transport{DialContext: socksDial(proxyAddr), DisableKeepAlives: true},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -329,7 +405,7 @@ func check(ctx context.Context, proxyAddr, url string) error {
 
 // socksDial is a minimal RFC 1928 client: enough to prove the listener works from an independent
 // implementation. The host is sent unresolved, so the exit does the DNS lookup.
-func socksDial(ctx context.Context, proxyAddr string) func(context.Context, string, string) (net.Conn, error) {
+func socksDial(proxyAddr string) func(context.Context, string, string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		if network != "tcp" && network != "tcp4" && network != "tcp6" {
 			return nil, fmt.Errorf("unsupported network %q", network)
