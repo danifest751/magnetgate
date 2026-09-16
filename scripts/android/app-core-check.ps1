@@ -4,7 +4,7 @@
   Builds the Android app, runs it on an emulator and proves the core works inside it.
 
 .DESCRIPTION
-  The app embeds the Go core (see scripts/android/build-core-aar.ps1) and talks to it over JSON. This
+  The app embeds the Go core (see scripts/android/build-aar.ps1) and talks to it over JSON. This
   script builds both, installs the APK, hands the app its PSK through its private files directory, and
   launches it with an `autotest` extra: the app starts the core, waits for a discovered node, fetches
   https://api.ipify.org through the core's SOCKS listener and writes the result to files/autotest.txt.
@@ -15,7 +15,7 @@
 
 .EXAMPLE
   powershell -File scripts/android/app-core-check.ps1 -PskFile key\psk.txt -Bootstrap 203.0.113.10:20001
-  powershell -File scripts/android/app-core-check.ps1 -PskFile key\psk.txt -Bootstrap 203.0.113.10:20001 -SkipCoreAar
+  powershell -File scripts/android/app-core-check.ps1 -PskFile key\psk.txt -Bootstrap 203.0.113.10:20001 -SkipAar
 #>
 [CmdletBinding()]
 param(
@@ -27,7 +27,7 @@ param(
   [string]$Go = '',
   [string]$Url = 'https://api.ipify.org',
   [int]$TimeoutSeconds = 150,
-  [switch]$SkipCoreAar,
+  [switch]$SkipAar,
   [switch]$NoLaunch
 )
 
@@ -65,9 +65,9 @@ function Check([bool]$ok, [string]$message) {
   if ($ok) { Say "  PASS  $message" } else { Say "  FAIL  $message"; $script:failures += $message }
 }
 
-if (-not $SkipCoreAar) {
+if (-not $SkipAar) {
   Say 'building the core AAR'
-  & (Join-Path $PSScriptRoot 'build-core-aar.ps1') -Go $Go
+  & (Join-Path $PSScriptRoot 'build-aar.ps1') -Go $Go
   if ($LASTEXITCODE -ne 0) { throw 'the core AAR failed to build' }
 }
 
