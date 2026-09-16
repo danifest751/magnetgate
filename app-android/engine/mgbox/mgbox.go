@@ -86,6 +86,10 @@ type PlatformHandler interface {
 	OpenTun(requestJSON string) (int32, error)
 	// Protect is how the engine keeps one of its own sockets out of the tunnel it just created.
 	Protect(fd int32) error
+	// FindConnectionOwner answers which app owns one connection, as JSON:
+	// {"userId":..,"userName":..,"processPath":..,"androidPackageNames":[..]}. An error means "unknown",
+	// which is what the engine expects when the lookup is not available.
+	FindConnectionOwner(protocol int, sourceAddress string, sourcePort int, destinationAddress string, destinationPort int) (string, error)
 }
 
 var (
@@ -200,12 +204,48 @@ func (p *platform) UsePlatformShell() bool                      { return false }
 func (p *platform) UsePlatformBridge() bool                     { return false }
 func (p *platform) TailscaleHostname() string                   { return "" }
 
-// FindConnectionOwner and LookupUser are two methods libbox dereferences when they return no error, so an
-// unimplemented lookup has to say it failed instead of answering "unknown". Per-app routing, which is what
-// the connection owner is for, needs ConnectivityManager.getConnectionOwnerUid and is not wired up yet.
-func (p *platform) FindConnectionOwner(int32, string, int32, string, int32) (*libbox.ConnectionOwner, error) {
-	return nil, errors.New("mgbox: connection owner lookup is not implemented")
+// FindConnectionOwner asks the app who owns a connection and hands the answer to the engine, which needs it
+// for per-app rules and for its connection list.
+func (p *platform) FindConnectionOwner(ipProtocol int32, sourceAddress string, sourcePort int32, destinationAddress string, destinationPort int32) (*libbox.ConnectionOwner, error) {
+	encoded, err := p.handler.FindConnectionOwner(int(ipProtocol), sourceAddress, int(sourcePort), destinationAddress, int(destinationPort))
+	if err != nil {
+		return nil, err
+	}
+	var answer struct {
+		UserID   int32    `json:"userId"`
+		UserName string   `json:"userName"`
+		Path     string   `json:"processPath"`
+		Packages []string `json:"androidPackageNames"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &answer); err != nil {
+		return nil, err
+	}
+	owner := &libbox.ConnectionOwner{
+		UserId:      answer.UserID,
+		UserName:    answer.UserName,
+		ProcessPath: answer.Path,
+	}
+	if len(answer.Packages) > 0 {
+		owner.SetAndroidPackageNames(&stringIterator{items: answer.Packages})
+	}
+	return owner, nil
 }
+
+// stringIterator is the iterator libbox expects for a list of names.
+type stringIterator struct {
+	items []string
+	next  int
+}
+
+func (i *stringIterator) HasNext() bool { return i.next < len(i.items) }
+
+func (i *stringIterator) Next() string {
+	value := i.items[i.next]
+	i.next++
+	return value
+}
+
+func (i *stringIterator) Len() int32 { return int32(len(i.items)) }
 
 func (p *platform) LookupUser(string) (*libbox.PlatformUser, error) {
 	return nil, errors.New("mgbox: user lookup is not implemented")
