@@ -114,7 +114,9 @@ function renderStatus() {
   const stats = st.stats || {}
   text(
     'traffic',
-    `Получение ${bytes(stats.downBps)}/с · Отправка ${bytes(stats.upBps)}/с · Соединений: ${stats.conns || 0}`
+    `Трафик ↑ ${bytes(stats.upTotal)} / ↓ ${bytes(stats.downTotal)}` +
+      ` · скорость ↑ ${bytes(stats.upBps)}/с / ↓ ${bytes(stats.downBps)}/с` +
+      ` · Соединений: ${stats.conns || 0}`
   )
 }
 function bytes(value = 0) {

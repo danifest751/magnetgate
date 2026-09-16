@@ -9,6 +9,7 @@ const { EngineController, command, stopChild } = require('./engine.cjs')
 const { buildVpnConfig } = require('./vpn-config.cjs')
 const { switchMode, engineSignature } = require('./mode.cjs')
 const { rotatingLog } = require('./log.cjs')
+const { accumulate, rate } = require('./stats.cjs')
 if (process.env.MAGNETGATE_APP_TEST_DIR)
   app.setPath('userData', process.env.MAGNETGATE_APP_TEST_DIR)
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
@@ -60,7 +61,7 @@ const state = {
   phase: 'idle',
   viaExit: false,
   trafficProtected: false,
-  stats: { conns: 0, up: 0, down: 0, upBps: 0, downBps: 0 }
+  stats: { conns: 0, up: 0, down: 0, upTotal: 0, downTotal: 0, upBps: 0, downBps: 0, planes: [] }
 }
 function safeSend(channel, value) {
   if (win && !win.isDestroyed() && !quitting) win.webContents.send(channel, value)
@@ -441,6 +442,7 @@ function runVpn(off) {
       if (off) {
         await stopProcesses()
         if (guardReady || (await firewall(false, true))) await firewall(true)
+        resetTraffic()
         state.vpnHealthy = false
         state.egress = null
         state.proxyEgress = null
@@ -465,6 +467,7 @@ function runVpn(off) {
       if (token !== intent) return
       state.lastError = null
       retryAt = 0
+      resetTraffic() // the volume line means "this connection"
       await applyVpn()
     })
     .catch(async (err) => {
@@ -571,6 +574,13 @@ async function pollEgress() {
   }
 }
 let lastSample = null
+// volume carried by the current connection, kept across engine restarts (see app/stats.cjs)
+let trafficBase = { up: 0, down: 0 }
+function resetTraffic() {
+  lastSample = null
+  trafficBase = { up: 0, down: 0 }
+  state.stats = { conns: 0, up: 0, down: 0, upTotal: 0, downTotal: 0, upBps: 0, downBps: 0, planes: [] }
+}
 function pollStats() {
   if (!state.vpnOn || !engine.ready) return
   const generation = engine.generation
@@ -593,9 +603,7 @@ function pollStats() {
         try {
           const j = JSON.parse(body),
             now = Date.now(),
-            up = Number(j.uploadTotal) || 0,
-            down = Number(j.downloadTotal) || 0
-          const dt = lastSample ? (now - lastSample.time) / 1000 : 0
+            raw = { up: Number(j.uploadTotal) || 0, down: Number(j.downloadTotal) || 0 }
           // which data plane is actually carrying traffic right now: chains look like
           // ["exit-0-reality-0", "proxy"]. Knowing that a session silently fell back to the native
           // channel (PoC-level camouflage) matters more than the connection count.
@@ -608,15 +616,21 @@ function pollStats() {
               else if (/native|mgt/i.test(tag)) planes.add('mgt (native)')
             }
           }
+          // keep the volume across engine restarts (mode switch, rotation, crash)
+          const seconds = lastSample ? (now - lastSample.time) / 1000 : 0
+          const acc = accumulate(trafficBase, lastSample, raw)
+          trafficBase = acc.base
           state.stats = {
             conns: Array.isArray(j.connections) ? j.connections.length : 0,
             planes: [...planes],
-            up,
-            down,
-            upBps: dt > 0 ? Math.max(0, (up - lastSample.up) / dt) : 0,
-            downBps: dt > 0 ? Math.max(0, (down - lastSample.down) / dt) : 0
+            up: raw.up,
+            down: raw.down,
+            upTotal: acc.total.up,
+            downTotal: acc.total.down,
+            upBps: rate(lastSample?.up, raw.up, seconds),
+            downBps: rate(lastSample?.down, raw.down, seconds)
           }
-          lastSample = { time: now, up, down }
+          lastSample = { time: now, ...raw }
           pushStatus()
         } catch {}
       })
