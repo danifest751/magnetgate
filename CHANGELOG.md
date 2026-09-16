@@ -62,9 +62,10 @@
   chosen country has nothing live, everything is used and the caption says so, because refusing to
   connect would be worse.
 - Artifact: `app/dist/magnetgate-0.3.3.exe`, SHA-256
-  `d39e31b86918d2802da1d53fec4208116b82314b2564a986f17ee192a3a3549c` — carries every change listed
-  above for today (multi-node slots and `peers`, per-slot Nostr tags, per-process tunnel exceptions,
-  the log-noise filter, the volume line and the country selector).
+  `6fcfccb68162765d6d112f826c138d47db2083af0f071813703bebd75ceedcee` — carries every change listed
+  above for today (multi-node slots and `peers`, per-plane health, the nodes table and slot list in the
+  UI, per-slot Nostr tags, per-process tunnel exceptions, the log-noise filter, the volume line and the
+  country selector).
 
 ### Multi-node slots (unreleased)
 
