@@ -66,7 +66,8 @@
       "downloaded: upstream publishes no AAR. The tag AND the commit are pinned together, so a moved",
       "tag stops the build instead of silently changing the engine. The Go build tags and linker flags",
       "used are the ones cmd/internal/build_libbox/main.go uses at this commit.",
-      "scripts/android/build-libbox-aar.ps1 reads this entry."
+      "scripts/android/build-aar.ps1 reads this entry, fetches the module version through the Go proxy",
+      "and refuses to build if the version no longer resolves to the commit below."
     ],
     "version": "1.14.0",
     "tag": "v1.14.0",
