@@ -22,6 +22,7 @@ import { startSocks5Server } from './socks5.mjs'
 import { connectNative } from './native-client.mjs'
 import { encodeAddress } from './address.mjs'
 import { atomicWrite } from './state-file.mjs'
+import { createPlaneHealth } from './health.mjs'
 import { DpPool } from './dp-supervisor.mjs'
 import { validateConfig } from './config.cjs'
 import { pickDp, mergeOffer, newPeerSlots } from './offer.mjs'
@@ -154,13 +155,11 @@ function addSlotEntry(slot) {
 
 const dht = new DHT({ bootstrap: cfg.bootstrap, verify: bep44Verify })
 
-// returns the exit's current fresh offer object, or null (dead exits go on cooldown)
-const fresh = (e) =>
-  e.offer &&
-  Date.now() - e.offer.ts < OFFER_TTL_MS &&
-  (!e.cooldownUntil || Date.now() > e.cooldownUntil)
-    ? e.offer
-    : null
+// returns the exit's current fresh offer object, or null (an exit with no fresh offer cannot be used;
+// per-plane cooldown is tracked separately — see src/health.mjs)
+const fresh = (e) => (e.offer && Date.now() - e.offer.ts < OFFER_TTL_MS ? e.offer : null)
+// a plane that failed recently is not retried until its cooldown expires, and the pair backs off
+const planeHealth = createPlaneHealth()
 
 // data-plane engine (sing-box) for Reality/hysteria2; the native "mgt" channel is the fallback.
 // In rendezvous-only mode there is no local supervisor — the external TUN sing-box is the engine —
@@ -180,7 +179,14 @@ function writeDpOut() {
   try {
     const available = exits
       .filter((e) => e.offer && Date.now() - e.offer.ts < OFFER_TTL_MS)
-      .map((e) => ({ id: String(e.id), name: e.name, ...e.offer }))
+      .map((e) => ({
+        id: String(e.id),
+        name: e.name,
+        ...e.offer,
+        // which planes of this node the client is currently sitting out, so the desktop can explain
+        // why a node is not being used
+        cooling: planeHealth.cooling(e.id)
+      }))
     atomicWrite(DP_OUT, JSON.stringify({ v: 4, exits: available }))
   } catch (e) {
     console.log(ts(), '[dp-out] write failed:', e.message)
@@ -305,6 +311,7 @@ const sessions = new Map(),
 async function getSessionFor(exit) {
   if (sessions.has(exit.id)) return sessions.get(exit.id)
   if (!pending.has(exit.id)) {
+    if (!planeHealth.usable(exit.id, 'mgt')) throw new Error('native plane is cooling down')
     const dp = pickDp(fresh(exit), ['mgt'])
     if (!dp) throw new Error('no fresh native endpoint')
     const promise = connectNative(dp, exit.boxKey, cfg.transport, () => sessions.delete(exit.id))
@@ -349,12 +356,17 @@ async function routeFn(target, app) {
     )
   }
   let lastError = new Error('no fresh offer')
+  let attempts = 0
   for (let i = 0; i < candidates.length; i++) {
     const exit = candidates[(rr + i) % candidates.length]
     for (const type of DP_PREFERENCE) {
       if (app.destroyed) throw new Error('request cancelled')
+      // a pair that failed recently sits out its cooldown; the other planes of this node are still
+      // tried, which is the whole point of tracking health per plane instead of per node
+      if (!planeHealth.usable(exit.id, type)) continue
       const dp = pickDp(exit.offer, [type])
       if (!dp) continue
+      attempts++
       try {
         const result =
           type === 'mgt'
@@ -364,6 +376,8 @@ async function routeFn(target, app) {
           result.sock.destroy()
           throw new Error('request cancelled')
         }
+        planeHealth.ok(exit.id, type)
+        if (DP_OUT) writeDpOut() // diagnostics should see a recovery immediately
         rr = (rr + i + 1) % candidates.length
         console.log(
           ts(),
@@ -378,11 +392,24 @@ async function routeFn(target, app) {
         return result
       } catch (err) {
         lastError = err
-        console.log(ts(), '[socks] transport failed:', type, err.message)
+        const cooldown = planeHealth.fail(exit.id, type)
+        // publish the pause at once: offers only arrive on the poll interval, and diagnostics should
+        // not wait up to half a minute to explain why a node stopped being used
+        if (DP_OUT) writeDpOut()
+        console.log(
+          ts(),
+          '[socks] transport failed:',
+          type,
+          'exit',
+          exit.name,
+          `(paused ${Math.round(cooldown.backoffMs / 1000)}s after ${cooldown.fails} failure(s))`,
+          err.message
+        )
       }
     }
-    exit.cooldownUntil = Date.now() + 30000
   }
+  if (!attempts)
+    throw new Error('every plane is cooling down after failures — retry in a few seconds')
   throw lastError
 }
 const associations = new WeakMap()
@@ -400,18 +427,20 @@ function udpFn(req, control, sendReply) {
         let lastError = null
         for (let i = 0; i < candidates.length; i++) {
           const exit = candidates[(udpRr + i) % candidates.length]
+          if (!planeHealth.usable(exit.id, 'mgt')) continue
           try {
             const session = await getSessionFor(exit)
             if (control.destroyed) throw new Error('association closed')
             const relay = await session.openRelay(control, sendReply)
+            planeHealth.ok(exit.id, 'mgt')
             udpRr = (udpRr + i + 1) % candidates.length
             return relay
           } catch (err) {
             lastError = err
-            exit.cooldownUntil = Date.now() + 30000
+            planeHealth.fail(exit.id, 'mgt')
           }
         }
-        throw lastError ?? new Error('no exit available for UDP')
+        throw lastError ?? new Error('no exit with a usable native plane for UDP')
       })()
     }
     association.promise.catch(() => control.destroy())

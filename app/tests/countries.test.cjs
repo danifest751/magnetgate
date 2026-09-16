@@ -59,3 +59,31 @@ test('countries: a single old exit leaves no list, so the UI hides the control',
   assert.equal(sel.fallback, true)
   assert.equal(sel.endpoints.length, 1)
 })
+
+test('node summariser lists every node once with its planes and cooling state', () => {
+  const { summarizeNodes } = require('../countries.cjs')
+  const ep = (name, country, t, cooling = []) => ({
+    t,
+    host: '203.0.113.1',
+    port: 443,
+    exitId: name,
+    exitName: name,
+    node: name,
+    country,
+    cooling
+  })
+  const list = summarizeNodes([
+    ep('nl-1', 'NL', 'reality'),
+    ep('nl-1', 'NL', 'hy2', ['reality']),
+    ep('nl-1', 'NL', 'mgt'),
+    ep('fi-1', 'FI', 'reality')
+  ])
+  assert.deepEqual(list, [
+    { key: 'fi-1', node: 'fi-1', country: 'FI', planes: ['reality'], cooling: [] },
+    { key: 'nl-1', node: 'nl-1', country: 'NL', planes: ['hy2', 'mgt', 'reality'], cooling: ['reality'] }
+  ])
+  assert.deepEqual(summarizeNodes([]), [])
+  assert.deepEqual(summarizeNodes(undefined), [])
+  // an endpoint without an exit name cannot be attributed to a node and is skipped
+  assert.deepEqual(summarizeNodes([{ t: 'reality', host: '203.0.113.1', port: 443 }]), [])
+})

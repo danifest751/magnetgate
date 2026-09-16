@@ -134,6 +134,27 @@ async function main() {
   await sleep(1500)
 
   // 3. two exits, one PSK, different slots
+  // Node B advertises a Reality endpoint that nothing listens on: the client must mark that plane as
+  // cooling on that node and keep using the node through its native channel, instead of writing the
+  // whole node off (that is what per-plane health is for).
+  const brokenDp = path.join(tmp, 'dp-b.json')
+  fs.writeFileSync(
+    brokenDp,
+    JSON.stringify({
+      dp: [
+        {
+          t: 'reality',
+          host: '127.0.0.1',
+          port: 1,
+          uuid: '11111111-2222-3333-4444-555555555555',
+          pbk: 'pbk-not-used',
+          sni: 'www.microsoft.com',
+          sid: 'aabbccdd',
+          fp: 'chrome'
+        }
+      ]
+    })
+  )
   for (const node of NODES) {
     start(
       node.name,
@@ -150,6 +171,7 @@ async function main() {
         // Phase 1: each node watches the other slot and advertises it in `peers`
         MAGNETGATE_PEER_SLOTS: NODES.map((n) => n.slot).join(','),
         MAGNETGATE_PUBLISH_MS: '5000',
+        ...(node.slot === 1 ? { MAGNETGATE_DP_FILE: brokenDp } : {}),
         MAGNETGATE_SEQ_FILE: path.join(tmp, `seq-${node.slot}`),
         MAGNETGATE_HEALTH_FILE: path.join(tmp, `health-${node.slot}.json`),
         DHT_BOOTSTRAP: bootstrap
@@ -193,14 +215,19 @@ async function main() {
       slots: [NODES[0].slot],
       bootstrap: DHT_PORTS.map((p) => `127.0.0.1:${p}`),
       rules: { direct: [], proxy: [] },
-      dataPlane: 'mgt',
+      // auto, so the client actually tries the (broken) reality plane of node B before its native one
+      dataPlane: 'auto',
       localPort: CLIENT_PORT
     })
   )
   start(
     'client',
     [path.join(root, 'src', 'client.js'), cfgPath, String(CLIENT_PORT)],
-    { MAGNETGATE_NOSTR: 'off', MAGNETGATE_NATIVE_ONLY: '1', DHT_BOOTSTRAP: bootstrap },
+    {
+      MAGNETGATE_NOSTR: 'off',
+      MAGNETGATE_DP_OUT: path.join(tmp, 'current-dp.json'),
+      DHT_BOOTSTRAP: bootstrap
+    },
     'client.log'
   )
 
@@ -227,7 +254,47 @@ async function main() {
   const firstExit = usedExit(logText('client.log'))
   check(/lab-(a|b)/.test(firstExit), `the client reports which node served it (${firstExit || 'none'})`)
 
-  // 6. failover: kill the node that served the request, a new request must use the other one
+  // 6. per-plane health: node B advertises a Reality endpoint nothing listens on. A request routed to
+  // it must fail over to that same node's native channel (not to the other node) and pause only the
+  // broken plane, which the snapshot then reports to the app.
+  let planeFailure = false
+  for (let attempt = 0; attempt < 4 && !planeFailure; attempt++) {
+    await socksGet('127.0.0.1', TARGET_PORT, request).catch(() => '')
+    planeFailure = /\[socks\] transport failed: reality/.test(logText('client.log'))
+  }
+  check(planeFailure, 'a broken plane on a live node is reported as a plane failure')
+  check(
+    /paused \d+s after \d+ failure/.test(logText('client.log')),
+    'the broken plane is paused with a backoff, not the whole node'
+  )
+  const cooling = await waitFor('the snapshot to report the paused plane', () => {
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(path.join(tmp, 'current-dp.json'), 'utf8'))
+      const node = snapshot.exits.find((e) => e.node === 'lab-b')
+      if (!node) {
+        say(`snapshot has no lab-b entry (nodes: ${snapshot.exits.map((e) => e.node).join(',')})`)
+        return null
+      }
+      const paused = (Array.isArray(node.cooling) ? node.cooling : []).some(
+        (c) => (typeof c === 'string' ? c : c?.t) === 'reality'
+      )
+      if (!paused) {
+        say(`lab-b cooling=${JSON.stringify(node.cooling)} planes=${node.dp.map((d) => d.t).join(',')}`)
+        return null
+      }
+      return snapshot
+    } catch (err) {
+      say(`snapshot unreadable: ${err.message}`)
+      return null
+    }
+  }, 20000)
+  check(!!cooling, 'the snapshot carries per-node cooling state for the diagnostics table')
+  check(
+    !!cooling && cooling.exits.some((e) => e.node === 'lab-b' && e.dp.some((d) => d.t === 'mgt')),
+    'the same node is still usable through its other plane'
+  )
+
+  // 7. failover: kill the node that served the request, a new request must use the other one
   const victim = NODES.find((n) => firstExit.includes(n.name))
   if (check(!!victim, 'the serving node is one of the two')) {
     say(`killing ${victim.name} (slot ${victim.slot})`)

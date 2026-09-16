@@ -199,6 +199,12 @@
                   rows="3"
                 ></textarea>
               </label>
+              <label for="slots"
+                >Слоты нод · через запятую (пусто — не искать; 0,1 — искать обе ноды)<input
+                  id="slots"
+                  inputmode="numeric"
+                  placeholder="0, 1"
+                /></label>
               <div class="mg-actions">
                 <button class="mg-action" id="btnSaveAdvanced">Сохранить параметры</button
                 ><button class="mg-secondary" id="btnOpenDir">Папка настроек</button>
@@ -240,6 +246,13 @@
               <div class="mg-list-row">
                 <span>Канал данных</span><span id="diagPlanes">—</span>
               </div>
+            </div>
+            <div class="mg-country-block" id="nodesBlock" hidden>
+              <h3>Ноды</h3>
+              <p class="mg-caption">
+                Что видно через рандеву и какие каналы сейчас в паузе после сбоев.
+              </p>
+              <div class="mg-list" id="nodes"></div>
             </div>
             <details class="mg-space">
               <summary>Журнал событий</summary>

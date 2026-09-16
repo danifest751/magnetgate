@@ -20,6 +20,10 @@ const file =
   process.argv[2] || process.env.MAGNETGATE_HEALTH_FILE || '/var/lib/magnetgate/health.json'
 const maxAgeMs = Number(process.env.MAGNETGATE_HEALTH_MAX_AGE_MS ?? 15 * 60 * 1000) // publishes every 60 s
 const alertAfter = Number(process.env.MAGNETGATE_ALERT_AFTER ?? 5)
+// Expected number of peer slots, only used to make the summary readable (peers=1/1). A shortfall is
+// deliberately NOT a failure here: the exit itself alerts after MAGNETGATE_PEER_ALERT_AFTER
+// consecutive misses, and a single missed DHT lookup is normal.
+const expectedPeers = Number(process.env.MAGNETGATE_EXPECT_PEERS ?? 0)
 
 let raw
 try {
@@ -54,6 +58,7 @@ if (h.error) problems.push(`last error: ${h.error}`)
 const summary = [
   `exit publisher: ok=${h.ok}`,
   `nodes=${h.nodes ?? '?'}/${h.dhtNodes ?? '?'}`,
+  `peers=${h.peers ?? '?'}${expectedPeers ? `/${expectedPeers}` : ''}`,
   `nostr=${h.nostr ?? '?'}`,
   `seq=${h.seq ?? '?'}`,
   `failures=${h.failures ?? '?'}`,

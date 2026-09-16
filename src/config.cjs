@@ -144,7 +144,11 @@ function freshEndpoints(snapshot, now = Date.now()) {
           exitId: String(e.id),
           exitName: e.name,
           node: e.node,
-          country: e.country
+          country: e.country,
+          // planes the client is currently sitting out on this node (see src/health.mjs)
+          cooling: Array.isArray(e.cooling)
+            ? e.cooling.map((c) => c && c.t).filter((t) => typeof t === 'string')
+            : []
         }))
     )
 }

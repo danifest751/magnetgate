@@ -84,3 +84,18 @@ test('country selector: the caption explains the choice and the fallback', () =>
   assert.equal(countryMessage('DE', true), 'В DE нет живых нод — используется любая')
   assert.equal(countryMessage(undefined, false), 'Любая страна с живой нодой')
 })
+
+test('diagnostics rows show node, country, planes and paused ones - never an address', () => {
+  const { nodeRows } = require('../renderer/state.js')
+  assert.deepEqual(nodeRows([{ key: 'nl-1', country: 'NL', planes: ['reality', 'hy2', 'mgt'], cooling: [] }]), [
+    { label: 'nl-1 · NL', value: 'reality, hy2, mgt', cooling: false }
+  ])
+  assert.deepEqual(
+    nodeRows([{ key: 'fi-1', country: 'FI', planes: ['reality', 'mgt'], cooling: ['hy2'] }]),
+    [{ label: 'fi-1 · FI', value: 'reality, mgt · пауза: hy2', cooling: true }]
+  )
+  assert.deepEqual(nodeRows([]), [])
+  assert.deepEqual(nodeRows(undefined), [])
+  const rendered = JSON.stringify(nodeRows([{ key: 'x', country: 'DE', planes: ['reality'], cooling: [] }]))
+  assert.equal(/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/.test(rendered), false, 'no address may appear')
+})

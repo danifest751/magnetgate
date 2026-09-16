@@ -44,4 +44,36 @@ function select(endpoints, country) {
   return { endpoints: list, country: want, fallback: true, available }
 }
 
-module.exports = { summarize, select }
+// One row per node for the diagnostics table: what it is, which planes it offers and which of them the
+// client is currently sitting out. Built from the same endpoint list as the country list, so the two
+// can never disagree about what exists. Addresses are never included.
+function summarizeNodes(endpoints) {
+  const nodes = new Map()
+  for (const e of Array.isArray(endpoints) ? endpoints : []) {
+    const key = String(e?.exitName ?? e?.node ?? '')
+    if (!key) continue
+    const entry = nodes.get(key) ?? {
+      key,
+      node: String(e?.node ?? ''),
+      country: codeOf(e?.country),
+      planes: new Set(),
+      cooling: new Set()
+    }
+    if (e?.node) entry.node = String(e.node)
+    if (!entry.country) entry.country = codeOf(e?.country)
+    if (e?.t) entry.planes.add(String(e.t))
+    for (const type of Array.isArray(e?.cooling) ? e.cooling : []) entry.cooling.add(String(type))
+    nodes.set(key, entry)
+  }
+  return [...nodes.values()]
+    .map((n) => ({
+      key: n.key,
+      node: n.node,
+      country: n.country,
+      planes: [...n.planes].sort(),
+      cooling: [...n.cooling].sort()
+    }))
+    .sort((a, b) => (a.country + a.key).localeCompare(b.country + b.key))
+}
+
+module.exports = { summarize, summarizeNodes, select }

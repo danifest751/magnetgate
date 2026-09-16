@@ -13,6 +13,7 @@ body {
   --mg-line: light-dark(#dce3de, #323d35);
   --mg-soft: light-dark(#e7eee9, #26372d);
   --mg-green: light-dark(#286c4c, #9bd1b1);
+  --mg-warn: light-dark(#8a5a10, #e6c07a);
   --mg-button: light-dark(#284e39, #b2d7bd);
   --mg-button-ink: light-dark(#fff, #17281d);
   --mg-field: light-dark(#fff, #202822);
@@ -535,12 +536,15 @@ body {
   #mg-app .mg-status-title {
     font-size: 24px;
   }
-  #mg-app .mg-rules-preview {
+#mg-app .mg-warn {
+  color: var(--mg-warn);
+}
+#mg-app .mg-rules-preview {
     align-items: flex-start;
     flex-direction: column;
   }
 }
-/* Оформление настоящего окна приложения. */
+/* РћС„РѕСЂРјР»РµРЅРёРµ РЅР°СЃС‚РѕСЏС‰РµРіРѕ РѕРєРЅР° РїСЂРёР»РѕР¶РµРЅРёСЏ. */
 #mg-app {
   border: 0;
   border-radius: 0;

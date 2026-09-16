@@ -75,7 +75,24 @@
     if (!/^[A-Z]{2}$/.test(cc)) return 'Любая страна с живой нодой'
     return fallback ? `В ${cc} нет живых нод — используется любая` : `Выход через ${cc}`
   }
-  const api = { needsDisconnect, connectionView, countryOptions, countryMessage }
+  // Diagnostics rows for the discovered nodes: name and country, the planes the node offers, and
+  // which of those the client is currently sitting out after failures. Never an address.
+  function nodeRows(nodes) {
+    const list = Array.isArray(nodes) ? nodes : []
+    return list.map((n) => {
+      const label = [String(n.key || n.node || ''), String(n.country || '')]
+        .filter(Boolean)
+        .join(' · ')
+      const planes = Array.isArray(n.planes) ? n.planes.join(', ') : ''
+      const cooling = Array.isArray(n.cooling) ? n.cooling.filter(Boolean) : []
+      return {
+        label,
+        value: cooling.length ? `${planes} · пауза: ${cooling.join(', ')}` : planes,
+        cooling: cooling.length > 0
+      }
+    })
+  }
+  const api = { needsDisconnect, connectionView, countryOptions, countryMessage, nodeRows }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.MGView = api
 })(globalThis)

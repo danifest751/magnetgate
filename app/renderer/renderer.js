@@ -39,7 +39,7 @@ function text(id, value) {
 function renderStatus() {
   const view = MGView.connectionView(cfg, st)
   all(
-    '[data-mode], #btnAddSite, #domain, #killSwitch, #btnAddExit, #btnSaveServers, #btnSaveAdvanced, #localPort, #singboxPort, #probePort, #bootstrap, #directProcesses, #country'
+    '[data-mode], #btnAddSite, #domain, #killSwitch, #btnAddExit, #btnSaveServers, #btnSaveAdvanced, #localPort, #singboxPort, #probePort, #bootstrap, #directProcesses, #country, #slots'
   ).forEach((el) => (el.disabled = !loaded))
   $('mg-app').dataset.state = view.connected ? 'connected' : 'idle'
   text('phase', view.title)
@@ -112,6 +112,7 @@ function renderStatus() {
   text('diagPlanes', st.vpnOn ? planes.length ? planes.join(', ') : 'ожидание трафика' : '—')
   $('traffic').hidden = !view.connected
   renderCountries(st, view)
+  renderNodes(st)
   const stats = st.stats || {}
   text(
     'traffic',
@@ -151,6 +152,28 @@ function renderCountries(st, view) {
   }
   select.value = st.country || ''
   text('countryMsg', MGView.countryMessage(st.country, st.countryFallback))
+}
+function renderNodes(st) {
+  const rows = MGView.nodeRows(st.nodes)
+  const block = $('nodesBlock')
+  block.hidden = !rows.length
+  if (!rows.length) return
+  const container = $('nodes')
+  const signature = JSON.stringify(rows)
+  if (container.dataset.rows === signature) return
+  container.dataset.rows = signature
+  container.textContent = ''
+  for (const row of rows) {
+    const line = document.createElement('div')
+    line.className = 'mg-list-row'
+    const left = document.createElement('span')
+    left.textContent = row.label
+    const right = document.createElement('span')
+    right.textContent = row.value
+    if (row.cooling) right.className = 'mg-warn'
+    line.append(left, right)
+    container.append(line)
+  }
 }
 function renderRules() {
   all('[data-mode]').forEach((el) =>
@@ -326,6 +349,7 @@ function fillAdvanced() {
   for (const name of ['localPort', 'singboxPort', 'probePort']) $(name).value = cfg[name]
   $('bootstrap').value = cfg.bootstrap.join('\n')
   $('directProcesses').value = (cfg.directProcesses || []).join('\n')
+  $('slots').value = (cfg.slots || []).join(', ')
 }
 function appendLog(line) {
   const el = $('log'),
@@ -456,7 +480,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       text('serversMessage', 'Серверы не сохранены. Проверьте значения и повторите.')
     }
   }
-  for (const id of ['localPort', 'singboxPort', 'probePort', 'bootstrap', 'directProcesses'])
+  for (const id of ['localPort', 'singboxPort', 'probePort', 'bootstrap', 'directProcesses', 'slots'])
     $(id).oninput = () => {
       advancedRevision++
       text('advancedMessage', 'Есть несохранённые изменения.')
@@ -479,6 +503,11 @@ window.addEventListener('DOMContentLoaded', async () => {
       .value.split(/\r?\n/)
       .map((s) => s.trim())
       .filter(Boolean)
+    fields.slots = $('slots')
+      .value.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map(Number)
     try {
       text('advancedMessage', 'Сохраняем…')
       await saveChange((current) => ({ ...current, ...fields }))

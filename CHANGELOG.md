@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Multi-node phase 2 — per-plane health and node visibility (2026-09-16)
+
+- **Health is tracked per (node, plane), not per node.** A node can be alive while one of its planes is
+  unreachable from a given network (a blocked Reality endpoint, a QUIC path a NAT drops), and cooling
+  the whole node hid a perfectly usable endpoint on the same machine. A failed pair pauses with a
+  growing backoff (30 s → 2 min → 10 min) and any success clears it immediately; the other planes of
+  that node keep being tried. `src/health.mjs` holds the policy and is unit-tested.
+- The client now publishes its cooling state in the snapshot as soon as it changes, instead of waiting
+  for the next offer, so diagnostics explains a paused node without a delay.
+- **Diagnostics shows the nodes**: each one with its country, the planes it offers and which are
+  paused, e.g. `nl-1 · NL → reality, hy2, mgt` and `fi-1 · FI → reality, mgt · пауза: hy2`. Names and
+  codes only, never an address.
+- **Settings can edit the slot list** (`0, 1`), so a second node can be added from the UI instead of
+  editing the config file.
+- `healthcheck.mjs` prints `peers=N/EXPECTED` in its summary; a shortfall there is deliberately not a
+  failure, because the exit itself alerts after `MAGNETGATE_PEER_ALERT_AFTER` consecutive misses.
+- The loopback lab now proves the per-plane path: a node advertises a Reality endpoint nothing listens
+  on, the client pauses that plane, keeps using the same node over its native channel, and the
+  snapshot carries the paused state for the UI.
+
 ### Operations (2026-09-16)
 
 - **`scripts/deploy.sh` works on any node.** It used to assume `magnetgate-exit` + `magnetgate-dht`
