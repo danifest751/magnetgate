@@ -57,6 +57,34 @@ export const targetOf = (pk, salt) =>
     .update(Buffer.concat([pk, salt]))
     .digest()
 
+// ---------- multi-node slots ----------
+// Several exits can share one PSK by occupying different slots of one rendezvous space, so a client
+// finds all of them without knowing addresses in advance (see docs/design-multi-node.md).
+// Slot 0 is, BY DEFINITION, exactly the single-node values, so an existing deployment needs no
+// migration and an old client keeps working against a node on slot 0.
+export const MAX_SLOTS = 16
+// Env vars arrive as strings, so a numeric string is accepted; null/empty/bool are not — a missing
+// slot must never silently become slot 0.
+export const asSlot = (value) => {
+  const typed = typeof value === 'string' && value.trim() ? Number(value) : value
+  if (typeof typed !== 'number' || !Number.isInteger(typed) || typed < 0 || typed >= MAX_SLOTS)
+    throw new Error(`invalid node slot: ${value}`)
+  return typed
+}
+export const slotSalt = (secret, slot = 0) =>
+  asSlot(slot) === 0
+    ? saltOf(secret)
+    : crypto
+        .createHash('sha1')
+        .update(`mgt-salt:${asSlot(slot)}:${secret}`)
+        .digest()
+export const slotBoxKey = (secret, slot = 0) => {
+  const key = Buffer.alloc(32)
+  const domain = asSlot(slot) === 0 ? `mgt-box:${secret}` : `mgt-box:${asSlot(slot)}:${secret}`
+  sodium.crypto_generichash(key, Buffer.from(domain))
+  return key
+}
+
 export function signer(sk) {
   return (buf) => {
     const sig = Buffer.alloc(64)

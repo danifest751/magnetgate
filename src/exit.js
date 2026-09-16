@@ -9,7 +9,17 @@ import os from 'node:os'
 import fs from 'node:fs'
 import { createExitHandler } from './exit-session.mjs'
 import { sequenceStore, atomicWrite } from './state-file.mjs'
-import { deriveKeys, saltOf, signer, seal, bep44Verify, BOOTSTRAP, pskWarning } from './common.mjs'
+import {
+  deriveKeys,
+  asSlot,
+  slotSalt,
+  slotBoxKey,
+  signer,
+  seal,
+  bep44Verify,
+  BOOTSTRAP,
+  pskWarning
+} from './common.mjs'
 
 const SECRET = process.env.MAGNETGATE_PSK ?? process.env.PSK ?? process.argv[2]
 const DATA_PORT = parseInt(process.env.MAGNETGATE_PORT ?? process.argv[3] ?? '49001')
@@ -31,8 +41,24 @@ if (!SECRET) {
   if (w) console.log(ts(), `[warn] ${w}`)
 }
 
-const { pk, sk, boxKey } = deriveKeys(SECRET)
-const SALT = saltOf(SECRET)
+const { pk, sk } = deriveKeys(SECRET)
+// Multi-node: this node's slot in the shared rendezvous space. Slot 0 (the default) reproduces the
+// single-node values exactly, so nothing changes for an existing deployment.
+const NODE_SLOT = (() => {
+  try {
+    return asSlot(process.env.MAGNETGATE_NODE_SLOT ?? 0)
+  } catch (e) {
+    console.error(`[fatal] MAGNETGATE_NODE_SLOT: ${e.message}`)
+    process.exit(1)
+  }
+})()
+const NODE_NAME = String(process.env.MAGNETGATE_NODE_NAME ?? `slot${NODE_SLOT}`).slice(0, 40)
+const boxKey = slotBoxKey(SECRET, NODE_SLOT)
+const SALT = slotSalt(SECRET, NODE_SLOT)
+console.log(
+  ts(),
+  `[node] ${NODE_NAME} on slot ${NODE_SLOT}${NODE_SLOT === 0 ? ' (single-node layout)' : ''}`
+)
 
 // ---------- signaling (rendezvous: DHT + optional Nostr, same sealed offer) ----------
 let nostr = null
@@ -54,6 +80,8 @@ let dhtReady = false
 let failures = 0
 const health = {
   startedAt: ts(),
+  slot: NODE_SLOT,
+  node: NODE_NAME,
   nostr: nostr ? 'enabled' : 'disabled',
   publishedAt: null,
   ok: null,
@@ -113,7 +141,11 @@ function publish() {
   //   - Nostr: superset, includes the pinned hy2 endpoint (cert carried in dp.ca).
   // Each envelope has a random nonce and an authenticated channel/sequence domain.
   const dhtDp = [...extra.filter((d) => d.t !== 'hy2'), mgt]
-  const sealed = seal(boxKey, Buffer.from(JSON.stringify({ v: 3, ts: now, dp: dhtDp })), seq)
+  const sealed = seal(
+    boxKey,
+    Buffer.from(JSON.stringify({ v: 3, ts: now, slot: NODE_SLOT, node: NODE_NAME, dp: dhtDp })),
+    seq
+  )
   if (sealed.length > 950)
     console.log(ts(), `[warn] DHT offer ${sealed.length}B may exceed the ~1000B limit`)
   if (nostr) {
@@ -121,7 +153,7 @@ function publish() {
     const nseq = 'n' + seq
     const sealedNostr = seal(
       boxKey,
-      Buffer.from(JSON.stringify({ v: 3, ts: now, dp: nostrDp })),
+      Buffer.from(JSON.stringify({ v: 3, ts: now, slot: NODE_SLOT, node: NODE_NAME, dp: nostrDp })),
       nseq
     )
     nostr.publish(sealedNostr, nseq)

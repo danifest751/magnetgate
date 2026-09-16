@@ -1,7 +1,7 @@
 // Drift guard. Documentation and prose go stale silently; these invariants must not.
 //
 // A wrong `v` or a freshness window shorter than the publication interval does not fail any unit
-// test — it fails in the field, hours later, in a way that looks like "the exit disappeared".
+// test вЂ” it fails in the field, hours later, in a way that looks like "the exit disappeared".
 // Every number checked here is one that has already drifted at least once in this project.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -37,7 +37,7 @@ test('drift: every wire version in the code agrees with the advertised one', () 
 })
 
 test('drift: the sealed offer schema version matches on both sides', () => {
-  const sealed = pick(exit, /JSON\.stringify\(\{ v: (\d+), ts: now, dp: dhtDp \}\)/, 'the sealed offer schema')
+  const sealed = pick(exit, /JSON\.stringify\(\{ v: (\d+), ts: now, slot:/, 'the sealed offer schema')
   const accepted = pick(client, /o\.v !== (\d+)/, 'the offer schema the client accepts')
   assert.equal(sealed, accepted, 'the exit seals offer v' + sealed + ' but the client only accepts v' + accepted)
 })
@@ -74,4 +74,14 @@ test('drift: the documented Node version matches the engines field', () => {
   const readme = read('README.md')
   assert.ok(readme.includes(engines.match(/\d+\.\d+/)[0]), `README.md does not state the required Node ${engines}`)
   assert.ok(!/Node\.js 1[0-8]\b/.test(readme), 'README.md still recommends an unsupported Node version')
+})
+
+test('drift: the slot range is the same on both sides', () => {
+  const commonLimit = pick(common, /export const MAX_SLOTS = (\d+)/, 'MAX_SLOTS in common.mjs')
+  const configLimit = pick(config, /const MAX_SLOTS = (\d+)/, 'MAX_SLOTS in config.cjs')
+  assert.equal(
+    commonLimit,
+    configLimit,
+    'the client/protocol slot range and the config validator disagree'
+  )
 })

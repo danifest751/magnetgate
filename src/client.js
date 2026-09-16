@@ -6,7 +6,10 @@ import net from 'node:net'
 import fs from 'node:fs'
 import {
   deriveKeys,
+  asSlot,
   saltOf,
+  slotSalt,
+  slotBoxKey,
   targetOf,
   unseal,
   bep44Verify,
@@ -66,6 +69,15 @@ let cfg = {
     cfg.localPort = parseInt(process.argv[3] ?? '1080')
 }
 
+// Multi-node: MAGNETGATE_SLOTS=0,1 expands ONE PSK into one rendezvous entry per slot
+// (docs/design-multi-node.md). Explicit exits[] entries keep working exactly as before, and an
+// entry that carries its own `salt` still wins over the slot derivation.
+{
+  const env = process.env.MAGNETGATE_SLOTS
+  if (env && !cfg.slots?.length) cfg.slots = env.split(',').map((s) => s.trim()).filter(Boolean)
+  if (cfg.slots?.length && !cfg.exits.length)
+    console.log(ts(), '[warn] slots are set but no PSK was configured — ignoring them')
+}
 cfg = validateConfig(cfg)
 if (process.env.MAGNETGATE_NATIVE_ONLY === '1') cfg.dataPlane = 'mgt'
 const rules = { direct: cfg.rules.direct ?? [], proxy: cfg.rules.proxy ?? [] }
@@ -79,14 +91,29 @@ function decide(host) {
 }
 
 // ---------- exits: keys, discovery, session pool ----------
-const exits = cfg.exits.map((e, i) => {
+const wanted =
+  cfg.slots?.length && cfg.exits.length
+    ? cfg.slots.map((slot) => ({
+        name: `${cfg.exits[0].name ?? 'exit'}#${slot}`,
+        psk: cfg.exits[0].psk,
+        slot
+      }))
+    : cfg.exits
+const exits = wanted.map((e, i) => {
   const w = pskWarning(e.psk)
   if (w) console.log(ts(), `[warn] exit ${e.name ?? i}: ${w}`)
-  const { pk, boxKey } = deriveKeys(e.psk)
-  const salt = e.salt ? Buffer.from(e.salt, 'hex') : saltOf(e.psk)
+  const { pk } = deriveKeys(e.psk)
+  const slot = e.slot === undefined ? undefined : asSlot(e.slot)
+  const salt = e.salt
+    ? Buffer.from(e.salt, 'hex')
+    : slot === undefined
+      ? saltOf(e.psk)
+      : slotSalt(e.psk, slot)
+  const boxKey = slot === undefined ? deriveKeys(e.psk).boxKey : slotBoxKey(e.psk, slot)
   return {
     id: i,
     name: e.name ?? `exit${i}`,
+    slot,
     psk: e.psk,
     pk,
     boxKey,
@@ -137,18 +164,26 @@ function writeDpOut() {
 function handleOffer(e, o) {
   if (!o || o.v !== 3 || !Number.isFinite(o.ts)) return
   if (Date.now() - o.ts >= OFFER_TTL_MS || o.ts - Date.now() > 60000) return
+  // A slot-derived entry accepts only the record published for its own slot. Every node holds the
+  // shared PSK, so it can read any slot, but each writes just its own (and under its own per-slot
+  // key) — this check keeps a mis-published record from being served as the wrong node.
+  if (e.slot !== undefined && o.slot !== undefined && Number(o.slot) !== e.slot) return
   const merged = mergeOffer(e.offer, o)
   if (!merged) return
   const dp = pickDp(merged, DP_PREFERENCE)
   if (!dp) return
   const isNew = !e.offer || e.offer.ts !== merged.ts
   e.offer = merged
+  // remember the node name the offer declares: with several nodes on one PSK the config label is a
+  // slot ("lab#0"), which says nothing about which machine actually served a request
+  if (merged.node) e.node = String(merged.node).slice(0, 40)
   if (isNew) {
     // the planes this generation advertises; without them the line reads "via mgt" even when the
     // desktop is carrying traffic over reality/hysteria2, because the app runs this child with
     // MAGNETGATE_NATIVE_ONLY=1 and the child's own preference is not what the tunnel uses.
     const planes = merged.dp.map((d) => d.t).join('+')
-    console.log(ts(), `[rv] offer[${e.name}] via ${dp.t}: ${dp.host}:${dp.port} (planes: ${planes})`)
+    const label = merged.node ? `${e.name}=${merged.node}` : e.name
+    console.log(ts(), `[rv] offer[${label}] via ${dp.t}: ${dp.host}:${dp.port} (planes: ${planes})`)
   }
   // publish the merged endpoints for an external engine; fires on the first offer and whenever the
   // set changes (a same-generation Nostr offer adding hy2, or a rotation changing creds).
@@ -278,7 +313,16 @@ async function routeFn(target, app) {
           throw new Error('request cancelled')
         }
         rr = (rr + i + 1) % candidates.length
-        console.log(ts(), '[socks]', hostForLog(target.host), 'via', type, 'exit', exit.name)
+        console.log(
+          ts(),
+          '[socks]',
+          hostForLog(target.host),
+          'via',
+          type,
+          'exit',
+          exit.name,
+          ...(exit.node && exit.node !== exit.name ? ['node', exit.node] : [])
+        )
         return result
       } catch (err) {
         lastError = err

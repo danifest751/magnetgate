@@ -12,7 +12,8 @@ const DEFAULT_CONFIG = {
   dataPlane: 'auto',
   transport: 'tcp',
   killSwitch: false,
-  directProcesses: []
+  directProcesses: [],
+  slots: []
 }
 const domains = (list) => {
   if (!Array.isArray(list) || list.length > 10000) throw new Error('invalid domain list')
@@ -43,6 +44,22 @@ const processes = (list) => {
       })
     )
   ]
+}
+// Multi-node: which rendezvous slots to look for or publish on. 0 is the single-node slot; the
+// upper bound must stay equal to MAX_SLOTS in src/common.mjs (tests/consistency.test.mjs checks it).
+const MAX_SLOTS = 16
+const slots = (list) => {
+  if (!Array.isArray(list) || list.length > MAX_SLOTS) throw new Error('invalid slot list')
+  return [
+    ...new Set(
+      list.map((value) => {
+        // the config file is JSON, so a slot is a number here (env vars are handled in common.mjs)
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value >= MAX_SLOTS)
+          throw new Error(`invalid slot: ${value}`)
+        return value
+      })
+    )
+  ].sort((a, b) => a - b)
 }
 function validateConfig(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -86,6 +103,7 @@ function validateConfig(value) {
   cfg.directDomains = domains(cfg.directDomains)
   cfg.tunnelDomains = domains(cfg.tunnelDomains)
   cfg.directProcesses = processes(cfg.directProcesses)
+  cfg.slots = slots(cfg.slots)
   cfg.rules = { direct: domains(cfg.rules?.direct || []), proxy: domains(cfg.rules?.proxy || []) }
   return cfg
 }
