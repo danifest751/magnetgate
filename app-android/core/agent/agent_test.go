@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -130,10 +131,43 @@ func TestPeerSlotsAreLearnedAndThenPolled(t *testing.T) {
 	if got := a.Slots(); len(got) != 2 || got[0] != 0 || got[1] != 1 {
 		t.Fatalf("slots after learning: %v", got)
 	}
-	a.PollAll(context.Background())
+	a.PollOnce(context.Background(), nil)
 	endpoints := a.Endpoints()
 	if len(endpoints) != 2 || endpoints[1].Port != 29602 {
 		t.Fatalf("endpoints: %+v", endpoints)
+	}
+}
+
+// Run is how an app keeps its view current: it polls until the context ends, at the fast interval while
+// something is missing and the slow one afterwards.
+func TestRunKeepsPollingUntilTheContextEnds(t *testing.T) {
+	channel := newFakeChannel()
+	channel.put(t, testPSK, 0, 1, offerDoc(0, "lab-a", nil, 29601))
+	a, err := New(Config{PSK: testPSK, Slots: []int{0}, Getter: channel, Fast: time.Millisecond, Slow: time.Millisecond})
+	if err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var polls int32
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.Run(ctx, func(*Record) { atomic.AddInt32(&polls, 1) })
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for atomic.LoadInt32(&polls) < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Run stopped polling after %d poll(s)", atomic.LoadInt32(&polls))
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop when the context ended")
 	}
 }
 

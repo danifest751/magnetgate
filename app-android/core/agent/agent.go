@@ -24,6 +24,14 @@ import (
 // publishes every 60 s, so twelve minutes of silence means it is gone.
 const DefaultFresh = 12 * time.Minute
 
+// The poll intervals: the fast one while some slot has no usable record yet, the slow one once they all
+// do. They mirror POLL_FAST_MS and POLL_SLOW_MS in src/client.js — a node that is not there yet must
+// not be waited for at half a minute, and one that is there must not be polled every three seconds.
+const (
+	DefaultFast = 3 * time.Second
+	DefaultSlow = 30 * time.Second
+)
+
 // futureSkew is how far ahead of us an offer's timestamp may be before it is refused, matching the
 // tolerance src/client.js applies (60000 ms).
 const futureSkew = time.Minute
@@ -57,6 +65,8 @@ type Config struct {
 	Getter   Getter
 	MaxSlots int
 	Fresh    time.Duration
+	Fast     time.Duration
+	Slow     time.Duration
 	Logf     func(format string, args ...any)
 	Now      func() time.Time
 }
@@ -91,6 +101,12 @@ func New(cfg Config) (*Agent, error) {
 	}
 	if cfg.Fresh <= 0 {
 		cfg.Fresh = DefaultFresh
+	}
+	if cfg.Fast <= 0 {
+		cfg.Fast = DefaultFast
+	}
+	if cfg.Slow <= 0 {
+		cfg.Slow = DefaultSlow
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -162,13 +178,42 @@ func (a *Agent) Endpoints() []Endpoint {
 	return out
 }
 
-// PollAll polls every known slot once. Slots are visited in order; a slot that is not published yet is
-// not an error, it is the normal state before a node comes up.
-func (a *Agent) PollAll(ctx context.Context) {
+// PollOnce polls every known slot once and hands each fresh record to onRecord (which may be nil). It
+// returns whether any slot is still missing or stale, which is what picks the next interval.
+//
+// A slot that is not published yet is not an error, it is the normal state before a node comes up; any
+// other failure is logged. Slots learned from `peers` join the rotation on the next pass.
+func (a *Agent) PollOnce(ctx context.Context, onRecord func(*Record)) (missing bool) {
 	for _, slot := range a.Slots() {
-		_, err := a.Poll(ctx, slot)
-		if err != nil && !errors.Is(err, ErrNotPublished) {
-			a.logf("slot %d: %v", slot, err)
+		record, err := a.Poll(ctx, slot)
+		if err != nil {
+			if !errors.Is(err, ErrNotPublished) {
+				a.logf("slot %d: %v", slot, err)
+			}
+			missing = true
+			continue
+		}
+		if onRecord != nil {
+			onRecord(record)
+		}
+	}
+	return missing
+}
+
+// Run polls until ctx is done: at the fast interval while a slot is missing or stale, at the slow one
+// once every slot carries a fresh offer. This is how an app keeps its view of the exit set current
+// without hammering the DHT, and why a node that has just come up is noticed quickly.
+func (a *Agent) Run(ctx context.Context, onRecord func(*Record)) {
+	for {
+		missing := a.PollOnce(ctx, onRecord)
+		delay := a.cfg.Slow
+		if missing {
+			delay = a.cfg.Fast
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
 		}
 	}
 }

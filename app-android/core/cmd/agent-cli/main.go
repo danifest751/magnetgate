@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -26,185 +27,19 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"magnetgate/core/agent"
 	"magnetgate/core/dht"
+	"magnetgate/core/offer"
+	"magnetgate/core/pool"
 	"magnetgate/core/proto"
-	"magnetgate/core/session"
 	"magnetgate/core/socks"
 )
 
-// endpoint is one native transport of an exit.
-type endpoint struct {
-	host string
-	port int
-	slot int
-}
-
-// direct is the data plane: native sessions to whichever exits are known, reopened on demand. With
-// -exit there is one; otherwise the rendezvous fills the list and a request falls through to the next
-// candidate when one dies, which is what makes a node failure survivable.
-type direct struct {
-	psk   string
-	mu    sync.Mutex
-	exits []endpoint
-	live  map[string]*session.Session
-	// connecting holds the in-flight connect per exit, so two requests arriving together share one
-	// handshake without blocking everybody else on it
-	connecting map[string]chan struct{}
-	keys       map[int]*[32]byte
-}
-
-func newDirect(psk string, exits []endpoint) *direct {
-	return &direct{
-		psk:        psk,
-		exits:      exits,
-		live:       map[string]*session.Session{},
-		connecting: map[string]chan struct{}{},
-		keys:       map[int]*[32]byte{},
-	}
-}
-
-func (d *direct) dial(ctx context.Context, host string, port int) (socks.Conn, error) {
-	var lastErr error
-	for _, exit := range d.candidates() {
-		s, err := d.session(ctx, exit)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		stream, err := s.OpenStream(ctx, session.Target{Host: host, Port: port})
-		if err != nil {
-			// A stream failure is usually about this one target — the exit could not reach it, or the
-			// open timed out — and must not cost every other stream its session. Only a dead session
-			// takes the session down; that is exactly what isSessionFailure separates.
-			if isSessionFailure(err) {
-				d.drop(exit, s)
-			}
-			lastErr = err
-			continue
-		}
-		return stream, nil
-	}
-	if lastErr == nil {
-		lastErr = errors.New("no exit to dial through")
-	}
-	return nil, lastErr
-}
-
-// isSessionFailure tells a dead session apart from a refused stream.
-func isSessionFailure(err error) bool {
-	if errors.Is(err, session.ErrSessionClosed) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
-		return true
-	}
-	// a write to a socket the peer has reset or closed surfaces as a net operation error
-	var opErr *net.OpError
-	return errors.As(err, &opErr)
-}
-
-func (d *direct) candidates() []endpoint {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return append([]endpoint(nil), d.exits...)
-}
-
-// boxKey derives the box key of a slot once. Every exit seals its handshake with the key of its own
-// slot, so a node learned on slot 1 is unreachable with slot 0's key.
-func (d *direct) boxKey(slot int) (*[32]byte, error) {
-	d.mu.Lock()
-	if key := d.keys[slot]; key != nil {
-		d.mu.Unlock()
-		return key, nil
-	}
-	d.mu.Unlock()
-
-	key, err := proto.SlotBoxKey(d.psk, slot)
-	if err != nil {
-		return nil, err
-	}
-	d.mu.Lock()
-	if existing := d.keys[slot]; existing != nil {
-		d.mu.Unlock()
-		return existing, nil
-	}
-	d.keys[slot] = &key
-	d.mu.Unlock()
-	return &key, nil
-}
-
-// session returns the live session to an exit, connecting it once. The handshake runs outside the lock:
-// holding it across a dial would queue every other stream behind one slow or black-holed node.
-func (d *direct) session(ctx context.Context, exit endpoint) (*session.Session, error) {
-	key := net.JoinHostPort(exit.host, strconv.Itoa(exit.port))
-	for {
-		d.mu.Lock()
-		if s := d.live[key]; s != nil {
-			d.mu.Unlock()
-			return s, nil
-		}
-		if pending, ok := d.connecting[key]; ok {
-			d.mu.Unlock()
-			select {
-			case <-pending:
-				continue // the other caller either connected it or failed; look again
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		pending := make(chan struct{})
-		d.connecting[key] = pending
-		d.mu.Unlock()
-
-		boxKey, err := d.boxKey(exit.slot)
-		var s *session.Session
-		if err == nil {
-			s, err = session.Connect(ctx, exit.host, exit.port, boxKey)
-		}
-
-		d.mu.Lock()
-		delete(d.connecting, key)
-		if err == nil {
-			s.SetOnClose(func() { d.drop(exit, s) })
-			d.live[key] = s
-		}
-		d.mu.Unlock()
-		close(pending)
-
-		if err != nil {
-			return nil, err
-		}
-		return s, nil
-	}
-}
-
-func (d *direct) drop(exit endpoint, s *session.Session) {
-	key := net.JoinHostPort(exit.host, strconv.Itoa(exit.port))
-	d.mu.Lock()
-	known := d.live[key]
-	if known == s {
-		delete(d.live, key)
-	}
-	d.mu.Unlock()
-	if known == s {
-		s.Close()
-	}
-}
-
-func (d *direct) close() {
-	d.mu.Lock()
-	sessions := make([]*session.Session, 0, len(d.live))
-	for _, s := range d.live {
-		sessions = append(sessions, s)
-	}
-	d.live = map[string]*session.Session{}
-	d.mu.Unlock()
-	for _, s := range sessions {
-		s.Close()
-	}
-}
+// The data plane itself lives in core/pool: this tool only wires it, because the same wiring is what
+// the app needs (a rendezvous feeding a pool of nodes, and a SOCKS listener on top of it).
 
 func main() {
 	exitAddr := flag.String("exit", "", "native endpoint of a known exit, host:port (skips the rendezvous)")
@@ -215,50 +50,79 @@ func main() {
 	flag.Var(&checks, "check", "fetch this URL through the tunnel and print the result (repeatable)")
 	pskFile := flag.String("psk-file", "", "read the PSK from this file instead of MG_PSK")
 	hold := flag.Duration("hold", 0, "keep serving for this long after the check")
+	every := flag.Duration("every", 0, "with -hold, repeat the checks at this interval")
 	timeout := flag.Duration("timeout", 30*time.Second, "budget for each -check")
 	discover := flag.Duration("discover", 45*time.Second, "how long to wait for an offer before giving up")
+	snapshotPath := flag.String("snapshot", "", "write the diagnostics snapshot here when it changes")
 	flag.Parse()
 
 	psk, err := readPSK(*pskFile)
 	if err != nil {
 		fail(err)
 	}
-	// deriving the keys validates the PSK up front rather than halfway into the rendezvous
-	if _, err := proto.DeriveKeys(psk); err != nil {
-		fail(err)
-	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	logf := func(format string, args ...any) {
 		fmt.Fprintf(os.Stderr, "[rv] "+format+"\n", args...)
 	}
+	// the data-plane log goes to stdout: which plane and node carried each stream is what the stand
+	// asserts on, and it is the same line the desktop client prints
+	planeLog := func(format string, args ...any) {
+		fmt.Printf("[dp] "+format+"\n", args...)
+	}
 
-	exits, err := findExits(*exitAddr, *slotsFlag, *bootstrap, psk, *discover, logf)
+	native, err := pool.NewNative(psk)
 	if err != nil {
 		fail(err)
 	}
-	for _, exit := range exits {
-		fmt.Printf("exit slot %d at %s:%d\n", exit.slot, exit.host, exit.port)
+	defer native.Close()
+	plane := pool.New(pool.Config{
+		Preference: splitList("mgt"), // libbox planes (reality, hy2) are added by the app
+		Connectors: map[string]pool.Connector{"mgt": native},
+		Logf:       planeLog,
+	})
+
+	if *exitAddr != "" {
+		host, port, err := splitHostPort(*exitAddr)
+		if err != nil {
+			fail(err)
+		}
+		node := directNode(host, port, 0)
+		plane.Update(node)
+		go keepSeeding(ctx, plane, node)
+		fmt.Printf("exit slot 0 at %s:%d\n", host, port)
+	} else {
+		if *bootstrap == "" {
+			fail(errors.New("either -exit or -bootstrap is required"))
+		}
+		if err := startRendezvous(ctx, plane, psk, *slotsFlag, *bootstrap, *discover, logf); err != nil {
+			fail(err)
+		}
+		for _, node := range plane.Nodes() {
+			host, port, ok := nativeEndpoint(node)
+			if !ok {
+				continue
+			}
+			fmt.Printf("exit slot %d at %s:%d\n", node.Slot, host, port)
+		}
 	}
 
-	plane := newDirect(psk, exits)
-	defer plane.close()
-
-	server, err := socks.Listen(*socksPort, plane.dial)
+	server, err := socks.Listen(*socksPort, func(ctx context.Context, host string, port int) (socks.Conn, error) {
+		return plane.Dial(ctx, host, port)
+	})
 	if err != nil {
 		fail(err)
 	}
 	defer server.Close()
 	fmt.Printf("socks 127.0.0.1:%d\n", portOf(server.Addr()))
 
-	failed := false
-	for _, url := range checks {
-		ctx, cancel := context.WithTimeout(context.Background(), *timeout)
-		if err := check(ctx, server.Addr().String(), url); err != nil {
-			fmt.Fprintf(os.Stderr, "check failed: %v\n", err)
-			failed = true
-		}
-		cancel()
+	if *snapshotPath != "" {
+		go writeSnapshots(ctx, plane, *snapshotPath)
 	}
+
+	failed := runChecks(ctx, server.Addr().String(), checks, *every, *hold, *timeout)
 
 	if *hold > 0 {
 		stopping := make(chan os.Signal, 1)
@@ -273,61 +137,161 @@ func main() {
 	}
 }
 
-// findExits resolves where to dial: a known endpoint, or the rendezvous. The rendezvous polls the
-// configured slots until an offer appears, so a node that is slow to publish is not a failure.
-func findExits(exitAddr, slotsFlag, bootstrap, psk string, budget time.Duration, logf func(string, ...any)) ([]endpoint, error) {
-	if exitAddr != "" {
-		host, port, err := splitHostPort(exitAddr)
-		if err != nil {
-			return nil, err
-		}
-		return []endpoint{{host: host, port: port}}, nil
+// runChecks fetches every URL once, or repeatedly until the hold expires when -every is set. In repeat
+// mode the exit code reflects the last round: the point of running for a while is to survive a change
+// in the middle (a node dying, a plane being blocked), not to be pristine at every instant.
+func runChecks(ctx context.Context, proxyAddr string, urls []string, every, hold, timeout time.Duration) bool {
+	if len(urls) == 0 {
+		return false
 	}
-	if bootstrap == "" {
-		return nil, errors.New("either -exit or -bootstrap is required")
-	}
-	slots, err := parseSlots(slotsFlag)
-	if err != nil {
-		return nil, err
-	}
-	channel, err := dht.New(dht.Config{
-		Bootstrap: splitList(bootstrap),
-		Passive:   true,
-		Logf:      func(format string, args ...any) { logf(format, args...) },
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer channel.Close()
-
-	discovery, err := agent.New(agent.Config{PSK: psk, Slots: slots, Getter: channel, Logf: logf})
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	defer cancel()
-	deadline := time.Now().Add(budget)
+	deadline := time.Now().Add(hold)
+	failed := false
 	for {
-		discovery.PollAll(ctx)
-		for _, record := range discovery.Records() {
-			logf("slot %d: offer from %q (country %q, planes %v, seq %d)",
-				record.Slot, record.Node, record.Country, record.Offer.Types(), record.Seq)
-		}
-		if found := discovery.Endpoints(); len(found) > 0 {
-			exits := make([]endpoint, 0, len(found))
-			for _, e := range found {
-				exits = append(exits, endpoint{host: e.Host, port: e.Port, slot: e.Slot})
+		for _, url := range urls {
+			attempt, cancel := context.WithTimeout(ctx, timeout)
+			err := check(attempt, proxyAddr, url)
+			cancel()
+			failed = err != nil
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "check failed: %v\n", err)
 			}
-			return exits, nil
 		}
-		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("no usable offer after %s (slots %v)", budget, discovery.Slots())
+		if every <= 0 || hold <= 0 || time.Now().After(deadline) {
+			return failed
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(3 * time.Second):
+			return failed
+		case <-time.After(every):
+		}
+	}
+}
+
+// startRendezvous wires the DHT channel to an agent and runs the poll loop, then waits for the first
+// usable node so a caller does not have to sit through an arbitrary sleep.
+func startRendezvous(ctx context.Context, plane *pool.Pool, psk, slotsFlag, bootstrap string, budget time.Duration, logf func(string, ...any)) error {
+	slots, err := parseSlots(slotsFlag)
+	if err != nil {
+		return err
+	}
+	channel, err := dht.New(dht.Config{Bootstrap: splitList(bootstrap), Passive: true, Logf: logf})
+	if err != nil {
+		return err
+	}
+	rendezvous, err := agent.New(agent.Config{PSK: psk, Slots: slots, Getter: channel, Logf: logf})
+	if err != nil {
+		channel.Close()
+		return err
+	}
+
+	// one line per generation, not one per poll: the loop runs every few seconds
+	lastLogged := map[int]int64{}
+	go rendezvous.Run(ctx, func(record *agent.Record) {
+		plane.Update(pool.Node{Slot: record.Slot, Name: record.Node, Offer: record.Offer, Seen: record.Seen})
+		if lastLogged[record.Slot] != record.Offer.TS {
+			lastLogged[record.Slot] = record.Offer.TS
+			logf("slot %d: offer from %q (country %q, planes %v, seq %d)",
+				record.Slot, record.Node, record.Country, record.Offer.Types(), record.Seq)
+		}
+	})
+
+	deadline := time.Now().Add(budget)
+	for {
+		if len(plane.Nodes()) > 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			channel.Close()
+			return fmt.Errorf("no usable offer after %s (slots %v)", budget, rendezvous.Slots())
+		}
+		select {
+		case <-ctx.Done():
+			channel.Close()
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// directNode is the synthetic record for -exit: an endpoint from the command line is a node whose offer
+// is made up here, so everything downstream can treat the two cases the same.
+func directNode(host string, port, slot int) pool.Node {
+	dp, _ := json.Marshal(map[string]any{"t": "mgt", "protocol": 4, "host": host, "port": port})
+	slotValue := slot
+	return pool.Node{
+		Slot: slot,
+		Name: "direct",
+		Offer: &offer.Offer{
+			V:    offer.Schema,
+			TS:   time.Now().UnixMilli(),
+			Slot: &slotValue,
+			Node: "direct",
+			DP:   []json.RawMessage{dp},
+		},
+		Seen: time.Now(),
+	}
+}
+
+// keepSeeding refreshes a synthetic node: "seen now" is the truth for an endpoint that comes from the
+// command line and cannot go stale the way a published offer does.
+func keepSeeding(ctx context.Context, plane *pool.Pool, node pool.Node) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			fresh := directNode("", 0, node.Slot)
+			if host, port, ok := nativeEndpoint(node); ok {
+				fresh = directNode(host, port, node.Slot)
+			}
+			plane.Update(fresh)
+		}
+	}
+}
+
+// nativeEndpoint reads the mgt entry out of an offer.
+func nativeEndpoint(node pool.Node) (string, int, bool) {
+	raw := node.Offer.Pick([]string{"mgt"})
+	if raw == nil {
+		return "", 0, false
+	}
+	var entry struct {
+		Host string `json:"host"`
+		Port int    `json:"port"`
+	}
+	if err := json.Unmarshal(raw, &entry); err != nil || entry.Host == "" || entry.Port == 0 {
+		return "", 0, false
+	}
+	return entry.Host, entry.Port, true
+}
+
+// writeSnapshots keeps a diagnostics file current, the same way the desktop publishes what sing-box
+// needs: rewritten only when something actually changed, and replaced atomically so a reader never sees
+// a half-written file.
+func writeSnapshots(ctx context.Context, plane *pool.Pool, path string) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	var last string
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			encoded, err := json.Marshal(plane.Snapshot())
+			if err != nil || string(encoded) == last {
+				continue
+			}
+			last = string(encoded)
+			tmp := path + ".tmp"
+			if err := os.WriteFile(tmp, encoded, 0o600); err != nil {
+				fmt.Fprintf(os.Stderr, "snapshot: %v\n", err)
+				continue
+			}
+			if err := os.Rename(tmp, path); err != nil {
+				fmt.Fprintf(os.Stderr, "snapshot: %v\n", err)
+			}
 		}
 	}
 }
