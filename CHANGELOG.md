@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Desktop 0.3.3 — traffic volume (2026-09-16)
+
+- The status line showed only the current speed, so there was no way to see how much had actually gone
+  through. It now reads
+  `Трафик ↑ 1.2 МБ / ↓ 44.7 ГБ · скорость ↑ 12.2 КБ/с / ↓ 1.0 МБ/с · Соединений: 7`.
+  The volume is folded across engine restarts (a mode switch or a credential rotation restarts
+  sing-box and resets its counters, which would otherwise drop the number back to zero mid-session)
+  and is reset on Connect, so the line means "this connection". The logic lives in `app/stats.cjs` and
+  is unit-tested.
+- Artifact: `app/dist/magnetgate-0.3.3.exe`, SHA-256
+  `ab3eff0fd5b8dd02bcc856c761dfea7d38ca3ce5449e1e02db8b3b1dfacaf7a7` — carries every change listed
+  above for today (multi-node slots and `peers`, per-slot Nostr tags, per-process tunnel exceptions,
+  the log-noise filter and this volume line).
+
 ### Multi-node slots (unreleased)
 
 Phase 0 of `docs/design-multi-node.md` (internal): two exits can share one PSK and a client finds both,
