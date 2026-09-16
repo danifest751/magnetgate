@@ -295,9 +295,23 @@ async function publishOnce() {
   )
 }
 
-dht.listen(() =>
-  console.log(ts(), `[dht] node on port ${dht.address().port}, bootstrap=${BOOTSTRAP.join(',')}`)
-)
+// A DHT node that cannot be reached from outside still publishes: it queries, gets replies through
+// conntrack and reports a successful put. What it cannot do is learn the network — nobody can ask it
+// anything, so its routing table stays tiny and the "closest nodes to the target" it stores the offer
+// on are nowhere near the real ones. The record then exists on nodes no lookup ever visits, and a
+// client sees a stale offer or none at all while the exit's log says "published". Binding an ephemeral
+// port made that the default, because no firewall can allow a port that changes on every restart.
+// Set MAGNETGATE_DHT_PORT to a port that is actually open (0 keeps the old random behaviour).
+const DHT_PORT = parseInt(process.env.MAGNETGATE_DHT_PORT ?? '0') || 0
+dht.listen(DHT_PORT, () => {
+  const bound = dht.address().port
+  console.log(ts(), `[dht] node on port ${bound}, bootstrap=${BOOTSTRAP.join(',')}`)
+  if (!DHT_PORT)
+    console.log(
+      ts(),
+      `[warn] the DHT port is ephemeral (${bound}) — it changes on restart and cannot be opened in a firewall; set MAGNETGATE_DHT_PORT`
+    )
+})
 dht.on('ready', () => {
   dhtReady = true
   writeHealth({ dhtReady: true })
