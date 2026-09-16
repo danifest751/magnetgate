@@ -22,6 +22,16 @@ data class DiscoveredNode(val slot: Int, val planes: List<JSONObject>)
 object SingBoxConfig {
   const val TUN_ADDRESS_V4 = "172.19.0.1/30"
 
+  /**
+   * The tun needs an IPv6 address even though nothing is carried over IPv6, and this is the whole
+   * point: without one the platform adds no `::/0` route, so IPv6 traffic never enters the tunnel and
+   * leaves the device directly. In full mode that is a silent leak - the user believes everything is
+   * tunnelled while every IPv6-capable destination is reached in the clear. Claiming the route and then
+   * rejecting the traffic (see the ip_version rule below) makes applications fall back to IPv4 instead,
+   * which is what the desktop has always done.
+   */
+  const val TUN_ADDRESS_V6 = "fdfe:dcba:9876::1/126"
+
   /** The configuration, and the plane-to-port mapping the core has to be told about. */
   data class Built(val json: String, val planes: List<EnginePlane>)
 
@@ -76,7 +86,7 @@ object SingBoxConfig {
     val tun = JSONObject()
       .put("type", "tun")
       .put("tag", "tun")
-      .put("address", JSONArray().put(TUN_ADDRESS_V4))
+      .put("address", JSONArray().put(TUN_ADDRESS_V4).put(TUN_ADDRESS_V6))
       // 1400, the same as the desktop (app/vpn-config.cjs). A full 1500 leaves no room for what the
       // data plane wraps around it - reality adds TLS and TCP headers - so the outer packet exceeds the
       // path MTU and is dropped. Small packets still pass, which is why a connection opens and then
@@ -121,6 +131,12 @@ object SingBoxConfig {
     //         list is never consulted here: a bundled file must not silently bypass the tunnel, whatever
     //         it is called. This is the safe default.
     // SPLIT - the tunnel takes what the rule-sets and the user's tunnel list name; the rest goes direct.
+    // Rejected, not routed: every endpoint a node advertises is IPv4, so an IPv6 destination has
+    // nowhere to go through the tunnel. Rejecting it makes an application fall back to IPv4 at once,
+    // while letting it out would be the leak the tun's IPv6 address exists to prevent. This sits ahead
+    // of the mode rules so neither mode can send it anywhere.
+    rules.put(JSONObject().put("ip_version", 6).put("action", "reject"))
+
     val ruleSetDefs = JSONArray()
     if (mode == Settings.Mode.SPLIT) {
       for (set in ruleSets) {
