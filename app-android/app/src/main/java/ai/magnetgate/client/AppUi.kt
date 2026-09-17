@@ -191,18 +191,25 @@ fun AppRoot(
         recordAutotest(context, "fail no-psk")
         return@LaunchedEffect
       }
-      val port = startCore()
-      if (port == 0) {
-        recordAutotest(context, "fail start ${status.error}")
-        return@LaunchedEffect
-      }
-      // give discovery a bounded chance, then use the tunnel the core offers
-      var attempts = 0
-      while (attempts < 40) {
-        attempts++
-        if (status.nodes.isNotEmpty()) break
-        delay(1500)
-        status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(status)
+      // The core has exactly one owner. When a tunnel is asked for it is the service: it starts the core
+      // itself, waits for a node and hands the engine that port. A second Start from here replaces the
+      // core and leaves the engine dialling a port nothing is listening on - the tun stays up, the node
+      // list stays healthy, and not a byte moves. Measured on 17.09: the service's core was on 41485 and
+      // the screen replaced it with 38639 two tenths of a second later.
+      if (!vpn) {
+        val started = startCore()
+        if (started == 0) {
+          recordAutotest(context, "fail start ${status.error}")
+          return@LaunchedEffect
+        }
+        // give discovery a bounded chance; with a tunnel the service does this waiting itself
+        var attempts = 0
+        while (attempts < 40) {
+          attempts++
+          if (status.nodes.isNotEmpty()) break
+          delay(1500)
+          status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(status)
+        }
       }
       // When a tunnel is asked for, bring it up BEFORE measuring the egress. Without the engine the
       // core can only use its own native plane, and on a mobile network that port is often blocked -
@@ -226,11 +233,13 @@ fun AppRoot(
           status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(status)
         }
       }
-      // Never reuse the port this call was handed: the core replaces itself on a second Start, and
-      // there are two callers - this screen and MgVpnService. Bringing the tunnel up above does exactly
-      // that, so the port from before is dead. The status document is the live truth.
-      val live = status.socksPort.takeIf { it != 0 } ?: port
-      if (live != port) Log.i(TAG, "the core moved from port $port to $live")
+      // The status document is the live truth about where the core listens, whoever started it.
+      status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(status)
+      val live = status.socksPort
+      if (live == 0) {
+        recordAutotest(context, "fail no-core ${status.error}")
+        return@LaunchedEffect
+      }
       checkEgress(live)
       recordAutotest(context, "port=$live $egress")
     }
@@ -723,6 +732,12 @@ private fun label(manager: android.content.pm.PackageManager, info: ApplicationI
 /** Brings the core up with the given configuration and returns its SOCKS port, or 0 on failure. */
 private suspend fun bringCoreUp(psk: String, slots: String, bootstrap: String, relays: String): Int =
   withContext(Dispatchers.IO) {
+    // the service owns the core whenever it is starting or running; starting a second one would replace
+    // it and strand the engine on a dead port
+    if (MgVpnService.ownsCore()) {
+      Log.i(TAG, "the service owns the core; not starting another")
+      return@withContext runCatching { CoreStatus.parse(Mgbox.coreStatus()).socksPort }.getOrDefault(0)
+    }
     runCatching {
       val port = Mgbox.startCore(
         CoreConfig.json(

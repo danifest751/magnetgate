@@ -49,10 +49,20 @@ class MgVpnService : VpnService() {
 
     /** Whether a tunnel is up, for the screen. */
     fun isRunning(): Boolean = current?.running == true
+
+    /**
+     * Whether the service owns the core - already, or in a moment.
+     *
+     * [isRunning] turns true only once the engine is up, roughly a second after the service has started
+     * the core. Anything that asks "may I start a core?" has to use this instead: in that second the
+     * screen started a second core, the engine was handed the port of the first, and the tunnel carried
+     * nothing while looking perfectly healthy.
+     */
+    fun ownsCore(): Boolean = current?.let { it.running || it.starting } == true
   }
 
-  private var running = false
-  private var starting = false
+  internal var running = false
+  internal var starting = false
   private var watching = false
 
   /** The manifest already acted on to a settled end, so it is not worked through again every tick. */
