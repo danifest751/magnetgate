@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Android: DNS through the tunnel, resolved to IPv4 only (2026-09-17)
+
+- The resolver was plain UDP pointed through the core's SOCKS entry point, which answers CONNECT and
+  refuses UDP ASSOCIATE on purpose - the Android data plane is TCP - so it could never have worked.
+  It is DNS-over-HTTPS now, which travels the same way the traffic does.
+- It also had no address strategy and returned AAAA records, while IPv6 is rejected by the routing
+  rule: an application was handed an address it could not use, waited for the rejection and only then
+  fell back. Closing the IPv6 leak had turned this latent fault into a visible one - reported from a
+  phone as "pages open strangely while Telegram is perfect", which is exactly the shape it takes,
+  since Telegram dials fixed IPv4 addresses. The resolver is `ipv4_only`, as the desktop's always was.
+- Routing rules that name a domain resolve through that server rather than the network's own resolver,
+  which sat outside the tunnel and could see them.
+
 ### Android: verified on a real phone, and what that found (2026-09-17)
 
 - **IPv6 left the device outside the tunnel.** The tun carried an IPv4 address only, so no `::/0`
