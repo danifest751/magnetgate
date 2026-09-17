@@ -32,6 +32,10 @@ class MainActivity : ComponentActivity() {
       dumpStatus()
       return
     }
+    if (extras?.getStringExtra("stop") == "true") {
+      stopTunnel()
+      return
+    }
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
     Log.i(TAG, "app started, core ${Mgbox.coreVersion()}, autotest=$autotest")
@@ -76,6 +80,20 @@ class MainActivity : ComponentActivity() {
     // the app is usually already running when someone wants its state, so the dump hook has to work here
     // and not only in onCreate
     if (intent.getStringExtra("dump") == "true") dumpStatus()
+    if (intent.getStringExtra("stop") == "true") stopTunnel()
+  }
+
+  /**
+   * Brings the tunnel down on request, the same way the Disconnect button does.
+   *
+   * `adb` cannot reach [MgVpnService] - it is not exported, and nothing that is reachable from a shell
+   * should be able to take someone's tunnel down. An acceptance run still has to check what Disconnect
+   * releases: the tun leak of 16.09 was interfaces and routes outliving "tunnel down", and that is
+   * invisible unless something brings the tunnel down and then looks.
+   */
+  private fun stopTunnel() {
+    Log.i(TAG, "stop requested through the launch extra")
+    startService(Intent(this, MgVpnService::class.java).setAction(MgVpnService.ACTION_STOP))
   }
 
   /**

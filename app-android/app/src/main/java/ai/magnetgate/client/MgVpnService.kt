@@ -121,9 +121,10 @@ class MgVpnService : VpnService() {
       return START_NOT_STICKY
     }
     // The extras exist for the acceptance scripts, which point a run at their own stand; the screens
-    // leave them empty, and then the saved settings decide what this client looks for.
-    val bootstrap = intent?.getStringExtra("bootstrap").orEmpty().ifBlank { Settings.bootstrap(this) }
-    val relays = intent?.getStringExtra("relays").orEmpty().ifBlank { Settings.relays(this) }
+    // leave them empty, and then the saved settings decide what this client looks for. A channel named
+    // `none` is off for this run, which is how a script proves one channel on its own (Settings.channel).
+    val bootstrap = Settings.channel(intent?.getStringExtra("bootstrap").orEmpty(), Settings.bootstrap(this))
+    val relays = Settings.channel(intent?.getStringExtra("relays").orEmpty(), Settings.relays(this))
     val coreless = intent?.getBooleanExtra("coreless", false) == true
     val modeExtra = intent?.getStringExtra("mode").orEmpty()
     try {

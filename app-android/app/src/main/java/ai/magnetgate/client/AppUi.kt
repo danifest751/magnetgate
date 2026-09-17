@@ -117,12 +117,15 @@ fun AppRoot(
   var directDomains by remember { mutableStateOf(Settings.directDomains(context).joinToString("\n")) }
   var tunnelDomains by remember { mutableStateOf(Settings.tunnelDomains(context).joinToString("\n")) }
 
-  val wantedBootstrap = bootstrapExtra.ifBlank { bootstrap }
-  val wantedRelays = relaysExtra.ifBlank { relays }
+  // `none` means "this channel is off for this run" and blank means "use the stored setting"; the
+  // service resolves the extras the same way, so the screen and the tunnel never disagree about which
+  // channels a run is allowed to use.
+  val wantedBootstrap = Settings.channel(bootstrapExtra, bootstrap)
+  val wantedRelays = Settings.channel(relaysExtra, relays)
 
   val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     if (result.resultCode == Activity.RESULT_OK) {
-      startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
+      startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra)
     } else {
       notice = "the VPN consent was refused"
       Log.w(TAG, "the user refused the VPN consent")
@@ -152,7 +155,7 @@ fun AppRoot(
       return
     }
     val consent = VpnService.prepare(context)
-    if (consent != null) vpnConsent.launch(consent) else startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
+    if (consent != null) vpnConsent.launch(consent) else startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra)
   }
 
   LaunchedEffect(Unit) {
@@ -183,7 +186,7 @@ fun AppRoot(
       if (coreless) {
         // diagnostic path: the engine alone, with no second Go runtime in the process
         val consent = VpnService.prepare(context)
-        if (consent != null) vpnConsent.launch(consent) else startVpn(context, wantedBootstrap, wantedRelays, true, modeExtra)
+        if (consent != null) vpnConsent.launch(consent) else startVpn(context, bootstrapExtra, relaysExtra, true, modeExtra)
         recordAutotest(context, "coreless vpn-requested")
         return@LaunchedEffect
       }
@@ -222,7 +225,7 @@ fun AppRoot(
           vpnConsent.launch(consent)
           Log.w(TAG, "AUTOTEST vpn=consent-required")
         } else {
-          startVpn(context, wantedBootstrap, wantedRelays, coreless, modeExtra)
+          startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra)
           Log.i(TAG, "AUTOTEST vpn=requested")
           var waited = 0
           while (waited < 60 && !MgVpnService.isRunning()) {
@@ -770,7 +773,13 @@ private fun recordAutotest(context: Context, text: String) {
   runCatching { File(context.filesDir, "autotest.txt").writeText(text) }
 }
 
-/** Hands the tunnel to the service, which owns the core and the engine while it runs. */
+/**
+ * Hands the tunnel to the service, which owns the core and the engine while it runs.
+ *
+ * The discovery arguments are passed exactly as they arrived in the launch extras - blank, a value, or
+ * [Settings.CHANNEL_OFF] - and the service resolves them against the store. Resolving them here as well
+ * would turn "this channel is off" back into "", which the service reads as "use the stored setting".
+ */
 private fun startVpn(
   context: Context,
   bootstrap: String,

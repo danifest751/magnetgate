@@ -103,6 +103,22 @@ object Settings {
   fun relays(context: Context): String = get(context, KEY_RELAYS)
   fun setRelays(context: Context, value: String) = put(context, KEY_RELAYS, value.trim())
 
+  /**
+   * What a launch extra means for a discovery channel: blank is "use the stored setting", and the literal
+   * [CHANNEL_OFF] is "this channel is off for this run".
+   *
+   * The second exists for the acceptance runs. Leaving an extra out falls back to the store, so a run
+   * meant to prove "the phone finds a node over DHT alone" would quietly keep the stored relays and prove
+   * nothing - the same shape of mistake as a check that passes because nothing ran.
+   */
+  const val CHANNEL_OFF = "none"
+
+  fun channel(extra: String, stored: String): String = when {
+    extra.isBlank() -> stored
+    extra.trim().equals(CHANNEL_OFF, ignoreCase = true) -> ""
+    else -> extra.trim()
+  }
+
   /** The slots to look for, as stored; one slot 0 by default, the only one a single-exit setup has. */
   fun slots(context: Context): List<Int> = parseSlots(get(context, KEY_SLOTS, "0"))
 
