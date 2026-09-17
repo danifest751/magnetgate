@@ -274,6 +274,12 @@ class MgVpnService : VpnService() {
       if (next == signature) continue
       signature = next
       try {
+        // the core may have restarted under us; the engine has to be told where it lives now
+        val port = liveCorePort()
+        if (port != corePort) {
+          Log.i(TAG, "the core moved from port $corePort to $port, rebuilding the engine")
+          corePort = port
+        }
         val nodes = discoveredNodes()
         val built = SingBoxConfig.build(
           corePort, false, nodes, excludedPackages,
@@ -293,11 +299,28 @@ class MgVpnService : VpnService() {
     }
   }
 
-  /** The node and plane set, as a value that only changes when the configuration should change. */
-  private fun nodeSignature(): String =
-    discoveredNodes().joinToString(",") { node ->
+  /**
+   * The node and plane set plus the core's port, as a value that only changes when the configuration
+   * should change.
+   *
+   * The port is in here because the core restarts on its own: the screen brings it up, and a Go core
+   * asked to start again replaces itself and hands back a **new** port (see the handoff, trap 39). The
+   * engine keeps dialling the old one, which nothing is listening on any more - the tun is up, the node
+   * list looks healthy, and not a byte moves. That happened on the phone on 17.09 and cost the owner
+   * their connection until the tunnel was restarted by hand.
+   */
+  private fun nodeSignature(): String {
+    val nodes = discoveredNodes().joinToString(",") { node ->
       "${node.slot}:" + node.planes.joinToString("+") { it.optString("t") }
     }
+    return "$nodes@${liveCorePort()}"
+  }
+
+  /** The port the core is listening on right now, which is the only one worth believing. */
+  private fun liveCorePort(): Int {
+    val status = runCatching { Mgbox.coreStatus() }.getOrNull() ?: return corePort
+    return runCatching { JSONObject(status).optInt("socksPort") }.getOrNull()?.takeIf { it != 0 } ?: corePort
+  }
 
 
   /** Starts the core and waits for the first discovered node. */
