@@ -16,6 +16,42 @@ android {
     versionName = "0.1.0"
   }
 
+  // Release signing. The keystore and its password live in key/, which sits outside this repository
+  // beside the other secrets and is never committed - losing it means never being able to update an
+  // installed app again, because Android refuses an update signed by a different key.
+  //
+  // A checkout without the key still builds: only the release variant goes unsigned, and it says so.
+  // Point elsewhere with -Pmagnetgate.keyDir=<path> or MAGNETGATE_KEY_DIR.
+  // rootDir is app-android/, and key/ sits beside the repository itself, two levels up.
+  val keyDir = (project.findProperty("magnetgate.keyDir") as String?)?.let { file(it) }
+    ?: System.getenv("MAGNETGATE_KEY_DIR")?.let { file(it) }
+    ?: rootDir.parentFile.parentFile.resolve("key")
+  val keyStoreFile = File(keyDir, "magnetgate-release.jks")
+  val keyPassFile = File(keyDir, "magnetgate-release.pass")
+  val releaseKey = keyStoreFile.isFile && keyPassFile.isFile
+
+  signingConfigs {
+    if (releaseKey) {
+      create("release") {
+        val secret = keyPassFile.readText().trim()
+        storeFile = keyStoreFile
+        storePassword = secret
+        keyAlias = "magnetgate"
+        keyPassword = secret
+      }
+    }
+  }
+
+  buildTypes {
+    getByName("release") {
+      if (releaseKey) {
+        signingConfig = signingConfigs.getByName("release")
+      } else {
+        logger.lifecycle("release signing: no key at " + keyStoreFile.path + " - the release build will be unsigned")
+      }
+    }
+  }
+
   buildFeatures {
     compose = true
   }
