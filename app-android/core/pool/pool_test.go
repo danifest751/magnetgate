@@ -416,4 +416,60 @@ func TestEnginePlaneWithoutAPortFallsThrough(t *testing.T) {
 	if native.count() != 1 {
 		t.Fatalf("expected the fallback to carry the stream, got %d attempt(s)", native.count())
 	}
+	// and it must not be held against the node: the engine is ours, not theirs
+	if cooling := p.Cooling(0); len(cooling) != 0 {
+		t.Fatalf("a plane the engine has not been told about must not be cooled: %+v", cooling)
+	}
+}
+
+// The engine rebuilds its listeners on every reload, so for an instant the core knows no port for any
+// plane. Counting that as the node failing cooled every engine plane at once and pushed the pool onto
+// the one plane the engine does not carry - which on a network that blocks it left the tunnel with
+// nowhere to go, for ten minutes. Measured on a phone on 17.09.
+func TestAReloadDoesNotCoolTheEnginePlanes(t *testing.T) {
+	planes := NewSocksPlanes()
+	planes.Set(0, "reality", 1)
+	native := &fakePlane{plane: "mgt"}
+	p := New(Config{
+		Preference: []string{"reality", "mgt"},
+		Connectors: map[string]Connector{"reality": planes, "mgt": native},
+	})
+	p.Update(node(t, 0, "reality", "mgt"))
+
+	planes.Forget(0) // the reload starts: the port map is empty until the new listeners are announced
+	for i := 0; i < 3; i++ {
+		if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+			t.Fatalf("dial %d during the reload: %v", i, err)
+		}
+	}
+	if cooling := p.Cooling(0); len(cooling) != 0 {
+		t.Fatalf("the reload must not pause anything: %+v", cooling)
+	}
+
+	// once the new port is announced the plane is used again immediately, with no pause to sit out
+	echoHost, echoPort := startEchoTarget(t)
+	proxy, err := socks.Listen(0, func(ctx context.Context, host string, port int) (socks.Conn, error) {
+		conn, err := net.Dial("tcp", net.JoinHostPort(echoHost, strconv.Itoa(echoPort)))
+		if err != nil {
+			return nil, err
+		}
+		return socks.WrapConn(conn), nil
+	})
+	if err != nil {
+		t.Fatalf("listen proxy: %v", err)
+	}
+	defer proxy.Close()
+	_, proxyPortText, _ := net.SplitHostPort(proxy.Addr().String())
+	proxyPort, _ := strconv.Atoi(proxyPortText)
+	planes.Set(0, "reality", proxyPort)
+
+	before := native.count()
+	conn, err := p.Dial(context.Background(), echoHost, echoPort)
+	if err != nil {
+		t.Fatalf("dial after the reload: %v", err)
+	}
+	defer conn.Close()
+	if native.count() != before {
+		t.Fatal("the engine plane was available again and should have carried the stream")
+	}
 }

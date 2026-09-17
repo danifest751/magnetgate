@@ -95,6 +95,34 @@ type Pool struct {
 	mu    sync.Mutex
 	nodes map[int]Node
 	rr    int
+	// when each (node, plane) was last reported as not yet wired to the engine; see unwired
+	saidUnwired map[string]time.Time
+}
+
+// unwired says once, and not oftener than every few seconds, that a plane cannot be used because the
+// engine has not been told where it listens.
+//
+// It is worth a line: if it keeps appearing outside a reload, the engine and the core disagree about
+// which planes exist, and that is a defect rather than a moment. It is worth suppressing too - during a
+// reload every stream in flight hits it, and a flood would push the reason out of the 200-line ring
+// that diagnostics can actually show (trap 49).
+func (p *Pool) unwired(slot int, plane string) {
+	now := p.now()
+	id := key(slot, plane)
+	p.mu.Lock()
+	if p.saidUnwired == nil {
+		p.saidUnwired = make(map[string]time.Time)
+	}
+	said := p.saidUnwired[id]
+	quiet := !said.IsZero() && now.Sub(said) < 5*time.Second
+	if !quiet {
+		p.saidUnwired[id] = now
+	}
+	p.mu.Unlock()
+	if quiet {
+		return
+	}
+	p.logf("plane not wired yet: %s slot %d (the engine is being reconfigured; not a node failure)", plane, slot)
 }
 
 // New prepares a pool. With no preference the native plane is the only one, which is what a build
@@ -202,6 +230,17 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 				return conn, nil
 			}
 			lastErr = err
+			// A plane the engine has not been told about yet is this client reconfiguring itself, not
+			// the node failing, and pausing the pair for it is actively harmful. Measured on the phone
+			// on 17.09: every engine reload emptied the port map for an instant, all four engine planes
+			// were cooled for 30s at once, and the pool fell through to the plane the engine does not
+			// carry - on a network that blocks that plane, the tunnel had nowhere left to go and the
+			// pause escalated to ten minutes. The same thing happened at startup, when a node was found
+			// before the engine had a listener for it.
+			if errors.Is(err, errUnknownPlane) {
+				p.unwired(node.Slot, plane)
+				continue
+			}
 			record := p.cfg.Health.Fail(idOf(node.Slot), plane)
 			p.logf("transport failed: %s slot %d (paused %s after %d failure(s)): %v",
 				plane, node.Slot, time.Duration(record.BackoffMs)*time.Millisecond, record.Fails, err)
