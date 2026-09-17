@@ -325,7 +325,12 @@ try {
     # changing first, which also means the engine is given a node-watch tick to pick up a late arrival -
     # exactly the case this check exists for.
     $stable = ($discovered -gt 0 -and $discovered -eq $previous)
-    if (($healthKnown -and $planesSettled -and $stable) -or $settled -ge $HealthSeconds) { break }
+    # hy2 rides Nostr and nothing else, and a relay on a mobile network can take a minute and a half to
+    # answer. Declaring it missing as soon as everything else agrees would fail a phone that is merely
+    # waiting, so when a relay channel is configured this waits out the whole deadline for it.
+    $relayCount = if ($status -and $status.relays) { @($status.relays).Count } else { 0 }
+    $hy2Settled = (-not ($nostrOn -and $relayCount -gt 0)) -or $hy2 -gt 0
+    if (($healthKnown -and $planesSettled -and $stable -and $hy2Settled) -or $settled -ge $HealthSeconds) { break }
     $previous = $discovered
     Start-Sleep -Seconds 10
     $settled += 10
@@ -356,7 +361,6 @@ try {
     "engine planes $planes (from $planesFrom), discovered $discovered ($($exits -join ', '))"
   # The relay list can come from the settings store rather than this command line, so what decides is
   # what the core ended up with, not what was typed.
-  $relayCount = if ($status -and $status.relays) { @($status.relays).Count } else { 0 }
   if ($nostrOn -and $relayCount -gt 0) {
     # hy2 only ever arrives over Nostr - its certificate does not fit in a DHT record - so a run with a
     # relay channel and no hy2 means the relays are mute, whatever the relay list says
