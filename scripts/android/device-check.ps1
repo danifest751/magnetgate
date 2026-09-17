@@ -448,7 +448,13 @@ try {
   # the evidence has been pulled into the report by now; what is left on the device is the node list and
   # the core's log ring, and neither belongs on a phone after the run that asked for it
   AsApp 'rm -f files/autotest.txt files/status.txt files/health.txt' | Out-Null
-  if ((Tun-Of $probeV4) -eq '') { Start-Tunnel '' '' -Stored }
+  # A tunnel that is up is not the same as the tunnel the owner had. A run that narrowed the channels
+  # leaves it carrying the narrower set: with relays off there is no hy2 and no rule-set manifest, and
+  # nothing says so - it just keeps running that way. So the restore restarts whenever this run overrode
+  # anything, not only when the tunnel is down. Measured the hard way: a DHT-only run left the owner's
+  # phone without hy2 until they noticed it missing on the screen.
+  $overrode = ($bootstrapExtra -ne '' -or $relaysExtra -ne '' -or $Mode -ne '')
+  if ($overrode -or (Tun-Of $probeV4) -eq '') { Start-Tunnel '' '' -Stored }
   $restored = (Wait-Until 150 5 { if ((Tun-Of $probeV4) -ne '') { 'up' } else { $null } }) -eq 'up'
   if ($previousAppop -ne 'allow') { Shell "appops set $appId ACTIVATE_VPN $previousAppop" | Out-Null }
   if (-not $restored) {
