@@ -21,6 +21,48 @@ type Peer struct {
 
 // Offer is one rendezvous record. Data-plane entries are kept raw: the transport builder needs their
 // protocol-specific fields (Reality keys, hysteria2 cert), and this layer only cares about their type.
+// RuleSets is the manifest an exit advertises: a generation, and one entry per list.
+type RuleSets struct {
+	V    int           `json:"v"`
+	Sets []RuleSetItem `json:"sets"`
+}
+
+// RuleSetItem names one list: where it lives, how large it is and what it must hash to. The checksum is
+// the whole control - the file itself is fetched from wherever Url points, so a mirror that serves
+// something else fails verification instead of quietly changing what bypasses the tunnel.
+type RuleSetItem struct {
+	Tag    string `json:"tag"`
+	URL    string `json:"url"`
+	SHA256 string `json:"sha256"`
+	Bytes  int    `json:"bytes"`
+}
+
+// MaxRuleSetBytes caps what a device may be asked to download. A rule-set is a compact binary; anything
+// larger is not one, whatever the manifest claims.
+const MaxRuleSetBytes = 8 << 20
+
+// Valid reports whether a manifest is usable: a generation, at least one entry, and every entry naming
+// an https source with a real digest and a plausible size.
+func (r *RuleSets) Valid() bool {
+	if r == nil || r.V < 1 || len(r.Sets) == 0 {
+		return false
+	}
+	for _, s := range r.Sets {
+		if s.Tag == "" || !strings.HasPrefix(s.URL, "https://") || s.Bytes <= 0 || s.Bytes > MaxRuleSetBytes {
+			return false
+		}
+		if len(s.SHA256) != 64 {
+			return false
+		}
+		for _, c := range s.SHA256 {
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 type Offer struct {
 	V       int               `json:"v"`
 	TS      int64             `json:"ts"`
@@ -29,6 +71,10 @@ type Offer struct {
 	Country string            `json:"country,omitempty"`
 	Peers   []Peer            `json:"peers,omitempty"`
 	DP      []json.RawMessage `json:"dp"`
+	// RuleSets: which routing lists a client should be using, and what each must hash to. It travels on
+	// the Nostr view only, like the pinned hysteria2 certificate, because it does not fit a BEP44
+	// record. Nothing here is a list - only the operator's signed decision about which ones are current.
+	RuleSets *RuleSets `json:"rs,omitempty"`
 }
 
 // Valid mirrors the validation mergeOffer() performs: a usable v3 offer carrying a timestamp and a
@@ -117,6 +163,17 @@ func Merge(prev, incoming *Offer) *Offer {
 	merged.DP = make([]json.RawMessage, 0, len(order))
 	for _, t := range order {
 		merged.DP = append(merged.DP, byType[t])
+	}
+	// The rule-set manifest travels on the Nostr view alone, exactly like the pinned hysteria2 endpoint
+	// two lines above. Starting the merge from prev would therefore drop it whenever the DHT view of the
+	// same generation arrived first - which is the ordinary case, since DHT is polled and Nostr pushed.
+	// Whichever side of this generation actually carries one wins.
+	if incoming.RuleSets.Valid() {
+		merged.RuleSets = incoming.RuleSets
+	} else if prev.RuleSets.Valid() {
+		merged.RuleSets = prev.RuleSets
+	} else {
+		merged.RuleSets = nil
 	}
 	return &merged
 }

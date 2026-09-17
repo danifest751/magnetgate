@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -215,5 +216,50 @@ func TestParsePeersIsStrict(t *testing.T) {
 		if err != nil || len(got) != 0 {
 			t.Errorf("%q must yield no peers and no error, got %v %v", empty, got, err)
 		}
+	}
+}
+
+// The rule-set manifest reaches a client only over Nostr, like the pinned hysteria2 endpoint, so the
+// merge of two views of one generation has to keep it. Starting from prev silently dropped it whenever
+// the DHT view arrived first, which is the ordinary order: DHT is polled, Nostr is pushed.
+func TestMergeKeepsTheRuleSetManifestFromEitherView(t *testing.T) {
+	withRS := &Offer{V: Schema, TS: 1000, DP: []json.RawMessage{json.RawMessage(`{"t":"mgt"}`)},
+		RuleSets: &RuleSets{V: 3, Sets: []RuleSetItem{{
+			Tag: "blocked-domains", URL: "https://example.test/x.srs", SHA256: strings.Repeat("a", 64), Bytes: 10,
+		}}}}
+	withoutRS := &Offer{V: Schema, TS: 1000, DP: []json.RawMessage{json.RawMessage(`{"t":"reality"}`)}}
+
+	// the DHT view first, then the Nostr view: the manifest must survive
+	if got := Merge(withoutRS, withRS); got.RuleSets == nil || got.RuleSets.V != 3 {
+		t.Fatalf("the manifest was dropped when the plain view was merged first: %+v", got.RuleSets)
+	}
+	// and the other way round, where prev already has it and the incoming view does not
+	if got := Merge(withRS, withoutRS); got.RuleSets == nil || got.RuleSets.V != 3 {
+		t.Fatalf("the manifest was dropped when the plain view arrived second: %+v", got.RuleSets)
+	}
+}
+
+func TestRuleSetManifestRejectsWhatCannotBeTrusted(t *testing.T) {
+	ok := RuleSetItem{Tag: "t", URL: "https://example.test/x.srs", SHA256: strings.Repeat("a", 64), Bytes: 10}
+	for name, broken := range map[string]RuleSetItem{
+		"plain http":    {Tag: "t", URL: "http://example.test/x.srs", SHA256: ok.SHA256, Bytes: 10},
+		"short digest":  {Tag: "t", URL: ok.URL, SHA256: strings.Repeat("a", 63), Bytes: 10},
+		"not hex":       {Tag: "t", URL: ok.URL, SHA256: strings.Repeat("z", 64), Bytes: 10},
+		"no size":       {Tag: "t", URL: ok.URL, SHA256: ok.SHA256, Bytes: 0},
+		"absurd size":   {Tag: "t", URL: ok.URL, SHA256: ok.SHA256, Bytes: MaxRuleSetBytes + 1},
+		"no tag":        {Tag: "", URL: ok.URL, SHA256: ok.SHA256, Bytes: 10},
+	} {
+		if (&RuleSets{V: 1, Sets: []RuleSetItem{broken}}).Valid() {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+	if (&RuleSets{V: 0, Sets: []RuleSetItem{ok}}).Valid() {
+		t.Error("generation 0 was accepted")
+	}
+	if (&RuleSets{V: 1}).Valid() {
+		t.Error("an empty manifest was accepted")
+	}
+	if !(&RuleSets{V: 1, Sets: []RuleSetItem{ok}}).Valid() {
+		t.Error("a good manifest was rejected")
 	}
 }

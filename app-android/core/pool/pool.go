@@ -233,6 +233,8 @@ type SnapshotRow struct {
 	Country string            `json:"country,omitempty"`
 	DP      []json.RawMessage `json:"dp"`
 	Cooling []health.Cooling  `json:"cooling"`
+	// The routing lists this node says a client should be using. Only nodes reached over Nostr carry it.
+	RuleSets *offer.RuleSets `json:"rs,omitempty"`
 }
 
 // Snapshot builds the diagnostics view.
@@ -248,6 +250,9 @@ func (p *Pool) Snapshot() Snapshot {
 			Country: node.Offer.Country,
 			DP:      node.Offer.DP,
 			Cooling: p.Cooling(node.Slot),
+		}
+		if node.Offer.RuleSets.Valid() {
+			row.RuleSets = node.Offer.RuleSets
 		}
 		if row.Cooling == nil {
 			row.Cooling = []health.Cooling{}

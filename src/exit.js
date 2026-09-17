@@ -145,6 +145,34 @@ function readExtraDp() {
   }
 }
 
+// Routing rule-sets a client should be using: where each one lives, how big it is and what it must
+// hash to (scripts/update-rulesets.mjs writes this). No list contents travel here - only the decision
+// about which ones are current, sealed with the key derived from the PSK like every other field, so a
+// mirror that serves something else cannot retune anyone's routing.
+const RULESETS_FILE = process.env.MAGNETGATE_RULESETS_FILE ?? '/etc/magnetgate-rulesets.json'
+function readRuleSets() {
+  try {
+    if (!fs.existsSync(RULESETS_FILE)) return null
+    const doc = JSON.parse(fs.readFileSync(RULESETS_FILE, 'utf8').replace(/^\uFEFF/, ''))
+    const v = Number(doc?.v)
+    const sets = Array.isArray(doc?.sets) ? doc.sets : []
+    if (!Number.isInteger(v) || v < 1 || !sets.length) return null
+    const clean = sets
+      .filter(
+        (s) =>
+          typeof s?.tag === 'string' &&
+          /^https:\/\//.test(s?.url ?? '') &&
+          /^[0-9a-f]{64}$/.test(s?.sha256 ?? '') &&
+          Number.isInteger(s?.bytes) &&
+          s.bytes > 0
+      )
+      .map((s) => ({ tag: s.tag.slice(0, 32), url: s.url, sha256: s.sha256, bytes: s.bytes }))
+    return clean.length ? { v, sets: clean } : null
+  } catch {
+    return null
+  }
+}
+
 // --- peer discovery (multi-node Phase 1) -----------------------------------------------------------
 // Scanning other slots is opt-in: an idle single-node deployment must not add DHT lookups nobody
 // asked for. Set MAGNETGATE_PEER_SLOTS=0,1 on each node once there is more than one.
@@ -245,9 +273,12 @@ async function publishOnce() {
   if (sealed.length > 950)
     console.log(ts(), `[warn] DHT offer ${sealed.length}B may exceed the ~1000B limit`)
   if (nostr) {
+    // The rule-set manifest rides the Nostr view only, for the same reason the pinned hy2 certificate
+    // does: it does not fit the ~1000 B BEP44 record, and squeezing it in would cost the endpoints.
+    const rs = readRuleSets()
     const nostrDp = [...extra, mgt]
     const nseq = 'n' + seq
-    const sealedNostr = seal(boxKey, Buffer.from(JSON.stringify({ ...base, dp: nostrDp })), nseq)
+    const sealedNostr = seal(boxKey, Buffer.from(JSON.stringify({ ...base, dp: nostrDp, ...(rs ? { rs } : {}) })), nseq)
     nostr.publish(sealedNostr, nseq)
   }
   writeHealth({ peers: peers.length, peersSeen: peerList })

@@ -141,6 +141,18 @@ require('http').createServer((q, s) => {
     }) }
   [System.IO.File]::WriteAllText($dpFile, ($dpDoc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
 
+  # A rule-set manifest for the slot-0 node, so the offer path that carries it is exercised. The
+  # checksum is of a file that does not exist anywhere: the point here is that the manifest survives
+  # sealing, the Nostr channel and parsing, not that anything downloads it.
+  $rsFile = Join-Path $tmp 'rulesets.json'
+  $rsDoc = @{ v = 7; ts = 0; sets = @(@{
+      tag = 'blocked-domains'
+      url = 'https://example.invalid/refilter-domains.srs'
+      sha256 = ('a' * 64)
+      bytes = 12345
+    }) }
+  [System.IO.File]::WriteAllText($rsFile, ($rsDoc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+
   $exitBySlot = @{}
   foreach ($node in $Nodes) {
     $exitBySlot[$node.slot] = Start-Node @((Join-Path $root 'src\exit.js')) @{
@@ -159,6 +171,7 @@ require('http').createServer((q, s) => {
       MAGNETGATE_HEALTH_FILE   = Join-Path $tmp "health-$($node.slot).json"
       DHT_BOOTSTRAP            = $bootstrap
       MAGNETGATE_DP_FILE       = $(if ($node.slot -eq 0) { $dpFile } else { Join-Path $tmp 'dp-none.json' })
+      MAGNETGATE_RULESETS_FILE = $(if ($node.slot -eq 0) { $rsFile } else { Join-Path $tmp 'rs-none.json' })
     } $node.name
   }
 
@@ -167,7 +180,7 @@ require('http').createServer((q, s) => {
       'MAGNETGATE_NODE_NAME', 'MAGNETGATE_ALLOW_PRIVATE', 'MAGNETGATE_NOSTR', 'MAGNETGATE_NOSTR_RELAYS',
       'MAGNETGATE_TRANSPORT',
       'MAGNETGATE_PEER_SLOTS', 'MAGNETGATE_PUBLISH_MS', 'MAGNETGATE_SEQ_FILE', 'MAGNETGATE_HEALTH_FILE',
-      'MAGNETGATE_DP_FILE', 'DHT_BOOTSTRAP')) {
+      'MAGNETGATE_DP_FILE', 'MAGNETGATE_RULESETS_FILE', 'DHT_BOOTSTRAP')) {
     Remove-Item -Path "env:$key" -ErrorAction SilentlyContinue
   }
 
@@ -244,6 +257,24 @@ require('http').createServer((q, s) => {
   Check ($nostrRun.Text -match 'target-ok') 'a request over the Nostr-discovered endpoint reached the target'
   Check ($nostrRun.Text -notmatch 'dht: lookup finished') 'no DHT was configured, so the offer came from the relay'
   Check ($nostrRun.Code -eq 0) "the Nostr-only run exited cleanly (code $($nostrRun.Code))"
+
+  # The rule-set manifest rides the Nostr view only. Reaching the snapshot means it survived sealing,
+  # the relay, unsealing and validation - the path a phone uses to learn which lists it should have.
+  $snap = Join-Path $tmp 'snap-nostr.json'
+  # -hold matters: the snapshot is written by a one-second ticker, and without it the run exits as soon
+  # as the check returns - before anything has been written.
+  $nostrSnapRun = Invoke-Harness 'agent-cli-nostr-snap.log' `
+    @('-slots', '0', '-relays', "ws://127.0.0.1:$NostrPort", '-snapshot', $snap, '-hold', '5s')
+  $manifest = $null
+  if (Test-Path -LiteralPath $snap) {
+    $doc = Get-Content -LiteralPath $snap -Raw | ConvertFrom-Json
+    $manifest = ($doc.exits | Where-Object { $_.rs }) | Select-Object -First 1
+  }
+  Check ($null -ne $manifest) 'the rule-set manifest reached the client over Nostr'
+  if ($manifest) {
+    Check ($manifest.rs.v -eq 7) "the manifest kept its generation ($($manifest.rs.v))"
+    Check ($manifest.rs.sets[0].sha256 -eq ('a' * 64)) 'the manifest kept the checksum the node published'
+  }
 
 
   # 6. failover: keep a client running, kill the node that carried the first stream, and require the
