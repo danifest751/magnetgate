@@ -54,9 +54,13 @@ type State struct {
 	StartedAt int64         `json:"startedAt"`
 	Slots     []int         `json:"slots"`
 	Snapshot  pool.Snapshot `json:"snapshot"`
-	Logs      []string      `json:"logs"`
-	Error     string        `json:"error,omitempty"`
-	Version   string        `json:"version"`
+	// Relays is what the Nostr channel is actually getting from each relay. It is here because a relay
+	// that connects and then answers nothing looks exactly like one with nothing to serve, and that
+	// difference decides whether hy2 and the rule-set manifest can arrive at all.
+	Relays  []nostr.RelayState `json:"relays,omitempty"`
+	Logs    []string           `json:"logs"`
+	Error   string             `json:"error,omitempty"`
+	Version string             `json:"version"`
 }
 
 // running is the process-wide core: gomobile bindings are plain functions, so the app talks to one core
@@ -297,6 +301,9 @@ func (inst *instance) status() State {
 	}
 	if inst.rendez != nil {
 		out.Slots = inst.rendez.Slots()
+	}
+	if inst.channel != nil {
+		out.Relays = inst.channel.State()
 	}
 	return out
 }

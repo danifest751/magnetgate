@@ -44,7 +44,31 @@ type Config struct {
 	DialTimeout time.Duration
 	Backoff     time.Duration
 	MaxBackoff  time.Duration
-	Logf        func(format string, args ...any)
+	// ReplyTimeout is how long a relay may stay silent after it has been sent a subscription. A relay
+	// that accepts the socket and answers nothing is the failure this client meets on a mobile network,
+	// and without a deadline it looks exactly like a relay with nothing to serve.
+	ReplyTimeout time.Duration
+	// ReadTimeout is how long an answering relay may stay quiet before the connection is rebuilt, and
+	// PingInterval is how often it is pinged to keep that window open.
+	ReadTimeout  time.Duration
+	PingInterval time.Duration
+	// UserAgent goes out with the upgrade. gorilla sends none, and an edge in front of a relay refuses
+	// a header-less upgrade often enough to matter.
+	UserAgent string
+	Logf      func(format string, args ...any)
+}
+
+// DefaultUserAgent names this client to a relay. It is not a disguise: the point is only that the
+// header is there at all.
+const DefaultUserAgent = "magnetgate/1.0"
+
+// RelayState is what one relay is doing, which is what separates "nothing was published" from "this
+// network does not let this relay through".
+type RelayState struct {
+	URL       string `json:"url"`
+	Connected bool   `json:"connected"`
+	Answering bool   `json:"answering"`
+	LastError string `json:"lastError,omitempty"`
 }
 
 // Channel is one subscriber across a set of relays.
@@ -52,6 +76,9 @@ type Channel struct {
 	cfg          Config
 	logf         func(string, ...any)
 	publicKeyHex string
+
+	// serving is raised by whichever relay answers first; it is buffered so a relay never blocks on it
+	serving chan struct{}
 
 	mu     sync.Mutex
 	slots  map[int]*watch
@@ -88,19 +115,38 @@ func New(cfg Config) (*Channel, error) {
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = 30 * time.Second
 	}
+	if cfg.ReplyTimeout <= 0 {
+		cfg.ReplyTimeout = 15 * time.Second
+	}
+	if cfg.PingInterval <= 0 {
+		cfg.PingInterval = 30 * time.Second
+	}
+	if cfg.ReadTimeout <= 0 {
+		// two missed pings: long enough that a slow network is not mistaken for a dead one
+		cfg.ReadTimeout = 2*cfg.PingInterval + 15*time.Second
+	}
+	if cfg.UserAgent == "" {
+		cfg.UserAgent = DefaultUserAgent
+	}
 	if cfg.Logf == nil {
 		cfg.Logf = func(string, ...any) {}
 	}
-	c := &Channel{cfg: cfg, logf: cfg.Logf, publicKeyHex: publicKeyHex, slots: make(map[int]*watch)}
+	c := &Channel{
+		cfg:          cfg,
+		logf:         cfg.Logf,
+		publicKeyHex: publicKeyHex,
+		slots:        make(map[int]*watch),
+		serving:      make(chan struct{}, 1),
+	}
 	for _, url := range cfg.Relays {
 		r := &relay{
-			url:       url,
-			cfg:       cfg,
-			logf:      cfg.Logf,
-			onEvent:   c.dispatch,
-			subs:      make(map[string]string),
-			done:      make(chan struct{}),
-			connected: make(chan struct{}, 1),
+			url:     url,
+			cfg:     cfg,
+			logf:    cfg.Logf,
+			onEvent: c.dispatch,
+			subs:    make(map[string]string),
+			done:    make(chan struct{}),
+			serving: c.serving,
 		}
 		c.relays = append(c.relays, r)
 		go r.run()
@@ -133,15 +179,44 @@ func (c *Channel) Watch(slot int, onOffer func(plain []byte, seq string)) error 
 	c.mu.Unlock()
 
 	request := requestJSON(subID(slot), c.publicKeyHex, tag)
+	sent := 0
 	for _, r := range relays {
-		r.subscribe(subID(slot), request)
+		if r.subscribe(subID(slot), request) {
+			sent++
+		}
 	}
-	c.logf("nostr: subscribed for slot %d on %d relay(s)", slot, len(relays))
+	// "subscribed on N relays" used to be printed whether or not a single socket was up, so a channel
+	// that reached nothing read exactly like one that was waiting for an offer. Say what went out.
+	c.logf("nostr: slot %d: subscription sent to %d of %d relay(s), queued for the rest", slot, sent, len(relays))
 	return nil
 }
 
 // RelayCount is how many relays the channel is subscribed across.
 func (c *Channel) RelayCount() int { return len(c.relays) }
+
+// State reports what every relay is doing, so a caller can show why no offer has arrived.
+func (c *Channel) State() []RelayState {
+	c.mu.Lock()
+	relays := append([]*relay(nil), c.relays...)
+	c.mu.Unlock()
+	out := make([]RelayState, 0, len(relays))
+	for _, r := range relays {
+		out = append(out, r.state())
+	}
+	return out
+}
+
+// Answering is how many relays have answered a subscription. Zero with relays configured means this
+// network is not carrying the channel, whatever the nodes have published.
+func (c *Channel) Answering() int {
+	count := 0
+	for _, state := range c.State() {
+		if state.Answering {
+			count++
+		}
+	}
+	return count
+}
 
 // Close stops every relay.
 func (c *Channel) Close() {
@@ -158,17 +233,19 @@ func (c *Channel) Close() {
 	}
 }
 
-// WaitConnected blocks until at least one relay is connected, or the context ends. A caller that wants
-// to know whether the channel is usable before reporting "nothing found" uses this.
-func (c *Channel) WaitConnected(ctx context.Context) error {
-	connected := make(chan struct{}, 1)
-	c.mu.Lock()
-	for _, r := range c.relays {
-		connected = r.connected
+// WaitServing blocks until some relay has answered a subscription, or the context ends. A caller that
+// wants to know whether the channel is usable before reporting "nothing found" uses this.
+//
+// It waits on an answer rather than on a connected socket on purpose: a socket that opens and then
+// carries nothing back is the failure seen on a mobile network, and it would satisfy any weaker test.
+// (The loop this replaced waited on whichever relay happened to be last in the list, so two working
+// relays behind one dead one counted for nothing — a single-relay test could not see it.)
+func (c *Channel) WaitServing(ctx context.Context) error {
+	if c.Answering() > 0 {
+		return nil
 	}
-	c.mu.Unlock()
 	select {
-	case <-connected:
+	case <-c.serving:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

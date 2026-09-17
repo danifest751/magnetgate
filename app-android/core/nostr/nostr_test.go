@@ -171,7 +171,11 @@ func (c *collector) sequences() []string {
 
 func newTestChannel(t *testing.T, relays ...string) *Channel {
 	t.Helper()
-	channel, err := New(Config{PSK: testPSK, Relays: relays, Backoff: 10 * time.Millisecond, MaxBackoff: 50 * time.Millisecond})
+	channel, err := New(Config{
+		PSK: testPSK, Relays: relays,
+		Backoff: 10 * time.Millisecond, MaxBackoff: 50 * time.Millisecond,
+		ReplyTimeout: 2 * time.Second, PingInterval: time.Second,
+	})
 	if err != nil {
 		t.Fatalf("channel: %v", err)
 	}
@@ -326,13 +330,13 @@ func TestNewRequiresAPSKAndRelays(t *testing.T) {
 	}
 }
 
-// WaitConnected is how a caller tells "subscribed and quiet" from "not subscribed yet".
-func TestWaitConnectedReportsAnUnreachableRelay(t *testing.T) {
+// WaitServing is how a caller tells "subscribed and quiet" from "nothing got through".
+func TestWaitServingReportsAnUnreachableRelay(t *testing.T) {
 	channel := newTestChannel(t, "ws://127.0.0.1:1")
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if err := channel.WaitConnected(ctx); err == nil {
-		t.Fatal("a relay that never connects must not report as connected")
+	if err := channel.WaitServing(ctx); err == nil {
+		t.Fatal("a relay that never connects must not report as serving")
 	}
 	if channel.RelayCount() != 1 {
 		t.Fatalf("relay count: %d", channel.RelayCount())
