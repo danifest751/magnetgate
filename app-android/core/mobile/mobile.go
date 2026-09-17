@@ -143,7 +143,31 @@ func (inst *instance) bringUp(logf func(string, ...any)) error {
 
 	agentCfg := agent.Config{PSK: inst.cfg.PSK, Slots: inst.cfg.Slots, Logf: logf}
 	if len(inst.cfg.Relays) > 0 {
-		channel, err := nostr.New(nostr.Config{PSK: inst.cfg.PSK, Relays: inst.cfg.Relays, Logf: logf})
+		// The fallback goes through the data plane, i.e. through an exit. It is wired here because this is
+		// the only place that holds both halves, and it is a fallback: a relay is only taken this way
+		// after a direct attempt failed to get an answer. On the carrier network measured on 17.09 that
+		// was all three relays, and hy2 and the rule-set manifest ride this channel and nothing else.
+		fallback := func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, portText, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			port, err := strconv.Atoi(portText)
+			if err != nil {
+				return nil, err
+			}
+			stream, err := inst.planes.Dial(ctx, host, port)
+			if err != nil {
+				return nil, err
+			}
+			return pool.AsNetConn(stream, address), nil
+		}
+		channel, err := nostr.New(nostr.Config{
+			PSK: inst.cfg.PSK, Relays: inst.cfg.Relays,
+			Fallback:      fallback,
+			FallbackReady: func() bool { return len(inst.planes.Nodes()) > 0 },
+			Logf:          logf,
+		})
 		if err != nil {
 			return err
 		}

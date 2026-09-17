@@ -45,7 +45,8 @@ func muteTestChannel(t *testing.T, logf func(string, ...any), relays ...string) 
 	t.Helper()
 	channel, err := New(Config{
 		PSK: testPSK, Relays: relays,
-		Backoff: 10 * time.Millisecond, MaxBackoff: 20 * time.Millisecond,
+		DialTimeout: 300 * time.Millisecond,
+		Backoff:     10 * time.Millisecond, MaxBackoff: 20 * time.Millisecond,
 		ReplyTimeout: 200 * time.Millisecond, ReadTimeout: 200 * time.Millisecond,
 		PingInterval: 50 * time.Millisecond,
 		Logf:         logf,

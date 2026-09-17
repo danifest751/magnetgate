@@ -32,6 +32,9 @@ type relay struct {
 	subs     map[string]string
 	answered bool
 	lastErr  string
+	// viaPlane is the route the next attempt takes. It flips after an attempt that got no answer, so a
+	// relay the network mutes ends up going through the tunnel and one that works stays direct.
+	viaPlane bool
 	closed   bool
 	done     chan struct{}
 	writeMu  sync.Mutex
@@ -43,18 +46,21 @@ func (r *relay) run() {
 		if r.isClosed() {
 			return
 		}
-		conn, response, err := r.dial()
+		route := r.route()
+		conn, response, err := r.dial(route)
 		if err != nil {
 			if !r.isClosed() {
 				// the status is the whole story when an edge refuses the upgrade, and gorilla keeps it out
 				// of the error: "bad handshake" on its own sent a previous session looking at the wrong half
-				r.fail(fmt.Sprintf("%v%s", err, statusSuffix(response)))
+				r.fail(fmt.Sprintf("%v%s%s", err, statusSuffix(response), routeSuffix(route)))
 			}
+			r.reroute(false)
 		} else {
 			answered, err := r.serve(conn)
 			if err != nil && !r.isClosed() {
-				r.fail(err.Error())
+				r.fail(err.Error() + routeSuffix(route))
 			}
+			r.reroute(answered)
 			if answered {
 				// only a relay that actually spoke to us resets the backoff; one that accepts the socket and
 				// then stays mute would otherwise be reconnected every second for as long as the app runs
@@ -75,8 +81,13 @@ func (r *relay) run() {
 	}
 }
 
-func (r *relay) dial() (*websocket.Conn, *http.Response, error) {
+func (r *relay) dial(viaPlane bool) (*websocket.Conn, *http.Response, error) {
 	dialer := websocket.Dialer{HandshakeTimeout: r.cfg.DialTimeout, Proxy: http.ProxyFromEnvironment}
+	if viaPlane {
+		// through an exit: the proxy setting is meaningless on that road, and the plane does its own DNS
+		dialer.Proxy = nil
+		dialer.NetDialContext = r.cfg.Fallback
+	}
 	// gorilla sends no User-Agent at all, and an edge in front of a relay answers such an upgrade with
 	// 503 often enough to matter: measured on the phone, three upgrades without one drew two refusals
 	// and three with one drew none.
@@ -258,7 +269,36 @@ func (r *relay) write(conn *websocket.Conn, message string) error {
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 	conn.SetWriteDeadline(time.Now().Add(r.cfg.DialTimeout))
-	return conn.WriteMessage(websocket.TextMessage, []byte(message))
+	err := conn.WriteMessage(websocket.TextMessage, []byte(message))
+	// see keepAlive: a write deadline left in place would later close a connection that is working
+	conn.SetWriteDeadline(time.Time{})
+	return err
+}
+
+// route is how the next attempt goes out, and it never returns the plane when there is none to use.
+func (r *relay) route() bool {
+	if r.cfg.Fallback == nil {
+		return false
+	}
+	if r.cfg.FallbackReady != nil && !r.cfg.FallbackReady() {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.viaPlane
+}
+
+// reroute keeps the road that worked and swaps the one that did not, so a relay settles on whichever
+// path this network actually carries instead of retrying the same dead one for as long as the app runs.
+func (r *relay) reroute(answered bool) {
+	if r.cfg.Fallback == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !answered {
+		r.viaPlane = !r.viaPlane
+	}
 }
 
 func (r *relay) hasAnswered() bool {
@@ -293,6 +333,15 @@ func (r *relay) close() {
 	if conn != nil {
 		conn.Close()
 	}
+}
+
+// routeSuffix says which road an attempt took, because "it does not work" and "it does not work
+// through the tunnel either" are different findings and the log has to tell them apart.
+func routeSuffix(viaPlane bool) string {
+	if viaPlane {
+		return " [via the tunnel]"
+	}
+	return ""
 }
 
 func statusSuffix(response *http.Response) string {

@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"sync"
 	"time"
@@ -55,7 +56,21 @@ type Config struct {
 	// UserAgent goes out with the upgrade. gorilla sends none, and an edge in front of a relay refuses
 	// a header-less upgrade often enough to matter.
 	UserAgent string
-	Logf      func(format string, args ...any)
+	// Fallback dials a relay through the data plane, and is tried only after a direct attempt failed to
+	// get an answer. It exists because a mobile network can let the handshake through and carry nothing
+	// back: measured on a phone, all three public relays went mute on the carrier and all three served
+	// offers through the tunnel in the same minute. The offers that ride this channel - hy2 and the
+	// rule-set manifest - are otherwise simply lost.
+	//
+	// It is a fallback rather than the normal route on purpose: rendezvous that goes through an exit
+	// depends on an exit already working, and lets that exit see which relays this client talks to.
+	// On a network where the direct path works, nothing takes this road.
+	Fallback func(ctx context.Context, network, addr string) (net.Conn, error)
+	// FallbackReady says whether that road exists yet. Without it the channel would spend every other
+	// attempt discovering that no exit has been found, which on a network where the direct road works
+	// halves how often it is tried - a fallback that slows down the path it is meant to back up.
+	FallbackReady func() bool
+	Logf          func(format string, args ...any)
 }
 
 // DefaultUserAgent names this client to a relay. It is not a disguise: the point is only that the
