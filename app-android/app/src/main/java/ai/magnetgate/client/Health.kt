@@ -1,10 +1,12 @@
 package ai.magnetgate.client
 
 import android.util.Log
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.Socket
 import java.net.URL
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 
 /**
  * What the app knows about its own health, written by the service and read by the screens.
@@ -86,17 +88,42 @@ object Health {
     return check
   }
 
+  /**
+   * One HTTPS GET through a SOCKS listener, with the destination left as a **name**.
+   *
+   * The name is the whole point. `InetSocketAddress.createUnresolved` is what makes Java's SOCKS client
+   * send the domain instead of resolving it here first, and only then does whatever is behind the
+   * listener have to resolve it. Through the engine's listener that is the engine's own resolver - the
+   * part that broke on 17.09 - and a check that let Java resolve locally would test nothing of it.
+   */
   private fun fetch(socksPort: Int, url: String): String {
-    val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
-    val connection = URL(url).openConnection(proxy) as HttpURLConnection
-    connection.connectTimeout = 15_000
-    connection.readTimeout = 15_000
-    try {
-      val body = connection.inputStream.bufferedReader().use { it.readText().trim() }
-      if (body.isEmpty()) throw IllegalStateException("the exit answered with nothing")
+    val parsed = URL(url)
+    val host = parsed.host
+    val port = if (parsed.port != -1) parsed.port else if (parsed.protocol == "https") 443 else 80
+    val path = parsed.path.ifEmpty { "/" }
+
+    val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
+    socket.use {
+      it.soTimeout = 15_000
+      it.connect(InetSocketAddress.createUnresolved(host, port), 15_000)
+      val stream: Socket = if (parsed.protocol == "https") {
+        (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(it, host, port, false).also { tls ->
+          (tls as SSLSocket).startHandshake()
+        }
+      } else {
+        it
+      }
+      val writer = stream.getOutputStream().bufferedWriter()
+      writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\nUser-Agent: magnetgate/1.0\r\n\r\n")
+      writer.flush()
+      val text = stream.getInputStream().bufferedReader().readText()
+      val separator = text.indexOf("\r\n\r\n")
+      if (separator < 0) throw IllegalStateException("the exit answered with nothing")
+      val status = text.lineSequence().firstOrNull().orEmpty()
+      if (!status.contains(" 200")) throw IllegalStateException(status.ifEmpty { "no status line" })
+      val body = text.substring(separator + 4).trim()
+      if (body.isEmpty()) throw IllegalStateException("the exit answered with no body")
       return body.take(64)
-    } finally {
-      connection.disconnect()
     }
   }
 

@@ -160,6 +160,10 @@ test('drift: the phone routes by the same policy as the desktop', () => {
     ['a v6 address on the tun, so IPv6 cannot leave unclaimed', /fdfe:[0-9a-f:]+/, /fdfe:[0-9a-f:]+/],
     ['an IPv6 reject rule', /ip_version: 6[\s\S]{0,40}reject/, /"ip_version", 6[\s\S]{0,60}"reject"/],
     ['an ipv4-only resolver strategy', /strategy: 'ipv4_only'/, /"strategy", "ipv4_only"/],
+    // The first DNS defect of 17.09 was a resolver of type `udp` pointed through a SOCKS entry that
+    // refuses UDP on purpose - it could not work in principle, and nothing here noticed. The transport
+    // is as much a decision as the strategy is, so it is held too.
+    ['a DNS transport the data plane can actually carry', /type: 'https'/, /"type", "https"/],
     ['a resolver for domain rules', /default_domain_resolver/, /default_domain_resolver/],
     ['sniffing, without which domain rules do not match', /action: 'sniff'/, /"action", "sniff"/],
     ['DNS hijacking, without which a fixed resolver escapes', /'hijack-dns'/, /"hijack-dns"/],

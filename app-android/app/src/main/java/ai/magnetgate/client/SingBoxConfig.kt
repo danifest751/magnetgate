@@ -32,8 +32,14 @@ object SingBoxConfig {
    */
   const val TUN_ADDRESS_V6 = "fdfe:dcba:9876::1/126"
 
-  /** The configuration, and the plane-to-port mapping the core has to be told about. */
-  data class Built(val json: String, val planes: List<EnginePlane>)
+  /** The inbound the health check dials, named so the rules that single it out read plainly. */
+  private const val CHECK_INBOUND = "in-health-check"
+
+  /**
+   * The configuration, the plane-to-port mapping the core has to be told about, and the loopback port
+   * the health check goes through. [checkPort] is 0 when there is no engine path to check.
+   */
+  data class Built(val json: String, val planes: List<EnginePlane>, val checkPort: Int = 0)
 
   fun build(
     socksPort: Int,
@@ -157,7 +163,38 @@ object SingBoxConfig {
     // nowhere to go through the tunnel. Rejecting it makes an application fall back to IPv4 at once,
     // while letting it out would be the leak the tun's IPv6 address exists to prevent. This sits ahead
     // of the mode rules so neither mode can send it anywhere.
+    // ---- the health check's own way in -------------------------------------------------------------
+    //
+    // The app is excluded from its own VPN, so nothing it sends travels the path its user's traffic
+    // does, and a check through the core's SOCKS proves only that the exit carries bytes. The DNS
+    // regress of 17.09 broke none of that: it broke resolution, and every check the app had stayed
+    // green through it.
+    //
+    // This listener closes that gap. `resolve` makes the engine resolve the destination name itself,
+    // with the resolver and the strategy configured above - so a resolver that cannot work (a UDP one
+    // behind a SOCKS entry that refuses UDP), or one handing back AAAA records that the rule below
+    // rejects, fails the check instead of quietly costing the user their afternoon.
+    val checkPort = if (coreless) 0 else freePort()
+    if (checkPort != 0) {
+      // straight into `inbounds`: the plane list was copied into it further up, and adding to that list
+      // here would leave this listener out of the configuration without a word
+      inbounds.put(
+        JSONObject()
+          .put("type", "socks")
+          .put("tag", CHECK_INBOUND)
+          .put("listen", "127.0.0.1")
+          .put("listen_port", checkPort),
+      )
+      rules.put(JSONObject().put("inbound", JSONArray().put(CHECK_INBOUND)).put("action", "resolve"))
+    }
+
     rules.put(JSONObject().put("ip_version", 6).put("action", "reject"))
+
+    // After the reject, deliberately: an address family the tunnel cannot carry must fail this check the
+    // same way it fails an application, rather than being routed around by a rule written for the check.
+    if (checkPort != 0) {
+      rules.put(JSONObject().put("inbound", JSONArray().put(CHECK_INBOUND)).put("outbound", "core"))
+    }
 
     val ruleSetDefs = JSONArray()
     if (mode == Settings.Mode.SPLIT) {
@@ -195,7 +232,7 @@ object SingBoxConfig {
         // own resolver - outside the tunnel, and visible to it.
         .put("default_domain_resolver", "remote"),
     )
-    return Built(config.toString(2), planes)
+    return Built(config.toString(2), planes, checkPort)
   }
 
   /**

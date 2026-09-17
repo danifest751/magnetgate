@@ -59,6 +59,13 @@ class MgVpnService : VpnService() {
   private var settledRuleSets: String? = null
   private var corePort = 0
 
+  /**
+   * The engine listener the health check goes through. It changes with every engine reload, because the
+   * loopback ports are picked afresh each time - so it is written wherever a configuration is built, and
+   * never remembered across one.
+   */
+  private var checkPort = 0
+
   /** The packages the tunnel must leave alone, read from settings when the tunnel comes up. */
   private var excludedPackages: List<String> = emptyList()
 
@@ -157,6 +164,7 @@ class MgVpnService : VpnService() {
         }
         running = true
         corePort = port
+        checkPort = built.checkPort
         watching = true
         Log.i(
           TAG,
@@ -209,6 +217,7 @@ class MgVpnService : VpnService() {
       )
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.reloadEngine(built.json)
+      checkPort = built.checkPort
       for (plane in built.planes) {
         Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
       }
@@ -254,9 +263,12 @@ class MgVpnService : VpnService() {
       if (!watching) return
       // the manifest can arrive, or change, without the node set changing at all
       refreshRuleSets()
-      if (System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS && corePort != 0) {
+      // through the engine when there is one: that path resolves the name with the engine's own resolver,
+      // which is the half a check through the core's SOCKS never touches
+      val through = if (checkPort != 0) checkPort else corePort
+      if (System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS && through != 0) {
         checkedAt = System.currentTimeMillis()
-        Health.check(corePort, CHECK_URL)
+        Health.check(through, CHECK_URL)
       }
       val next = nodeSignature()
       if (next == signature) continue
@@ -269,6 +281,7 @@ class MgVpnService : VpnService() {
         )
         Mgbox.forgetPlaneSocksPorts()
         Mgbox.reloadEngine(built.json)
+        checkPort = built.checkPort
         for (plane in built.planes) {
           Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
         }
