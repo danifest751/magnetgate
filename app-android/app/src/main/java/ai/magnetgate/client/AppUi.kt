@@ -560,6 +560,9 @@ private fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean) {
         "socks 127.0.0.1:${status.socksPort}",
         "slots ${status.slots}",
         "tunnel ${if (vpnUp) "up" else "off"}",
+        // 0 means the lists are still the ones the package shipped with; anything else is the
+        // generation a node published and this device verified by digest.
+        "rule-sets generation ${RuleSets.generation(LocalContext.current)}",
       ).joinToString("\n"),
       style = MaterialTheme.typography.bodySmall,
       fontFamily = FontFamily.Monospace,

@@ -151,6 +151,7 @@ class MgVpnService : VpnService() {
             "rule-sets ${policy.ruleSets.size}, direct ${policy.directDomains.size}, tunnel ${policy.tunnelDomains.size})",
         )
         notify(notification("connected"))
+        refreshRuleSets()
         watchNodes()
       } catch (error: Throwable) {
         Log.e(TAG, "the tunnel did not start: ${error.message}", error)
@@ -160,6 +161,49 @@ class MgVpnService : VpnService() {
         starting = false
       }
     }.start()
+  }
+
+  /**
+   * Brings the routing lists up to date from what a node advertises.
+   *
+   * It runs after the tunnel is up, and on purpose: the download goes through the core's own SOCKS
+   * listener, so it takes the same path the traffic does rather than leaving the device in the clear.
+   *
+   * A failure here is never fatal. The lists already on disk keep working, and a set whose digest does
+   * not match what the operator published is discarded rather than installed - the checksum is the whole
+   * control, since the file itself comes from wherever the manifest points.
+   */
+  private fun refreshRuleSets() {
+    val manifest = advertisedRuleSets() ?: return
+    try {
+      if (!RuleSets.update(this, manifest, corePort)) return
+      // The engine reads a rule-set from a path when it starts, so a replaced file means nothing until
+      // it is told to read again.
+      policy = policy.copy(ruleSets = RuleSets.ensure(this))
+      val built = SingBoxConfig.build(
+        corePort, false, discoveredNodes(), excludedPackages,
+        policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets,
+      )
+      Mgbox.forgetPlaneSocksPorts()
+      Mgbox.reloadEngine(built.json)
+      for (plane in built.planes) {
+        Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+      }
+      Log.i(TAG, "rule-sets: engine reloaded on generation ${RuleSets.generation(this)}")
+    } catch (error: Throwable) {
+      Log.w(TAG, "rule-sets: not refreshed: ${error.message}")
+    }
+  }
+
+  /** The rule-set manifest a node advertises, or null when none of them carries one. */
+  private fun advertisedRuleSets(): JSONObject? {
+    val status = runCatching { Mgbox.coreStatus() }.getOrNull() ?: return null
+    val exits = runCatching { JSONObject(status).optJSONObject("snapshot")?.optJSONArray("exits") }
+      .getOrNull() ?: return null
+    for (index in 0 until exits.length()) {
+      exits.optJSONObject(index)?.optJSONObject("rs")?.let { return it }
+    }
+    return null
   }
 
   /**

@@ -106,4 +106,13 @@ if (unchanged) {
 
 const manifest = { v: Number(previous?.v ?? 0) + 1, ts: Date.now(), sets }
 atomicWrite(outPath, JSON.stringify(manifest, null, 2))
+// Readable by everyone on purpose. The exit runs as an unprivileged user (it executes code from the
+// repository, so it must not be root), while this script is run by an operator who is - and atomicWrite
+// leaves a file only its owner can read. Nothing here is secret: public URLs, sizes and checksums, the
+// same three things scripts/pins.json has carried in git all along.
+try {
+  fs.chmodSync(outPath, 0o644)
+} catch (err) {
+  console.error(`[warn] could not make ${outPath} readable by the exit user: ${err.message}`)
+}
 console.log(`wrote ${outPath}: generation ${manifest.v}, ${sets.length} set(s)`)
