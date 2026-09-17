@@ -13,6 +13,10 @@
   discovery, and the app's own traffic through the exit. The PSK never appears on a command line and is
   removed from the device afterwards.
 
+  It deliberately stops there, and an emulator is enough for it. The tunnel itself - routes, MTU, the
+  health of the exit, what Disconnect releases, what leaks when the app dies - is the subject of
+  scripts/android/device-check.ps1, which needs a real device.
+
 .EXAMPLE
   powershell -File scripts/android/app-core-check.ps1 -PskFile key\psk.txt -Bootstrap 203.0.113.10:20001
   powershell -File scripts/android/app-core-check.ps1 -PskFile key\psk.txt -Bootstrap 203.0.113.10:20001 -SkipAar
