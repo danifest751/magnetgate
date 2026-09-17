@@ -47,6 +47,16 @@ object RuleSets {
   private data class Entry(val sha256: String, val fromManifest: Boolean, val generation: Int)
 
   /**
+   * How one pass over a manifest ended.
+   *
+   * [changed] is the caller's signal to reload the engine. [settled] says whether there is any point in
+   * repeating the pass: a source that could not be reached may work in a minute, while a source serving
+   * something other than what the operator published will keep serving it, and re-downloading megabytes
+   * every few seconds to reach the same verdict would cost the user traffic and bury the log.
+   */
+  data class Result(val changed: Boolean, val settled: Boolean)
+
+  /**
    * Unpacks what the package carries, without disturbing anything already replaced from a manifest, and
    * returns what is on disk afterwards. An empty list means "nothing to split on", never a failure.
    */
@@ -100,13 +110,16 @@ object RuleSets {
    * wrong size, wrong digest - leaves the previous file untouched and is reported, never thrown: an
    * update that cannot be verified must not cost the user the lists they already had.
    */
-  fun update(context: Context, manifest: JSONObject, socksPort: Int): Boolean {
-    val sets = manifest.optJSONArray("sets") ?: return false
+  fun update(context: Context, manifest: JSONObject, socksPort: Int): Result {
+    val sets = manifest.optJSONArray("sets") ?: return Result(changed = false, settled = true)
     val generation = manifest.optInt("v", 0)
-    if (generation < 1 || socksPort == 0) return false
+    // no usable port yet is worth retrying; a manifest without a generation is not
+    if (socksPort == 0) return Result(changed = false, settled = false)
+    if (generation < 1) return Result(changed = false, settled = true)
     val dir = File(context.filesDir, DIR)
     val state = readState(dir).toMutableMap()
     var changed = false
+    var settled = true
 
     for (index in 0 until sets.length()) {
       val set = sets.optJSONObject(index) ?: continue
@@ -122,7 +135,10 @@ object RuleSets {
       if (state[asset]?.sha256 == want) continue // already current
 
       val body = runCatching { download(url, bytes, socksPort) }
-        .onFailure { Log.w(TAG, "rule-sets: $tag: not fetched: ${it.message}") }
+        .onFailure {
+          Log.w(TAG, "rule-sets: $tag: not fetched: ${it.message}")
+          settled = false // the source may be reachable again shortly
+        }
         .getOrNull() ?: continue
       val got = sha256(body)
       if (got != want) {
@@ -141,10 +157,11 @@ object RuleSets {
         Log.i(TAG, "rule-sets: $tag updated to generation $generation (${body.size} bytes)")
       } catch (error: Throwable) {
         Log.w(TAG, "rule-sets: $tag: not written: ${error.message}")
+        settled = false
       }
     }
     if (changed) writeState(dir, state)
-    return changed
+    return Result(changed, settled)
   }
 
   /** The generation currently on disk, for the diagnostics screen; 0 when nothing came from a manifest. */

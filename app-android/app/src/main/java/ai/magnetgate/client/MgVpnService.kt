@@ -46,6 +46,9 @@ class MgVpnService : VpnService() {
   private var running = false
   private var starting = false
   private var watching = false
+
+  /** The manifest already acted on to a settled end, so it is not worked through again every tick. */
+  private var settledRuleSets: String? = null
   private var corePort = 0
 
   /** The packages the tunnel must leave alone, read from settings when the tunnel comes up. */
@@ -174,9 +177,17 @@ class MgVpnService : VpnService() {
    * control, since the file itself comes from wherever the manifest points.
    */
   private fun refreshRuleSets() {
+    // A manifest travels in the Nostr offer only, which may arrive well after the tunnel is up, or not
+    // at all on a network where no relay answers. So this runs on every node-watch tick rather than
+    // once at start-up, and remembers a manifest only once acting on it has settled: a source that
+    // could not be reached is tried again, one serving the wrong bytes is not re-fetched every tick.
     val manifest = advertisedRuleSets() ?: return
+    val seen = manifest.toString()
+    if (seen == settledRuleSets) return
     try {
-      if (!RuleSets.update(this, manifest, corePort)) return
+      val result = RuleSets.update(this, manifest, corePort)
+      if (result.settled) settledRuleSets = seen
+      if (!result.changed) return
       // The engine reads a rule-set from a path when it starts, so a replaced file means nothing until
       // it is told to read again.
       policy = policy.copy(ruleSets = RuleSets.ensure(this))
@@ -195,15 +206,24 @@ class MgVpnService : VpnService() {
     }
   }
 
-  /** The rule-set manifest a node advertises, or null when none of them carries one. */
+  /**
+   * The rule-set manifest to follow, or null when no node carries one.
+   *
+   * The newest generation wins rather than whichever node was discovered first. Nodes are deployed one
+   * at a time, so for a while they disagree, and taking the first one made the client's choice depend on
+   * the order discovery happened to finish in - including silently preferring a stale manifest over a
+   * fresh one.
+   */
   private fun advertisedRuleSets(): JSONObject? {
     val status = runCatching { Mgbox.coreStatus() }.getOrNull() ?: return null
     val exits = runCatching { JSONObject(status).optJSONObject("snapshot")?.optJSONArray("exits") }
       .getOrNull() ?: return null
+    var newest: JSONObject? = null
     for (index in 0 until exits.length()) {
-      exits.optJSONObject(index)?.optJSONObject("rs")?.let { return it }
+      val manifest = exits.optJSONObject(index)?.optJSONObject("rs") ?: continue
+      if (newest == null || manifest.optInt("v", 0) > newest.optInt("v", 0)) newest = manifest
     }
-    return null
+    return newest
   }
 
   /**
@@ -218,6 +238,8 @@ class MgVpnService : VpnService() {
     while (watching) {
       Thread.sleep(NODE_WATCH_INTERVAL_MS)
       if (!watching) return
+      // the manifest can arrive, or change, without the node set changing at all
+      refreshRuleSets()
       val next = nodeSignature()
       if (next == signature) continue
       signature = next
