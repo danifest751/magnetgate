@@ -76,6 +76,15 @@ class MainActivity : ComponentActivity() {
   private fun dumpStatus() {
     val status = runCatching { Mgbox.coreStatus() }.getOrElse { "status failed: ${it.message}" }
     runCatching { File(filesDir, "status.txt").writeText(status) }
-    Log.i(TAG, "status dumped")
+    // The health of the tunnel lives in this process and nowhere else, so without this line the only
+    // way to see whether the exit is answering is to look at the screen - and a check that needs a
+    // human looking at a screen cannot be part of an acceptance run.
+    val health = Health.lastCheck
+    val line = buildString {
+      append(if (health == null) "check=none" else "check=${if (health.ok) "ok" else "failed"} took=${health.tookMs}ms at=${health.atMs} detail=${health.detail}")
+      if (Health.engineError.isNotEmpty()) append(" engineError=${Health.engineError}")
+    }
+    runCatching { File(filesDir, "health.txt").writeText(line) }
+    Log.i(TAG, "status dumped ($line)")
   }
 }

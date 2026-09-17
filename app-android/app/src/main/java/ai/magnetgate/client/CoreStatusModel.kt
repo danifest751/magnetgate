@@ -11,6 +11,25 @@ data class Pause(val type: String, val untilMs: Long, val fails: Int) {
   fun remainingMs(now: Long): Long = (untilMs - now).coerceAtLeast(0)
 }
 
+/**
+ * One relay of the push channel, as the core sees it.
+ *
+ * [answering] is the only one of these that means anything on its own: a relay can accept the socket
+ * and then never send a byte, which is what a mobile network does to this channel, and a screen that
+ * showed "connected" would be reporting the failure as health.
+ */
+data class RelayRow(val url: String, val connected: Boolean, val answering: Boolean, val error: String) {
+  /** The relay without the scheme, which is all that distinguishes them on a narrow screen. */
+  val host: String get() = url.substringAfter("//").trimEnd('/')
+
+  val state: String get() = when {
+    answering -> "answering"
+    error.isNotEmpty() -> error
+    connected -> "connected, silent"
+    else -> "not connected"
+  }
+}
+
 /** One discovered node, flattened for the screens. */
 data class NodeRow(
   val slot: Int,
@@ -39,17 +58,29 @@ data class CoreStatus(
   val error: String = "",
   val slots: List<Int> = emptyList(),
   val nodes: List<NodeRow> = emptyList(),
+  val relays: List<RelayRow> = emptyList(),
   val logs: List<String> = emptyList(),
 ) {
+  /** Relays configured but none of them serving us: the push channel is configured and useless. */
+  val relaysConfiguredButSilent: Boolean get() = relays.isNotEmpty() && relays.none { it.answering }
   /** A tunnel needs both: the core up and somewhere to send traffic. */
   val ready: Boolean get() = running && nodes.isNotEmpty()
 
-  /** The state the connect screen shows in one line. */
-  fun headline(vpnUp: Boolean): String = when {
+  /**
+   * The state the connect screen shows in one line.
+   *
+   * [check] is the last measurement of the path traffic takes, and it is here because "Connected" on its
+   * own is what this screen said through the DNS regress of 17.09 while pages were barely loading. A
+   * tunnel that is up is not the same as a tunnel that works, and the headline must not claim the second
+   * when only the first has been established.
+   */
+  fun headline(vpnUp: Boolean, check: Health.Check? = null): String = when {
     !vpnUp -> "Not connected"
     error.isNotEmpty() -> "Error: $error"
     !running -> "Tunnel requested, core is down"
     nodes.isEmpty() -> "Looking for a node…"
+    check != null && !check.ok -> "Connected, but the exit is not answering"
+    check != null && check.slow -> "Connected, but traffic is slow"
     else -> "Connected"
   }
 
@@ -81,6 +112,17 @@ data class CoreStatus(
           paused = paused,
         )
       }
+      val relays = mutableListOf<RelayRow>()
+      val relayArray = root.optJSONArray("relays") ?: JSONArray()
+      for (index in 0 until relayArray.length()) {
+        val entry = relayArray.optJSONObject(index) ?: continue
+        relays += RelayRow(
+          url = entry.optString("url"),
+          connected = entry.optBoolean("connected"),
+          answering = entry.optBoolean("answering"),
+          error = entry.optString("lastError"),
+        )
+      }
       val logs = mutableListOf<String>()
       val log = root.optJSONArray("logs") ?: JSONArray()
       for (index in 0 until log.length()) logs += log.optString(index)
@@ -91,6 +133,7 @@ data class CoreStatus(
         error = root.optString("error"),
         slots = ints(root.optJSONArray("slots")),
         nodes = nodes,
+        relays = relays,
         logs = logs,
       )
     }

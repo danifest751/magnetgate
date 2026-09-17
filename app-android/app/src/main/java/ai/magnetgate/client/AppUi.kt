@@ -102,6 +102,8 @@ fun AppRoot(
   var vpnUp by remember { mutableStateOf(MgVpnService.isRunning()) }
   var busy by remember { mutableStateOf(false) }
   var egress by remember { mutableStateOf("") }
+  var check by remember { mutableStateOf(Health.lastCheck) }
+  var engineError by remember { mutableStateOf(Health.engineError) }
   var notice by remember { mutableStateOf("") }
 
   // Settings are read once and written by the settings screen; the connect path uses the stored values,
@@ -159,6 +161,10 @@ fun AppRoot(
       status = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }
         .getOrElse { CoreStatus(error = it.message.orEmpty()) }
       vpnUp = MgVpnService.isRunning()
+      // the service measures; the screen only reports what it found, so this keeps working with the
+      // app closed and the reading is never older than the label next to it says
+      check = Health.lastCheck
+      engineError = Health.engineError
       // Check the egress once the tunnel is actually up, not before it. Without the engine the core
       // can only use its own native plane, and on a mobile network that port is often blocked - so a
       // check run first reports a failure for a tunnel that then works perfectly through reality.
@@ -253,6 +259,8 @@ fun AppRoot(
         busy = busy,
         pskSet = psk.isNotBlank(),
         egress = egress,
+        check = check,
+        engineError = engineError,
         notice = notice,
         onConnect = { connect() },
         onDisconnect = { stopVpn(context); notice = "" },
@@ -294,7 +302,7 @@ fun AppRoot(
         pskFromFile = Settings.pskFromFile(context),
       )
 
-      Screen.DIAGNOSTICS -> DiagnosticsScreen(status = status, vpnUp = vpnUp)
+      Screen.DIAGNOSTICS -> DiagnosticsScreen(status = status, vpnUp = vpnUp, check = check)
     }
   }
 }
@@ -307,6 +315,8 @@ private fun ConnectScreen(
   busy: Boolean,
   pskSet: Boolean,
   egress: String,
+  check: Health.Check?,
+  engineError: String,
   notice: String,
   onConnect: () -> Unit,
   onDisconnect: () -> Unit,
@@ -318,7 +328,9 @@ private fun ConnectScreen(
     verticalArrangement = Arrangement.spacedBy(12.dp),
   ) {
     Text("MagnetGate", style = MaterialTheme.typography.headlineSmall)
-    Text(status.headline(vpnUp), style = MaterialTheme.typography.titleMedium)
+    Text(status.headline(vpnUp, check), style = MaterialTheme.typography.titleMedium)
+
+    if (vpnUp) HealthCard(status, check, engineError)
 
     if (!pskSet) {
       Card(modifier = Modifier.fillMaxWidth()) {
@@ -356,6 +368,53 @@ private fun ConnectScreen(
     for (node in status.nodes) NodeCard(node)
   }
 }
+
+/**
+ * What the app knows about its own health, said plainly.
+ *
+ * Everything here was already known to the phone and shown to nobody: the engine's failures went to
+ * logcat, the relay states sat in the core's status document, and the exit was measured once at connect
+ * and never again. The DNS regress cost half an hour of guessing because of that.
+ */
+@Composable
+private fun HealthCard(status: CoreStatus, check: Health.Check?, engineError: String) {
+  val complaints = buildList {
+    if (engineError.isNotEmpty()) add(engineError)
+    if (check != null && !check.ok) add("the exit check failed: ${check.detail}")
+    if (check != null && check.slow) add("traffic is slow: the exit check took ${check.summary().substringAfterLast(' ')}")
+    if (status.relaysConfiguredButSilent) {
+      add("no relay is answering - hy2 and rule-set updates travel that channel and will not arrive")
+    }
+    for (node in status.nodes) {
+      for (pause in node.paused) {
+        val seconds = (pause.remainingMs(System.currentTimeMillis()) / 1000).toInt()
+        add("${node.title}: ${pause.type} is paused for ${seconds}s after ${pause.fails} failure(s)")
+      }
+    }
+  }
+  Card(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Text(
+        when {
+          check == null -> "Exit check: not run yet"
+          else -> "Exit check: ${clockOf(check.atMs)} - ${check.summary()}"
+        },
+        style = MaterialTheme.typography.bodyMedium,
+      )
+      if (complaints.isEmpty()) {
+        Text("Nothing is complaining.", style = MaterialTheme.typography.bodySmall)
+      } else {
+        for (line in complaints) {
+          Text("• $line", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
+      }
+    }
+  }
+}
+
+/** Wall-clock time of a measurement: "when did it last work" is the question being answered. */
+private fun clockOf(atMs: Long): String =
+  java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(atMs))
 
 @Composable
 private fun NodeCard(node: NodeRow) {
@@ -547,7 +606,7 @@ private fun SettingsScreen(
 
 /** The state a bug report needs: the core's own view, plus the tail of its log. */
 @Composable
-private fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean) {
+private fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?) {
   Column(
     modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
     verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -593,6 +652,32 @@ private fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean) {
         fontFamily = FontFamily.Monospace,
       )
     }
+
+    HorizontalDivider()
+    Text("Rendezvous relays", style = MaterialTheme.typography.titleMedium)
+    if (status.relays.isEmpty()) {
+      Text("none configured - discovery is DHT only, so hy2 and rule-set updates cannot arrive",
+        style = MaterialTheme.typography.bodySmall)
+    }
+    for (relay in status.relays) {
+      Text(
+        "${relay.host}  ${relay.state}",
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = FontFamily.Monospace,
+        // "connected, silent" is the state that looked healthy for a day; it must not look healthy here
+        color = if (relay.answering) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
+      )
+    }
+
+    HorizontalDivider()
+    Text("Exit checks", style = MaterialTheme.typography.titleMedium)
+    Text(
+      check?.let { "${clockOf(it.atMs)}  ${it.summary()}" } ?: "not run yet",
+      style = MaterialTheme.typography.bodySmall,
+      fontFamily = FontFamily.Monospace,
+      color = if (check == null || (check.ok && !check.slow)) MaterialTheme.colorScheme.onSurface
+      else MaterialTheme.colorScheme.error,
+    )
 
     HorizontalDivider()
     Text("Core log", style = MaterialTheme.typography.titleMedium)

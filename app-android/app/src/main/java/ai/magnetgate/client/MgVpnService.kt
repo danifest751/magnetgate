@@ -34,6 +34,14 @@ class MgVpnService : VpnService() {
     private const val CHANNEL_ID = "magnetgate"
     private const val DISCOVERY_TIMEOUT_MS = 90_000L
     private const val NODE_WATCH_INTERVAL_MS = 5_000L
+
+    /**
+     * How often the exit is measured while the tunnel is up. It runs here rather than on the screen so
+     * that it keeps running with the app closed, which is when a tunnel is normally used: the regress
+     * this answers was noticed by a person opening web pages, not by anyone watching a screen.
+     */
+    private const val CHECK_INTERVAL_MS = 60_000L
+    private const val CHECK_URL = "https://api.ipify.org"
     private const val NOTIFICATION_ID = 1
 
     @Volatile
@@ -105,6 +113,7 @@ class MgVpnService : VpnService() {
       startTunnel(bootstrap, relays, coreless, modeExtra)
     } catch (error: Throwable) {
       Log.e(TAG, "the tunnel did not start: ${error.message}", error)
+      Health.recordEngineError("the tunnel did not start: ${error.message}")
       stopTunnel()
       stopSelf()
     }
@@ -121,6 +130,8 @@ class MgVpnService : VpnService() {
   private fun startTunnel(bootstrap: String, relays: String, coreless: Boolean, modeExtra: String) {
     if (running || starting) return
     starting = true
+    // a new tunnel must not be judged by the previous one's measurements
+    Health.reset()
     startForeground(NOTIFICATION_ID, notification("looking for a node"))
     Thread {
       try {
@@ -158,6 +169,7 @@ class MgVpnService : VpnService() {
         watchNodes()
       } catch (error: Throwable) {
         Log.e(TAG, "the tunnel did not start: ${error.message}", error)
+        Health.recordEngineError("the tunnel did not start: ${error.message}")
         stopTunnel()
         stopSelf()
       } finally {
@@ -203,6 +215,7 @@ class MgVpnService : VpnService() {
       Log.i(TAG, "rule-sets: engine reloaded on generation ${RuleSets.generation(this)}")
     } catch (error: Throwable) {
       Log.w(TAG, "rule-sets: not refreshed: ${error.message}")
+      Health.recordEngineError("rule-sets: not refreshed: ${error.message}")
     }
   }
 
@@ -235,11 +248,16 @@ class MgVpnService : VpnService() {
    */
   private fun watchNodes() {
     var signature = nodeSignature()
+    var checkedAt = 0L
     while (watching) {
       Thread.sleep(NODE_WATCH_INTERVAL_MS)
       if (!watching) return
       // the manifest can arrive, or change, without the node set changing at all
       refreshRuleSets()
+      if (System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS && corePort != 0) {
+        checkedAt = System.currentTimeMillis()
+        Health.check(corePort, CHECK_URL)
+      }
       val next = nodeSignature()
       if (next == signature) continue
       signature = next
@@ -257,6 +275,7 @@ class MgVpnService : VpnService() {
         Log.i(TAG, "engine reloaded for ${nodes.size} node(s), ${built.planes.size} engine plane(s)")
       } catch (error: Throwable) {
         Log.w(TAG, "the engine was not reloaded: ${error.message}")
+        Health.recordEngineError("the engine was not reloaded: ${error.message}")
       }
     }
   }
