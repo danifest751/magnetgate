@@ -338,6 +338,9 @@ try {
   Save-Text (Join-Path $ReportDir 'logcat-tunnel.txt') $logs
   Save-Text (Join-Path $ReportDir 'status.json') $dump.status
   Save-Text (Join-Path $ReportDir 'health.txt') $dump.health
+  # The engine's own log is the only place a reset connection is explained; the core's log ends at
+  # "stream opened". The tail is enough for a run, and the whole file stays on the device.
+  Save-Text (Join-Path $ReportDir 'engine.log') (AsApp 'tail -n 3000 files/engine.log 2>/dev/null')
 
   # --- 1. the core has one owner ------------------------------------------------
   $listening = [regex]::Matches($logs, 'core listening on 127\.0\.0\.1:(\d+)')

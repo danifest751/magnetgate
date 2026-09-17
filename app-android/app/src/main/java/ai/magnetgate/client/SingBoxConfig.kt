@@ -50,6 +50,10 @@ object SingBoxConfig {
     directDomains: List<String> = emptyList(),
     tunnelDomains: List<String> = emptyList(),
     ruleSets: List<RuleSets.Available> = emptyList(),
+    // Where the engine writes its own log, or empty for the log it has always had: a level the app
+    // never reads. Without it a reset connection has no explanation anywhere - the core's log ends at
+    // "stream opened", and the engine's side of the tunnel is silent (trap 80).
+    logPath: String = "",
   ): Built {
     val outbounds = JSONArray()
     val planeInbounds = JSONArray()
@@ -124,7 +128,11 @@ object SingBoxConfig {
     for (index in 0 until planeInbounds.length()) inbounds.put(planeInbounds.get(index))
 
     val config = JSONObject()
-    config.put("log", JSONObject().put("level", "warn").put("timestamp", true))
+    // `info` rather than `warn` when a file is asked for: a connection the engine resets is reported at
+    // info, and that is the line the owner's "connection reset" evening had nothing to show for.
+    val log = JSONObject().put("level", if (logPath.isEmpty()) "warn" else "info").put("timestamp", true)
+    if (logPath.isNotEmpty()) log.put("output", logPath)
+    config.put("log", log)
     config.put(
       "dns",
       JSONObject()

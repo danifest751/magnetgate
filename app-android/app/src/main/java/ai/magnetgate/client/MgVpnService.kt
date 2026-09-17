@@ -42,6 +42,9 @@ class MgVpnService : VpnService() {
      */
     private const val CHECK_INTERVAL_MS = 60_000L
     private const val CHECK_URL = "https://api.ipify.org"
+
+    /** How large the engine's log may grow before it is emptied; one generation of it is also kept. */
+    private const val MAX_ENGINE_LOG = 16L * 1024 * 1024
     private const val NOTIFICATION_ID = 1
 
     @Volatile
@@ -78,6 +81,9 @@ class MgVpnService : VpnService() {
 
   /** The packages the tunnel must leave alone, read from settings when the tunnel comes up. */
   private var excludedPackages: List<String> = emptyList()
+
+  /** Where the engine writes its own log for this tunnel; see [prepareEngineLog]. */
+  private var engineLog = ""
 
   /**
    * The routing policy as it was when the tunnel came up. It is captured once rather than re-read on
@@ -139,6 +145,48 @@ class MgVpnService : VpnService() {
   }
 
   /**
+   * Prepares the engine's log file for a new tunnel and keeps the previous one beside it.
+   *
+   * Keeping one generation is the whole point. When a tunnel that has been up for hours starts resetting
+   * connections, the thing that fixes it is a restart - and the restart would erase the only record of
+   * what went wrong, which is exactly what happened on 17.09 (trap 79). The previous log survives as
+   * `engine.log.1`.
+   *
+   * The engine logs what it carries, so this file names the hosts this phone visits. It lives in the
+   * app's private directory and is bounded: one generation kept, each dropped once it passes
+   * [MAX_ENGINE_LOG].
+   */
+  private fun prepareEngineLog(): String {
+    val log = java.io.File(filesDir, "engine.log")
+    val previous = java.io.File(filesDir, "engine.log.1")
+    runCatching {
+      if (previous.exists()) previous.delete()
+      if (log.exists()) {
+        if (log.length() > MAX_ENGINE_LOG) log.delete() else log.renameTo(previous)
+      }
+    }.onFailure { Log.w(TAG, "rotating the engine log: ${it.message}") }
+    return log.absolutePath
+  }
+
+  /**
+   * Keeps the running tunnel's log from growing without end.
+   *
+   * sing-box opens it with O_APPEND (log/observable.go), so emptying the file under it is safe: the next
+   * write goes to the new end rather than leaving a hole. Truncating loses history, which is why the cap
+   * is generous - a session that writes this much has plenty of recent evidence left.
+   */
+  private fun trimEngineLog() {
+    if (engineLog.isEmpty()) return
+    val log = java.io.File(engineLog)
+    runCatching {
+      if (log.length() > MAX_ENGINE_LOG) {
+        java.io.FileOutputStream(log, false).close()
+        Log.i(TAG, "the engine log passed ${MAX_ENGINE_LOG / (1024 * 1024)} MB and was emptied")
+      }
+    }.onFailure { Log.w(TAG, "trimming the engine log: ${it.message}") }
+  }
+
+  /**
    * Starts the core, waits until it has found a node (a tunnel with nowhere to go is not a tunnel), builds
    * the engine's configuration from what was found, starts the engine and tells the core which loopback
    * listener carries which of the node's planes.
@@ -163,9 +211,10 @@ class MgVpnService : VpnService() {
           tunnelDomains = Settings.tunnelDomains(this),
           ruleSets = RuleSets.ensure(this),
         )
+        engineLog = prepareEngineLog()
         val built = SingBoxConfig.build(
           port, coreless, nodes, excludedPackages,
-          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets,
+          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog,
         )
 
         Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
@@ -224,7 +273,7 @@ class MgVpnService : VpnService() {
       policy = policy.copy(ruleSets = RuleSets.ensure(this))
       val built = SingBoxConfig.build(
         corePort, false, discoveredNodes(), excludedPackages,
-        policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets,
+        policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog,
       )
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.reloadEngine(built.json)
@@ -280,6 +329,7 @@ class MgVpnService : VpnService() {
       if (System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS && through != 0) {
         checkedAt = System.currentTimeMillis()
         Health.check(through, CHECK_URL)
+        trimEngineLog()
       }
       val next = nodeSignature()
       if (next == signature) continue
@@ -294,7 +344,7 @@ class MgVpnService : VpnService() {
         val nodes = discoveredNodes()
         val built = SingBoxConfig.build(
           corePort, false, nodes, excludedPackages,
-          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets,
+          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog,
         )
         Mgbox.forgetPlaneSocksPorts()
         Mgbox.reloadEngine(built.json)
