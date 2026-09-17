@@ -421,8 +421,19 @@ try {
     Add-Skip 'nothing leaks while the app is dead' 'the VPN lockdown is not on for this app'
   } else {
     $hasCurl = (Shell 'command -v curl').Trim()
-    Say 'crashing the app to see whether the network closes (am crash, not force-stop: goto 62)'
-    Shell "am crash $appId" | Out-Null
+    # How the app is made to die decides what is being measured. `am force-stop` suppresses the restart
+    # outright (goto 62). `am crash` is reported as an application crash, MIUI files it and raises its
+    # "stopped" dialog, and the service restart waits behind that dialog for a person (goto 75) - so it
+    # measures the dialog. The kill hook ends the process the way an out-of-memory kill does, which is
+    # the death this promise has to survive. A build without the hook falls back to `am crash`.
+    Say 'killing the app to see whether the network closes and what comes back'
+    $howItDied = 'the kill hook'
+    Adb @('shell', 'am', 'start', '--activity-single-top', '-n', $activity, '-e', 'kill', 'true') | Out-Null
+    Start-Sleep -Seconds 5
+    if ((Shell "pidof $appId").Trim()) {
+      $howItDied = 'am crash (the kill hook did nothing: not a debuggable build?)'
+      Shell "am crash $appId" | Out-Null
+    }
     Start-Sleep -Seconds 10
     # measured from the shell uid on purpose: lockdown lets the VPN app itself out, so `run-as curl`
     # would report success and "prove" a protection that is not there (goto 63)
@@ -431,7 +442,7 @@ try {
     $closed = ($route -match 'Permission denied' -or $route -match 'Network is unreachable')
     if ($hasCurl) { $closed = ($closed -and $http -eq '000') }
     Add-Check 'nothing leaks while the app is dead' $closed `
-      "ip route get -> $(($route -split "`n")[0].Trim()); curl -> $(if ($hasCurl) { $http } else { 'no curl on the device' })"
+      "died by $howItDied; ip route get -> $(($route -split "`n")[0].Trim()); curl -> $(if ($hasCurl) { $http } else { 'no curl on the device' })"
 
     Say "waiting up to ${RestartSeconds}s for the system to bring the service back by itself"
     $revived = Wait-Until $RestartSeconds 15 {

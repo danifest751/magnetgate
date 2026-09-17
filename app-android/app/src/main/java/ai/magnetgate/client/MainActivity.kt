@@ -2,6 +2,7 @@ package ai.magnetgate.client
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -33,7 +34,11 @@ class MainActivity : ComponentActivity() {
       return
     }
     if (extras?.getStringExtra("stop") == "true") {
-      stopTunnel()
+      if (debuggable()) stopTunnel() else Log.w(TAG, "the stop hook only exists in debuggable builds")
+      return
+    }
+    if (extras?.getStringExtra("kill") == "true") {
+      if (debuggable()) killProcess() else Log.w(TAG, "the kill hook only exists in debuggable builds")
       return
     }
     val autotest =
@@ -80,7 +85,33 @@ class MainActivity : ComponentActivity() {
     // the app is usually already running when someone wants its state, so the dump hook has to work here
     // and not only in onCreate
     if (intent.getStringExtra("dump") == "true") dumpStatus()
-    if (intent.getStringExtra("stop") == "true") stopTunnel()
+    if (intent.getStringExtra("stop") == "true" && debuggable()) stopTunnel()
+    if (intent.getStringExtra("kill") == "true" && debuggable()) killProcess()
+  }
+
+  /**
+   * Whether this build may be driven from a shell.
+   *
+   * The launcher activity is exported, so an extra that takes the tunnel down - or kills the process
+   * carrying it - is reachable by anything on the phone that can send an intent. In a release build that
+   * would be a way for another app to switch someone's VPN off, which is the opposite of what a tunnel
+   * with a lockdown is for. These hooks therefore exist only where a debugger could attach anyway.
+   */
+  private fun debuggable(): Boolean =
+    (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+  /**
+   * Ends this process the way the system would, without an application crash.
+   *
+   * `am crash` is not the same thing on this ROM: it is delivered as a crash, MIUI files a report and
+   * raises its "application stopped" dialog, and the service restart waits behind that dialog for a
+   * person - so a run that uses it measures the dialog rather than the recovery. Killing the process is
+   * what an out-of-memory kill or a native crash looks like from the system's side, which is the death
+   * the fail-closed promise actually has to survive.
+   */
+  private fun killProcess() {
+    Log.w(TAG, "killing this process on request (the acceptance run measures what comes back)")
+    android.os.Process.killProcess(android.os.Process.myPid())
   }
 
   /**
