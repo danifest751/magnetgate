@@ -113,12 +113,21 @@ object SingBoxConfig {
           "servers",
           JSONArray().put(
             JSONObject()
-              .put("type", "udp")
+              // DNS-over-HTTPS, not plain UDP: the core's SOCKS entry point answers CONNECT and refuses
+              // UDP ASSOCIATE on purpose (the Android data plane is TCP), so a UDP resolver pointed
+              // through it could never work. DoH is TCP, so it goes through the same path the traffic
+              // does - and the query is encrypted twice over rather than readable on the way out.
+              .put("type", "https")
               .put("tag", "remote")
               .put("server", "1.1.1.1")
               .apply { if (!coreless) put("detour", "core") },
           ),
         )
+        // Resolve A records only. Every endpoint a node advertises is IPv4 and IPv6 is rejected by the
+        // rule below, so handing an application a AAAA record gives it an address that cannot be used:
+        // it tries, waits for the rejection, then falls back - which reads as "pages load strangely"
+        // while something like Telegram, which dials fixed IPv4 addresses, stays perfectly fast.
+        .put("strategy", "ipv4_only")
         .put("final", "remote"),
     )
     // ---- routing policy, the same shape as the desktop's app/vpn-config.cjs -------------------------
@@ -167,7 +176,11 @@ object SingBoxConfig {
         .apply { if (ruleSetDefs.length() > 0) put("rule_set", ruleSetDefs) }
         // what nothing matched: in split mode that is the open internet, in full mode it is the tunnel
         .put("final", if (mode == Settings.Mode.SPLIT) "direct" else "core")
-        .put("auto_detect_interface", false),
+        .put("auto_detect_interface", false)
+        // Which resolver the routing rules themselves use when a rule names a domain. Without it a
+        // domain rule resolves through whatever the platform would have used, which is the network's
+        // own resolver - outside the tunnel, and visible to it.
+        .put("default_domain_resolver", "remote"),
     )
     return Built(config.toString(2), planes)
   }
