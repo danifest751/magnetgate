@@ -136,6 +136,43 @@ test('drift: the slot env var is converted before it reaches the validator', () 
   )
 })
 
+test('drift: the phone routes by the same policy as the desktop', () => {
+  // Every bug found on a phone on 2026-09-17 was one shape: the engine configuration for Android was
+  // written by hand as a second copy of app/vpn-config.cjs, and pieces of the policy were simply not
+  // carried across - the tun MTU, the IPv6 address and its reject rule, the resolver's address
+  // strategy, the domain resolver, sniffing, DNS hijacking, the rule-sets themselves. Each one is
+  // invisible until it is someone's broken afternoon, and several of them look like protection while
+  // providing none. Neither file can be derived from the other (one builds JSON in Kotlin on a device,
+  // the other in Node for a desktop), so what can be held is that the decisions appear in both.
+  // The Android policy spans two files: the configuration builder and the rule-sets it points at.
+  const androidConfig = read('app-android/app/src/main/java/ai/magnetgate/client/SingBoxConfig.kt')
+  const android = androidConfig + read('app-android/app/src/main/java/ai/magnetgate/client/RuleSets.kt')
+  const desktop = read('app/vpn-config.cjs')
+
+  const mtu = (text, re) => pick(text, re, 'the tun MTU')
+  assert.equal(
+    mtu(androidConfig, /"mtu", (\d+)/),
+    mtu(desktop, /mtu: (\d+)/),
+    'the phone and the desktop give the tun different MTUs'
+  )
+
+  for (const [what, inDesktop, inAndroid] of [
+    ['a v6 address on the tun, so IPv6 cannot leave unclaimed', /fdfe:[0-9a-f:]+/, /fdfe:[0-9a-f:]+/],
+    ['an IPv6 reject rule', /ip_version: 6[\s\S]{0,40}reject/, /"ip_version", 6[\s\S]{0,60}"reject"/],
+    ['an ipv4-only resolver strategy', /strategy: 'ipv4_only'/, /"strategy", "ipv4_only"/],
+    ['a resolver for domain rules', /default_domain_resolver/, /default_domain_resolver/],
+    ['sniffing, without which domain rules do not match', /action: 'sniff'/, /"action", "sniff"/],
+    ['DNS hijacking, without which a fixed resolver escapes', /'hijack-dns'/, /"hijack-dns"/],
+    ['private addresses kept out of the tunnel', /ip_is_private/, /ip_is_private/],
+    ['the blocked-domain rule-set', /refilter-domains\.srs/, /refilter-domains\.srs/],
+    ['the blocked-ip rule-set', /refilter-ip\.srs/, /refilter-ip\.srs/],
+    ['the operator rule-set', /tunnel-userlist\.srs/, /tunnel-userlist\.srs/]
+  ]) {
+    assert.ok(inDesktop.test(desktop), `the desktop lost ${what} - check whether that was deliberate`)
+    assert.ok(inAndroid.test(android), `the phone has no ${what}, while the desktop does`)
+  }
+})
+
 test('drift: STATUS.md states the number of tests that actually run', () => {
   // docs/ is gitignored, so this only runs on a machine that has the internal documentation.
   // STATUS.md declares itself the one document that must match the code, and these two numbers are

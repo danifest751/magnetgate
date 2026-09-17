@@ -50,6 +50,19 @@ object SingBoxConfig {
     val rules = JSONArray()
     val planes = mutableListOf<EnginePlane>()
 
+    // These two come first, before anything is routed anywhere, exactly as in app/vpn-config.cjs.
+    //
+    // sniff reads the destination name out of the TLS handshake or the HTTP request. Without it a rule
+    // that names a domain never matches a connection an application made to an address it resolved
+    // itself - which is most of them - so the whole site-rule policy below would only half apply.
+    //
+    // hijack-dns takes DNS asked of any server and answers it from the resolver configured above.
+    // Without it an application that dials a fixed resolver (8.8.8.8 is common, and Android's private
+    // DNS is another) never reaches ours: its queries leave as ordinary traffic, visible to whoever
+    // carries them, and resolve outside every rule we set.
+    rules.put(JSONObject().put("action", "sniff"))
+    rules.put(JSONObject().put("protocol", "dns").put("action", "hijack-dns"))
+
     for (node in nodes) {
       for (plane in node.planes) {
         val type = plane.optString("t")
