@@ -1,10 +1,15 @@
 package ai.magnetgate.client
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -30,6 +35,10 @@ class MainActivity : ComponentActivity() {
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
     Log.i(TAG, "app started, core ${Mgbox.coreVersion()}, autotest=$autotest")
+
+    // not during an acceptance run: the permission dialog takes the foreground, and a script that
+    // cannot tap it would be left measuring a tunnel that never started
+    if (!autotest) askForNotifications()
 
     // `-e save true` writes the discovery extras into the settings store instead of applying them to
     // this launch only, so a device can be provisioned from the command line rather than typed into on
@@ -67,6 +76,27 @@ class MainActivity : ComponentActivity() {
     // the app is usually already running when someone wants its state, so the dump hook has to work here
     // and not only in onCreate
     if (intent.getStringExtra("dump") == "true") dumpStatus()
+  }
+
+  /**
+   * Asks for the notification permission, which from Android 13 is not granted by declaring it.
+   *
+   * Without it the foreground service still runs, but its card never appears in the shade - so the one
+   * place a person would look to see whether the tunnel is up, and the only place this app can say
+   * something while it is not on screen, is simply missing. The permission was declared in the manifest
+   * and never requested, which looked like it worked on anything older.
+   */
+  private fun askForNotifications() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+      PackageManager.PERMISSION_GRANTED
+    if (granted) return
+    // registerForActivityResult has to be created before the activity is started, which is why this is
+    // built here in onCreate rather than where it is used
+    val ask = registerForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
+      Log.i(TAG, "notifications ${if (allowed) "allowed" else "refused"}")
+    }
+    ask.launch(Manifest.permission.POST_NOTIFICATIONS)
   }
 
   /**
