@@ -86,6 +86,14 @@ class MgVpnService : VpnService() {
   private var engineLog = ""
 
   /**
+   * How loudly the engine writes it, for this tunnel only.
+   *
+   * A hunt wants `debug` - it is the only level that says what the sniffer read and why a connection
+   * waited - and no one wants it every day. So it arrives as a launch extra and dies with the tunnel.
+   */
+  private var engineLogLevel = "info"
+
+  /**
    * The routing policy as it was when the tunnel came up. It is captured once rather than re-read on
    * every engine reload: a reload happens because the set of nodes changed, and it must not quietly
    * adopt a mode the user picked afterwards - that would move traffic without them reconnecting.
@@ -133,6 +141,10 @@ class MgVpnService : VpnService() {
     val relays = Settings.channel(intent?.getStringExtra("relays").orEmpty(), Settings.relays(this))
     val coreless = intent?.getBooleanExtra("coreless", false) == true
     val modeExtra = intent?.getStringExtra("mode").orEmpty()
+    engineLogLevel = when (intent?.getStringExtra("enginelog")?.lowercase()) {
+      "trace", "debug", "info", "warn", "error" -> intent.getStringExtra("enginelog")!!.lowercase()
+      else -> "info"
+    }
     try {
       startTunnel(bootstrap, relays, coreless, modeExtra)
     } catch (error: Throwable) {
@@ -214,7 +226,7 @@ class MgVpnService : VpnService() {
         engineLog = prepareEngineLog()
         val built = SingBoxConfig.build(
           port, coreless, nodes, excludedPackages,
-          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog,
+          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
         )
 
         Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
@@ -273,7 +285,7 @@ class MgVpnService : VpnService() {
       policy = policy.copy(ruleSets = RuleSets.ensure(this))
       val built = SingBoxConfig.build(
         corePort, false, discoveredNodes(), excludedPackages,
-        policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog,
+        policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
       )
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.reloadEngine(built.json)
@@ -344,7 +356,7 @@ class MgVpnService : VpnService() {
         val nodes = discoveredNodes()
         val built = SingBoxConfig.build(
           corePort, false, nodes, excludedPackages,
-          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog,
+          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
         )
         Mgbox.forgetPlaneSocksPorts()
         Mgbox.reloadEngine(built.json)

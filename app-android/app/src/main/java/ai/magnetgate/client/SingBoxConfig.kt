@@ -54,6 +54,11 @@ object SingBoxConfig {
     // never reads. Without it a reset connection has no explanation anywhere - the core's log ends at
     // "stream opened", and the engine's side of the tunnel is silent (trap 80).
     logPath: String = "",
+    // What the engine writes while this tunnel runs. `info` is one line per connection, which is what
+    // explains a reset; `debug` adds what the sniffer read and how a route was chosen, which is the only
+    // way to see where a connection waits before the core is dialled. Debug is for a hunt, not for every
+    // day: it is several times the volume, and it names the domains this phone visits.
+    logLevel: String = "info",
   ): Built {
     val outbounds = JSONArray()
     val planeInbounds = JSONArray()
@@ -134,7 +139,8 @@ object SingBoxConfig {
     val config = JSONObject()
     // `info` rather than `warn` when a file is asked for: a connection the engine resets is reported at
     // info, and that is the line the owner's "connection reset" evening had nothing to show for.
-    val log = JSONObject().put("level", if (logPath.isEmpty()) "warn" else "info").put("timestamp", true)
+    val level = if (logPath.isEmpty()) "warn" else logLevel
+    val log = JSONObject().put("level", level).put("timestamp", true)
     if (logPath.isNotEmpty()) log.put("output", logPath)
     config.put("log", log)
     config.put(

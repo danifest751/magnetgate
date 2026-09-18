@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
             relaysExtra = extras?.getStringExtra("relays").orEmpty(),
             checkUrlExtra = extras?.getStringExtra("checkurl").orEmpty(),
             modeExtra = extras?.getStringExtra("mode").orEmpty(),
+            engineLogExtra = extras?.getStringExtra("enginelog").orEmpty(),
           )
         }
       }

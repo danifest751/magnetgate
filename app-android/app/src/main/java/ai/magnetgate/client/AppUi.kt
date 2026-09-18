@@ -93,6 +93,8 @@ fun AppRoot(
   checkUrlExtra: String = "",
   // Acceptance runs pick the routing mode on the command line; the screen still writes the store.
   modeExtra: String = "",
+  // How loudly the engine should log for this tunnel: a hunt asks for `debug`, everyday use does not.
+  engineLogExtra: String = "",
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
@@ -125,7 +127,7 @@ fun AppRoot(
 
   val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     if (result.resultCode == Activity.RESULT_OK) {
-      startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra)
+      startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra, engineLogExtra)
     } else {
       notice = "the VPN consent was refused"
       Log.w(TAG, "the user refused the VPN consent")
@@ -155,7 +157,7 @@ fun AppRoot(
       return
     }
     val consent = VpnService.prepare(context)
-    if (consent != null) vpnConsent.launch(consent) else startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra)
+    if (consent != null) vpnConsent.launch(consent) else startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra, engineLogExtra)
   }
 
   LaunchedEffect(Unit) {
@@ -186,7 +188,7 @@ fun AppRoot(
       if (coreless) {
         // diagnostic path: the engine alone, with no second Go runtime in the process
         val consent = VpnService.prepare(context)
-        if (consent != null) vpnConsent.launch(consent) else startVpn(context, bootstrapExtra, relaysExtra, true, modeExtra)
+        if (consent != null) vpnConsent.launch(consent) else startVpn(context, bootstrapExtra, relaysExtra, true, modeExtra, engineLogExtra)
         recordAutotest(context, "coreless vpn-requested")
         return@LaunchedEffect
       }
@@ -225,7 +227,7 @@ fun AppRoot(
           vpnConsent.launch(consent)
           Log.w(TAG, "AUTOTEST vpn=consent-required")
         } else {
-          startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra)
+          startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra, engineLogExtra)
           Log.i(TAG, "AUTOTEST vpn=requested")
           var waited = 0
           while (waited < 60 && !MgVpnService.isRunning()) {
@@ -797,6 +799,7 @@ private fun startVpn(
   // Empty means "use the stored setting"; an acceptance run overrides it without touching the store,
   // the same way it overrides the discovery channels.
   mode: String = "",
+  engineLog: String = "",
 ) {
   val intent = Intent(context, MgVpnService::class.java)
     .setAction(MgVpnService.ACTION_START)
@@ -804,6 +807,7 @@ private fun startVpn(
     .putExtra("relays", relays)
     .putExtra("coreless", coreless)
     .putExtra("mode", mode)
+    .putExtra("enginelog", engineLog)
   context.startForegroundService(intent)
 }
 
