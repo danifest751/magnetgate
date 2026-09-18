@@ -283,10 +283,10 @@ fun AppRoot(
     // one tab, and the tab that is open should be the first thing under it.
     Row(
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
       modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
     ) {
-      ProductMark(size = 30.dp)
+      ProductMark(size = 34.dp)
       Text("MagnetGate", style = MaterialTheme.typography.headlineSmall)
     }
     TabRow(
@@ -597,38 +597,45 @@ private fun Notice(
 /**
  * The product mark: a horseshoe magnet standing as a gate, with the way through laid across its poles.
  *
- * The same drawing as the launcher icon, and drawn here rather than loaded from a vector so it takes its
- * two colours from the theme: the gate in the text ink of whichever theme is on, the path in the accent
- * the app spends on its one control. A two-colour vector would have to hard-code both, and would be
- * wrong in one of the two themes.
+ * The same drawing as the launcher icon, and drawn here rather than loaded from that vector so it takes
+ * its two colours from the theme: the magnet in the text ink of whichever theme is on, the bar in the
+ * accent the app spends on its one control. A two-colour vector would have to hard-code both, and would
+ * be wrong in one of the two themes.
  */
 @Composable
-private fun ProductMark(size: Dp = 30.dp) {
+private fun ProductMark(size: Dp = 34.dp) {
   val gate = MaterialTheme.colorScheme.onBackground
   val path = MaterialTheme.colorScheme.primary
   Canvas(modifier = Modifier.size(size)) {
-    val unit = this.size.minDimension / 108f
+    // The launcher drawing carries a wide margin, because an adaptive icon has to survive any mask. In
+    // the header there is no mask and no margin worth keeping, so the same geometry is mapped by its own
+    // bounding box instead of by the 108-unit canvas: the mark then stands as tall as the word beside it.
+    val unit = this.size.minDimension / 63f
+    val dx = (this.size.width - 59f * unit) / 2f - 24.5f * unit
+    val dy = (this.size.height - 63f * unit) / 2f - 22.5f * unit
+    fun px(value: Float) = dx + value * unit
+    fun py(value: Float) = dy + value * unit
     val stroke = 11f * unit
 
     // the magnet, standing as a gate: one continuous stroke, poles down
     val magnet = Path().apply {
-      moveTo(30f * unit, 80f * unit)
-      lineTo(30f * unit, 52f * unit)
+      moveTo(px(30f), py(80f))
+      lineTo(px(30f), py(52f))
       arcTo(
-        rect = Rect(left = 30f * unit, top = 28f * unit, right = 78f * unit, bottom = 76f * unit),
+        rect = Rect(left = px(30f), top = py(28f), right = px(78f), bottom = py(76f)),
         startAngleDegrees = 180f,
         sweepAngleDegrees = 180f,
         forceMoveTo = false,
       )
-      lineTo(78f * unit, 80f * unit)
+      lineTo(px(78f), py(80f))
     }
     drawPath(magnet, color = gate, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
 
     // the way through, laid across its poles
     drawLine(
       color = path,
-      start = Offset(30f * unit, 66f * unit),
-      end = Offset(78f * unit, 66f * unit),
+      start = Offset(px(30f), py(66f)),
+      end = Offset(px(78f), py(66f)),
       strokeWidth = 9f * unit,
       cap = StrokeCap.Round,
     )
