@@ -147,12 +147,36 @@ class MgVpnService : VpnService() {
     super.onDestroy()
   }
 
+  /**
+   * The VPN was taken away: the user revoked it, or gave it to another app.
+   *
+   * That is a decision, not a failure, so the wish goes with it. Without this the watchdog would find
+   * "wanted and not up" once a minute for as long as the other VPN lasts, and say so in the log every
+   * time - and the one thing it must never do is take the tunnel back from an app the user chose.
+   */
+  override fun onRevoke() {
+    Log.w(TAG, "the VPN was revoked; the tunnel is no longer wanted")
+    Watchdog.want(this, false)
+    stopTunnel()
+    stopSelf()
+    super.onRevoke()
+  }
+
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_STOP) {
+      // The wish is withdrawn before the tunnel goes down, so that a watchdog tick arriving in between
+      // finds "not wanted" rather than "wanted and not up" and reconnects a VPN somebody just switched
+      // off.
+      Watchdog.want(this, false)
       stopTunnel()
       stopSelf()
       return START_NOT_STICKY
     }
+    // Every road to a tunnel passes here - the screen, an acceptance run, always-on after a reboot, the
+    // watchdog itself - so this is the one place that can say "from now on, this phone wants a tunnel".
+    // It is recorded before the tunnel is built rather than after: a start that fails half-way through
+    // discovery is exactly a case the watchdog should retry.
+    Watchdog.want(this, true)
     // The extras exist for the acceptance scripts, which point a run at their own stand; the screens
     // leave them empty, and then the saved settings decide what this client looks for. A channel named
     // `none` is off for this run, which is how a script proves one channel on its own (Settings.channel).

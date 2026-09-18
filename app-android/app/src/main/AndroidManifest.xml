@@ -6,6 +6,9 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <!-- Not for a receiver: a persisted job is one the system keeps across a reboot, and it asks for this
+       permission to prove the app is allowed to be woken after one. -->
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
   <application
     android:label="@string/app_name"
@@ -38,6 +41,13 @@
         android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         android:value="vpn" />
     </service>
+
+    <!-- The watchdog. It is held by the system rather than by this process, which is the whole point:
+         it is what is left when the process carrying the tunnel dies. -->
+    <service
+      android:name=".WatchdogJob"
+      android:exported="false"
+      android:permission="android.permission.BIND_JOB_SERVICE" />
   </application>
 
 </manifest>
