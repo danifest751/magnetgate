@@ -37,7 +37,10 @@ object Health {
       else -> "$detail in ${seconds(tookMs)}"
     }
 
-    private fun seconds(ms: Long): String = if (ms < 1000) "${ms}ms" else "%.1fs".format(ms / 1000.0)
+    // Locale.US on purpose: this is a measurement, and a reading that comes out as "1,4s" on one phone
+    // and "1.4s" on another is a reading nobody can paste into a report or compare with a log line.
+    private fun seconds(ms: Long): String =
+      if (ms < 1000) "${ms}ms" else String.format(java.util.Locale.US, "%.1fs", ms / 1000.0)
   }
 
   @Volatile

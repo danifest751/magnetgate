@@ -64,8 +64,11 @@ class MainActivity : ComponentActivity() {
       Log.i(TAG, "settings saved from extras: bootstrap/relays/slots/mode")
     }
     setContent {
-      MaterialTheme {
-        Surface(modifier = Modifier.fillMaxSize()) {
+      MagnetGateTheme {
+        Surface(
+          modifier = Modifier.fillMaxSize(),
+          color = MaterialTheme.colorScheme.background,
+        ) {
           AppRoot(
             autotest = autotest,
             vpn = extras?.getStringExtra("vpn") == "true",
@@ -75,6 +78,7 @@ class MainActivity : ComponentActivity() {
             checkUrlExtra = extras?.getStringExtra("checkurl").orEmpty(),
             modeExtra = extras?.getStringExtra("mode").orEmpty(),
             engineLogExtra = extras?.getStringExtra("enginelog").orEmpty(),
+            screenExtra = extras?.getStringExtra("screen").orEmpty(),
           )
         }
       }

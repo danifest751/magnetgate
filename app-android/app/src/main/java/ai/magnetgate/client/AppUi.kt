@@ -44,6 +44,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import ai.magnetgate.core.mgbox.Mgbox
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -54,6 +55,18 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.net.URL
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 
 private const val TAG = "magnetgate"
 
@@ -93,13 +106,18 @@ fun AppRoot(
   checkUrlExtra: String = "",
   // Acceptance runs pick the routing mode on the command line; the screen still writes the store.
   modeExtra: String = "",
+  // Which tab to open on. `input tap` is refused on this ROM (trap 56), so a screenshot run has no other
+  // way to see a screen that is not the first one.
+  screenExtra: String = "",
   // How loudly the engine should log for this tunnel: a hunt asks for `debug`, everyday use does not.
   engineLogExtra: String = "",
 ) {
   val context = LocalContext.current
   val scope = rememberCoroutineScope()
 
-  var screen by remember { mutableStateOf(Screen.CONNECT) }
+  var screen by remember {
+    mutableStateOf(Screen.entries.firstOrNull { it.name.equals(screenExtra, ignoreCase = true) } ?: Screen.CONNECT)
+  }
   var status by remember { mutableStateOf(CoreStatus()) }
   var vpnUp by remember { mutableStateOf(MgVpnService.isRunning()) }
   var busy by remember { mutableStateOf(false) }
@@ -253,7 +271,18 @@ fun AppRoot(
   // targetSdk 35 turns edge-to-edge on for every app, so the screen has to keep out of the system bars
   // itself or the tabs end up under the clock.
   Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
-    TabRow(selectedTabIndex = screen.ordinal) {
+    // The product name sits here rather than inside the first screen: it belongs to the window, not to
+    // one tab, and the tab that is open should be the first thing under it.
+    Text(
+      "MagnetGate",
+      style = MaterialTheme.typography.headlineSmall,
+      modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
+    )
+    TabRow(
+      selectedTabIndex = screen.ordinal,
+      containerColor = MaterialTheme.colorScheme.background,
+      contentColor = MaterialTheme.colorScheme.onBackground,
+    ) {
       for (item in Screen.entries) {
         Tab(
           selected = item == screen,
@@ -262,10 +291,20 @@ fun AppRoot(
             // a notice belongs to the screen that produced it
             notice = ""
           },
-          text = { Text(item.label) },
+          // One line at every width, and sized so the longest label fits inside its third of the row:
+          // "Diagnostics" used to break across two lines and drag the whole row down with it.
+          text = {
+            Text(
+              item.label,
+              style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp, letterSpacing = 0.sp),
+              maxLines = 1,
+              softWrap = false,
+            )
+          },
         )
       }
     }
+    Spacer(Modifier.height(12.dp))
     when (screen) {
       Screen.CONNECT -> ConnectScreen(
         status = status,
@@ -321,7 +360,29 @@ fun AppRoot(
   }
 }
 
-/** The big button, the state it is in, and what was found. */
+/** How well the tunnel is doing, in the only grades that change what a person should do next. */
+private enum class Grade { OFF, OK, WARN, BAD }
+
+private fun gradeOf(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, engineError: String): Grade = when {
+  !vpnUp -> Grade.OFF
+  status.error.isNotEmpty() || engineError.isNotEmpty() -> Grade.BAD
+  !status.running -> Grade.BAD
+  check != null && !check.ok -> Grade.BAD
+  status.nodes.isEmpty() -> Grade.WARN
+  check != null && check.slow -> Grade.WARN
+  status.relaysConfiguredButSilent -> Grade.WARN
+  check == null -> Grade.WARN
+  else -> Grade.OK
+}
+
+/**
+ * The screen someone opens to answer one question: is my traffic going where I think it is?
+ *
+ * So the answer comes first and in colour, the thing they came to press comes second, and the evidence -
+ * which exit answered, how long it took, what carries it - comes third, in the face measurements are set
+ * in. The exits are a list, not a stack of cards: they are the same kind of thing repeated, and giving
+ * each one its own raised surface flattens the hierarchy instead of building one.
+ */
 @Composable
 private fun ConnectScreen(
   status: CoreStatus,
@@ -337,95 +398,226 @@ private fun ConnectScreen(
   onTest: () -> Unit,
   onOpenSettings: () -> Unit,
 ) {
+  val grade = gradeOf(status, vpnUp, check, engineError)
   Column(
-    modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
+    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+    verticalArrangement = Arrangement.spacedBy(16.dp),
   ) {
-    Text("MagnetGate", style = MaterialTheme.typography.headlineSmall)
-    Text(status.headline(vpnUp, check), style = MaterialTheme.typography.titleMedium)
-
-    if (vpnUp) HealthCard(status, check, engineError)
-
-    if (!pskSet) {
-      Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-          Text("No PSK yet", style = MaterialTheme.typography.titleSmall)
-          Text("The client needs the shared key to find its exit.", style = MaterialTheme.typography.bodySmall)
-          TextButton(onClick = onOpenSettings) { Text("Open settings") }
-        }
-      }
-    }
+    Spacer(Modifier.height(4.dp))
+    StateBand(headline = status.headline(vpnUp, check), grade = grade, check = check, vpnUp = vpnUp)
 
     Button(
       onClick = { if (vpnUp) onDisconnect() else onConnect() },
       enabled = !busy && (vpnUp || pskSet),
-      modifier = Modifier.fillMaxWidth(),
-    ) { Text(if (vpnUp) "Disconnect" else "Connect") }
-
-    if (egress.isNotEmpty()) Text(egress, style = MaterialTheme.typography.bodyMedium)
-    if (notice.isNotEmpty()) Text(notice, style = MaterialTheme.typography.bodySmall)
-    if (status.error.isNotEmpty()) Text("core: ${status.error}", style = MaterialTheme.typography.bodySmall)
-
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-      TextButton(onClick = onTest, enabled = !busy && status.socksPort != 0) { Text("Test the exit") }
-      Text("core ${status.version}", style = MaterialTheme.typography.bodySmall)
+      shape = RoundedCornerShape(12.dp),
+      modifier = Modifier.fillMaxWidth().height(52.dp),
+    ) {
+      Text(if (vpnUp) "Disconnect" else "Connect", style = MaterialTheme.typography.titleMedium)
     }
 
-    HorizontalDivider()
-    Text("Nodes", style = MaterialTheme.typography.titleMedium)
-    if (status.nodes.isEmpty()) {
-      Text(
-        if (vpnUp) "None yet - discovery takes a few seconds." else "Not connected.",
-        style = MaterialTheme.typography.bodySmall,
+    if (!pskSet) {
+      Notice(
+        title = "No key yet",
+        body = "This client needs the shared key before it can find an exit.",
+        grade = Grade.WARN,
+        action = "Open settings" to onOpenSettings,
       )
     }
-    for (node in status.nodes) NodeCard(node)
+    if (notice.isNotEmpty()) Notice(title = notice)
+
+    val complaints = complaintsOf(status, check, engineError)
+    if (complaints.isNotEmpty()) {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        for (line in complaints) Complaint(line.first, line.second)
+      }
+    }
+
+    if (vpnUp || status.socksPort != 0) {
+      SectionLabel("Route")
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        ValueRow("Exit", egress.removePrefix("egress ").ifBlank { "not measured" })
+        ValueRow("Checked", check?.let { clockOf(it.atMs) + "  " + lastWord(it.summary()) } ?: "not yet")
+        ValueRow("Planes", carriedBy(status))
+        ValueRow("Core", status.version)
+      }
+      TextButton(
+        onClick = onTest,
+        enabled = !busy && status.socksPort != 0,
+        contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp),
+      ) { Text("Measure the exit now", style = MaterialTheme.typography.labelLarge) }
+    }
+
+    SectionLabel("Exits")
+    if (status.nodes.isEmpty()) {
+      Text(
+        if (vpnUp) "None yet - discovery takes a few seconds." else "Nothing discovered while the tunnel is off.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      for (node in status.nodes) NodeRowView(node)
+    }
+    Spacer(Modifier.height(24.dp))
   }
 }
 
+/** The tail of a summary, which is where its measurement sits ("... in 788ms"). */
+private fun lastWord(text: String): String = text.substringAfterLast(' ')
+
+/** What the exit list amounts to in one line: four planes over two exits, or nothing at all. */
+private fun carriedBy(status: CoreStatus): String {
+  if (status.nodes.isEmpty()) return "nothing yet"
+  val planes = status.nodes.sumOf { node -> node.planes.count { it.type == "reality" || it.type == "hy2" } }
+  val exits = status.nodes.size
+  return "$planes plane${if (planes == 1) "" else "s"} over $exits exit${if (exits == 1) "" else "s"}"
+}
+
 /**
- * What the app knows about its own health, said plainly.
+ * The answer, in colour, with the measurement that backs it.
  *
- * Everything here was already known to the phone and shown to nobody: the engine's failures went to
- * logcat, the relay states sat in the core's status document, and the exit was measured once at connect
- * and never again. The DNS regress cost half an hour of guessing because of that.
+ * "Connected" on its own is what this screen said through the DNS regress of 17.09 while pages were
+ * barely loading, so the band carries the reading as well as the word - and takes its colour from
+ * whether that reading is good, rather than from whether the tunnel is merely up.
  */
 @Composable
-private fun HealthCard(status: CoreStatus, check: Health.Check?, engineError: String) {
-  val complaints = buildList {
-    if (engineError.isNotEmpty()) add(engineError)
-    if (check != null && !check.ok) add("the exit check failed: ${check.detail}")
-    if (check != null && check.slow) add("traffic is slow: the exit check took ${check.summary().substringAfterLast(' ')}")
-    if (status.relaysConfiguredButSilent) {
-      add("no relay is answering - hy2 and rule-set updates travel that channel and will not arrive")
+private fun StateBand(headline: String, grade: Grade, check: Health.Check?, vpnUp: Boolean) {
+  val state = LocalStateColors.current
+  val ink = when (grade) {
+    Grade.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
+    Grade.OK -> state.ok
+    Grade.WARN -> state.warn
+    Grade.BAD -> state.bad
+  }
+  val ground = when (grade) {
+    Grade.OFF -> MaterialTheme.colorScheme.surfaceVariant
+    Grade.OK -> state.okSurface
+    Grade.WARN -> state.warnSurface
+    Grade.BAD -> state.badSurface
+  }
+  Column(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(14.dp))
+      .background(ground)
+      .padding(horizontal = 16.dp, vertical = 14.dp),
+    verticalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+      Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(ink))
+      Text(headline, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
     }
-    for (node in status.nodes) {
-      for (pause in node.paused) {
-        val seconds = (pause.remainingMs(System.currentTimeMillis()) / 1000).toInt()
-        add(
-          if (pause.slow) "${node.title}: ${pause.type} answers slowly, others go first for ${seconds}s"
-          else "${node.title}: ${pause.type} is paused for ${seconds}s after ${pause.fails} failure(s)"
-        )
+    Text(
+      when {
+        !vpnUp -> "Traffic is leaving this phone the ordinary way."
+        check == null -> "The exit has not been measured yet."
+        check.ok -> "The exit answered in " + lastWord(check.summary()) + " at " + clockOf(check.atMs) + "."
+        else -> "Last measurement at " + clockOf(check.atMs) + ": " + check.detail + "."
+      },
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/** Everything the app knows that a person should act on, and nothing it merely knows. */
+private fun complaintsOf(
+  status: CoreStatus,
+  check: Health.Check?,
+  engineError: String,
+): List<Pair<String, Grade>> = buildList {
+  if (engineError.isNotEmpty()) add(engineError.replaceFirstChar { it.uppercase() } to Grade.BAD)
+  if (check != null && !check.ok) add(("The exit did not answer: " + check.detail) to Grade.BAD)
+  if (check != null && check.slow) add(("Slow: the exit took " + lastWord(check.summary()) + " to answer") to Grade.WARN)
+  if (status.relaysConfiguredButSilent) {
+    add("No relay is answering - hy2 and routing-list updates travel that channel and cannot arrive" to Grade.WARN)
+  }
+  if (status.error.isNotEmpty()) add(("Core: " + status.error) to Grade.BAD)
+}
+
+@Composable
+private fun Complaint(text: String, grade: Grade) {
+  val state = LocalStateColors.current
+  val ink = if (grade == Grade.WARN) state.warn else state.bad
+  Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Box(modifier = Modifier.padding(top = 6.dp).size(6.dp).clip(CircleShape).background(ink))
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+  }
+}
+
+/** A short, quiet block for something the person may want to do next. */
+@Composable
+private fun Notice(
+  title: String,
+  body: String = "",
+  grade: Grade = Grade.OK,
+  action: Pair<String, () -> Unit>? = null,
+) {
+  val state = LocalStateColors.current
+  val ink = when (grade) {
+    Grade.BAD -> state.bad
+    Grade.WARN -> state.warn
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+  }
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(10.dp))
+      .background(MaterialTheme.colorScheme.surfaceVariant)
+      .padding(horizontal = 14.dp, vertical = 12.dp),
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    Box(modifier = Modifier.padding(top = 5.dp).size(8.dp).clip(CircleShape).background(ink))
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+      Text(title, style = MaterialTheme.typography.titleSmall)
+      if (body.isNotEmpty()) {
+        Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+      }
+      if (action != null) {
+        TextButton(
+          onClick = action.second,
+          contentPadding = PaddingValues(horizontal = 0.dp, vertical = 2.dp),
+        ) { Text(action.first, style = MaterialTheme.typography.labelLarge) }
       }
     }
   }
-  Card(modifier = Modifier.fillMaxWidth()) {
-    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(
-        when {
-          check == null -> "Exit check: not run yet"
-          else -> "Exit check: ${clockOf(check.atMs)} - ${check.summary()}"
-        },
-        style = MaterialTheme.typography.bodyMedium,
-      )
-      if (complaints.isEmpty()) {
-        Text("Nothing is complaining.", style = MaterialTheme.typography.bodySmall)
-      } else {
-        for (line in complaints) {
-          Text("• $line", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-        }
-      }
-    }
+}
+
+/** A section marker, not a sentence: small, spaced, and set apart from the values under it. */
+@Composable
+private fun SectionLabel(text: String) {
+  Text(
+    text.uppercase(),
+    style = MaterialTheme.typography.labelMedium,
+    color = MaterialTheme.colorScheme.onSurfaceVariant,
+    modifier = Modifier.padding(top = 4.dp),
+  )
+}
+
+/** A measured thing and its measurement, the value in the face measurements are set in. */
+@Composable
+private fun ValueRow(label: String, value: String) {
+  Row(
+    modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+    verticalAlignment = Alignment.Top,
+  ) {
+    Text(
+      label,
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      maxLines = 1,
+      modifier = Modifier.width(84.dp),
+    )
+    // a size down from the prose around it: a monospace face at the same size runs half again as wide,
+    // and a value that wraps stops lining up with the one above it
+    Text(
+      value,
+      style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 17.sp),
+      fontFamily = Mono,
+      color = MaterialTheme.colorScheme.onSurface,
+      modifier = Modifier.weight(1f),
+    )
   }
 }
 
@@ -433,53 +625,83 @@ private fun HealthCard(status: CoreStatus, check: Health.Check?, engineError: St
 private fun clockOf(atMs: Long): String =
   java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date(atMs))
 
+/**
+ * One exit, as a row rather than a card.
+ *
+ * The rail down the left is the state of that exit - green while every plane is usable, amber while one
+ * is merely demoted, red while one is paused after failing - so a list of exits can be read without
+ * reading any of it.
+ */
 @Composable
-private fun NodeCard(node: NodeRow) {
-  Card(modifier = Modifier.fillMaxWidth()) {
-    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (node.flag.isNotEmpty()) Text(node.flag, style = MaterialTheme.typography.titleLarge)
-        Column {
-          Text(node.title, style = MaterialTheme.typography.titleSmall)
-          Text(
-            listOfNotNull(
-              node.country.takeIf { it.isNotBlank() },
-              "slot ${node.slot}",
-            ).joinToString(" · "),
-            style = MaterialTheme.typography.bodySmall,
-          )
-        }
+private fun NodeRowView(node: NodeRow) {
+  val state = LocalStateColors.current
+  val paused = node.paused.filterNot { it.slow }
+  val slow = node.paused.filter { it.slow }
+  val rail = when {
+    paused.isNotEmpty() -> state.bad
+    slow.isNotEmpty() -> state.warn
+    else -> state.ok
+  }
+  Row(
+    modifier = Modifier
+      .fillMaxWidth()
+      .clip(RoundedCornerShape(10.dp))
+      .background(MaterialTheme.colorScheme.surface)
+      .height(IntrinsicSize.Min),
+  ) {
+    Box(modifier = Modifier.width(3.dp).fillMaxHeight().background(rail))
+    Column(
+      modifier = Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 12.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (node.flag.isNotEmpty()) Text(node.flag, style = MaterialTheme.typography.titleMedium)
+        Text(node.title, style = MaterialTheme.typography.titleSmall)
+        Text(
+          listOfNotNull(node.country.takeIf { it.isNotBlank() }, "slot " + node.slot).joinToString("  "),
+          style = MaterialTheme.typography.labelSmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
       }
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for (plane in node.planes) {
-          Chip(plane.type, muted = node.paused.any { it.type == plane.type })
+          val pause = node.paused.firstOrNull { it.type == plane.type }
+          PlaneChip(plane.type, pause?.slow == true, pause != null)
         }
       }
       for (pause in node.paused) {
         val seconds = (pause.remainingMs(System.currentTimeMillis()) / 1000).toInt()
         Text(
-          if (pause.slow) "${pause.type} answers slowly, others go first for ${seconds}s"
-          else "${pause.type} is paused for ${seconds}s after ${pause.fails} failure(s)",
-          style = MaterialTheme.typography.bodySmall,
+          if (pause.slow) pause.type + " answers slowly - others go first for " + seconds + "s"
+          else pause.type + " paused for " + seconds + "s after " + pause.fails + " failure(s)",
+          style = MaterialTheme.typography.labelSmall,
+          color = if (pause.slow) state.warn else state.bad,
         )
       }
     }
   }
 }
 
+/**
+ * One transport an exit offers. A plane that is sitting out says so in its own colour: the difference
+ * between "this path is broken" and "this path is merely slow" is the difference between a tunnel that
+ * needs attention and one that is quietly working around something.
+ */
 @Composable
-private fun Chip(text: String, muted: Boolean = false) {
-  Surface(
-    color = if (muted) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.secondaryContainer,
-    shape = MaterialTheme.shapes.small,
+private fun PlaneChip(text: String, slow: Boolean, sittingOut: Boolean) {
+  val state = LocalStateColors.current
+  val ink = when {
+    !sittingOut -> MaterialTheme.colorScheme.onSurfaceVariant
+    slow -> state.warn
+    else -> state.bad
+  }
+  Box(
+    modifier = Modifier
+      .clip(RoundedCornerShape(6.dp))
+      .border(1.dp, if (sittingOut) ink.copy(alpha = 0.5f) else state.rule, RoundedCornerShape(6.dp))
+      .padding(horizontal = 8.dp, vertical = 3.dp),
   ) {
-    Box(modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) {
-      Text(
-        text,
-        style = MaterialTheme.typography.labelMedium,
-        color = MaterialTheme.colorScheme.onSecondaryContainer,
-      )
-    }
+    Text(text, style = MaterialTheme.typography.labelSmall, color = ink)
   }
 }
 
@@ -546,7 +768,7 @@ private fun SettingsScreen(
       modifier = Modifier.fillMaxWidth(),
     )
 
-    Text("Routing", style = MaterialTheme.typography.titleMedium)
+    SectionLabel("Routing")
     Text(
       when (mode) {
         Settings.Mode.FULL ->
@@ -623,92 +845,119 @@ private fun SettingsScreen(
 }
 
 /** The state a bug report needs: the core's own view, plus the tail of its log. */
+/**
+ * Everything the app knows, in the order someone debugging asks for it: what the core is, what it
+ * found, whether the push channel is answering, when the path was last measured, and then the log.
+ *
+ * It is a readout, so it is set as one: labels apart from values, values in the monospace face, and
+ * colour spent only where a line means something is wrong.
+ */
 @Composable
 private fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?) {
+  val state = LocalStateColors.current
   Column(
-    modifier = Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()),
-    verticalArrangement = Arrangement.spacedBy(6.dp),
+    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
+    verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Text("Core", style = MaterialTheme.typography.titleMedium)
-    Text(
-      listOf(
-        "version ${status.version}",
-        "running ${status.running}",
-        "socks 127.0.0.1:${status.socksPort}",
-        "slots ${status.slots}",
-        "tunnel ${if (vpnUp) "up" else "off"}",
-        // 0 means the lists are still the ones the package shipped with; anything else is the
-        // generation a node published and this device verified by digest.
-        "rule-sets generation ${RuleSets.generation(LocalContext.current)}",
-      ).joinToString("\n"),
-      style = MaterialTheme.typography.bodySmall,
-      fontFamily = FontFamily.Monospace,
-    )
-    if (status.error.isNotEmpty()) {
-      Text("error: ${status.error}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+    Spacer(Modifier.height(4.dp))
+    SectionLabel("Core")
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      ValueRow("Version", status.version.ifBlank { "unknown" })
+      ValueRow("Running", if (status.running) "yes" else "no")
+      ValueRow("Socks", "127.0.0.1:" + status.socksPort)
+      ValueRow("Slots", status.slots.joinToString(", ").ifBlank { "none" })
+      ValueRow("Tunnel", if (vpnUp) "up" else "off")
+      // 0 means the lists are still the ones the package shipped with; anything else is the generation a
+      // node published and this device verified by digest.
+      ValueRow("Rule-sets", "generation " + RuleSets.generation(LocalContext.current))
     }
+    if (status.error.isNotEmpty()) Complaint("Core: " + status.error, Grade.BAD)
 
-    HorizontalDivider()
-    Text("Nodes", style = MaterialTheme.typography.titleMedium)
-    if (status.nodes.isEmpty()) Text("none", style = MaterialTheme.typography.bodySmall)
+    SectionLabel("Exits")
+    if (status.nodes.isEmpty()) {
+      Text("none", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     for (node in status.nodes) {
       val now = System.currentTimeMillis()
-      Text(
-        buildString {
-          append("slot ${node.slot}  ${node.title}")
-          if (node.country.isNotBlank()) append("  ${node.country}")
-          append('\n')
-          append("  planes: ")
-          append(node.planes.joinToString(" ") { it.type + (if (it.endpoint.isEmpty()) "" else "@${it.endpoint}") })
-          if (node.paused.isNotEmpty()) {
-            append('\n')
-            append("  paused: ")
-            append(
-              node.paused.joinToString(" ") {
-                val mark = if (it.slow) "slow" else "${it.fails}f"
-                "${it.type}(${(it.remainingMs(now) / 1000).toInt()}s $mark)"
-              }
-            )
-          }
-        },
-        style = MaterialTheme.typography.bodySmall,
-        fontFamily = FontFamily.Monospace,
-      )
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        ValueRow(
+          "slot " + node.slot,
+          listOfNotNull(node.title, node.country.takeIf { it.isNotBlank() }).joinToString("  "),
+        )
+        ValueRow("planes", node.planes.joinToString("  ") { it.type + (if (it.endpoint.isEmpty()) "" else "@" + it.endpoint) })
+        if (node.paused.isNotEmpty()) {
+          ValueRow(
+            "sitting out",
+            node.paused.joinToString("  ") {
+              it.type + "(" + (it.remainingMs(now) / 1000).toInt() + "s " + (if (it.slow) "slow" else it.fails.toString() + "f") + ")"
+            },
+          )
+        }
+      }
     }
 
-    HorizontalDivider()
-    Text("Rendezvous relays", style = MaterialTheme.typography.titleMedium)
+    SectionLabel("Rendezvous relays")
     if (status.relays.isEmpty()) {
-      Text("none configured - discovery is DHT only, so hy2 and rule-set updates cannot arrive",
-        style = MaterialTheme.typography.bodySmall)
+      Text(
+        "None configured - discovery is DHT only, so hy2 and rule-set updates cannot arrive.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
     }
     for (relay in status.relays) {
-      Text(
-        "${relay.host}  ${relay.state}",
-        style = MaterialTheme.typography.bodySmall,
-        fontFamily = FontFamily.Monospace,
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.Top,
+      ) {
         // "connected, silent" is the state that looked healthy for a day; it must not look healthy here
-        color = if (relay.answering) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error,
-      )
+        Box(
+          modifier = Modifier
+            .padding(top = 5.dp)
+            .size(7.dp)
+            .clip(CircleShape)
+            .background(if (relay.answering) state.ok else state.bad),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+          Text(relay.host, style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp), fontFamily = Mono)
+          Text(
+            relay.state,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (relay.answering) MaterialTheme.colorScheme.onSurfaceVariant else state.bad,
+          )
+        }
+      }
     }
 
-    HorizontalDivider()
-    Text("Exit checks", style = MaterialTheme.typography.titleMedium)
+    SectionLabel("Exit checks")
     Text(
-      check?.let { "${clockOf(it.atMs)}  ${it.summary()}" } ?: "not run yet",
-      style = MaterialTheme.typography.bodySmall,
-      fontFamily = FontFamily.Monospace,
-      color = if (check == null || (check.ok && !check.slow)) MaterialTheme.colorScheme.onSurface
-      else MaterialTheme.colorScheme.error,
+      check?.let { clockOf(it.atMs) + "  " + it.summary() } ?: "not run yet",
+      style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+      fontFamily = Mono,
+      color = when {
+        check == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        !check.ok -> state.bad
+        check.slow -> state.warn
+        else -> MaterialTheme.colorScheme.onSurface
+      },
     )
 
-    HorizontalDivider()
-    Text("Core log", style = MaterialTheme.typography.titleMedium)
-    Text(
-      status.logs.joinToString("\n"),
-      style = MaterialTheme.typography.bodySmall,
-      fontFamily = FontFamily.Monospace,
-    )
+    SectionLabel("Core log")
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(10.dp))
+        .background(MaterialTheme.colorScheme.surface)
+        .padding(12.dp),
+    ) {
+      Text(
+        status.logs.joinToString("\n").ifBlank { "empty - the core keeps its log only while it runs" },
+        style = MaterialTheme.typography.labelSmall,
+        fontFamily = Mono,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+    Spacer(Modifier.height(24.dp))
   }
 }
 
