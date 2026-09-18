@@ -60,4 +60,44 @@ class MgTunPlatform(private val service: MgVpnService) : PlatformHandler {
       .put("androidPackageNames", JSONArray(packages.toList()))
       .toString()
   }
+
+  /**
+   * Every interface this device has, as JSON, because the engine cannot list them itself: enumerating
+   * interfaces from Go goes through a netlink dump and Android refuses that to an application
+   * (`netlinkrib: permission denied`). Without this the engine is told the network changed and then
+   * cannot resolve it - `find updated interface: wlan0: no such network interface`, measured on every
+   * switch on 18.09.
+   *
+   * The flags are Go's `net.Flags`, which is what libbox expects on the other side.
+   */
+  override fun interfaces(): String {
+    val out = JSONArray()
+    val listed = runCatching { java.net.NetworkInterface.getNetworkInterfaces() }.getOrNull()
+      ?: return out.toString()
+    for (item in listed) {
+      val addresses = JSONArray()
+      for (address in item.interfaceAddresses) {
+        // without the zone: a link-local address arrives as fe80::1%rmnet_data0, and the engine parses
+        // these with netip.ParsePrefix, which refuses a zone - and does it by panicking, which takes the
+        // whole process with it (measured 18.09, the app died on every tunnel start)
+        val host = address.address?.hostAddress?.substringBefore('%') ?: continue
+        addresses.put("$host/${address.networkPrefixLength}")
+      }
+      var flags = 0
+      if (runCatching { item.isUp }.getOrDefault(false)) flags = flags or 1 // net.FlagUp
+      if (runCatching { item.supportsMulticast() }.getOrDefault(false)) flags = flags or 2 // FlagBroadcast
+      if (runCatching { item.isLoopback }.getOrDefault(false)) flags = flags or 4 // FlagLoopback
+      if (runCatching { item.isPointToPoint }.getOrDefault(false)) flags = flags or 8 // FlagPointToPoint
+      if (runCatching { item.supportsMulticast() }.getOrDefault(false)) flags = flags or 16 // FlagMulticast
+      out.put(
+        JSONObject()
+          .put("index", item.index)
+          .put("mtu", runCatching { item.mtu }.getOrDefault(0))
+          .put("name", item.name)
+          .put("flags", flags)
+          .put("addresses", addresses),
+      )
+    }
+    return out.toString()
+  }
 }

@@ -15,7 +15,6 @@ package mgbox
 import (
 	"encoding/json"
 	"errors"
-	"net"
 	"strconv"
 	"sync"
 
@@ -91,6 +90,15 @@ type PlatformHandler interface {
 	// {"userId":..,"userName":..,"processPath":..,"androidPackageNames":[..]}. An error means "unknown",
 	// which is what the engine expects when the lookup is not available.
 	FindConnectionOwner(protocol int, sourceAddress string, sourcePort int, destinationAddress string, destinationPort int) (string, error)
+	// Interfaces lists what this device has, as JSON:
+	// [{"index":..,"mtu":..,"name":"..","flags":..,"addresses":["10.0.0.2/24",..]}]
+	//
+	// It comes from the app because Go cannot get it here: enumerating interfaces goes through a netlink
+	// dump, and Android refuses that to an application (`netlinkrib: permission denied`). Without this the
+	// engine hears that the network changed and then cannot resolve the interface it was told about -
+	// which is the state this binding was in until 18.09, reporting `no such network interface` on every
+	// switch.
+	Interfaces() (string, error)
 }
 
 var (
@@ -305,26 +313,28 @@ func (p *platform) CloseDefaultInterfaceMonitor(libbox.InterfaceUpdateListener) 
 // interface it can bind to. Returning nothing here was the other half of the same defect: even a
 // reported change could not be resolved.
 func (p *platform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) {
-	interfaces, err := net.Interfaces()
+	raw, err := p.handler.Interfaces()
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*libbox.NetworkInterface, 0, len(interfaces))
-	for _, item := range interfaces {
-		addresses, err := item.Addrs()
-		if err != nil {
-			addresses = nil
-		}
-		texts := make([]string, 0, len(addresses))
-		for _, address := range addresses {
-			texts = append(texts, address.String())
-		}
+	var listed []struct {
+		Index     int32    `json:"index"`
+		MTU       int32    `json:"mtu"`
+		Name      string   `json:"name"`
+		Flags     int32    `json:"flags"`
+		Addresses []string `json:"addresses"`
+	}
+	if err := json.Unmarshal([]byte(raw), &listed); err != nil {
+		return nil, err
+	}
+	out := make([]*libbox.NetworkInterface, 0, len(listed))
+	for _, item := range listed {
 		out = append(out, &libbox.NetworkInterface{
-			Index:     int32(item.Index),
-			MTU:       int32(item.MTU),
+			Index:     item.Index,
+			MTU:       item.MTU,
 			Name:      item.Name,
-			Addresses: &stringIterator{items: texts},
-			Flags:     int32(item.Flags),
+			Addresses: &stringIterator{items: item.Addresses},
+			Flags:     item.Flags,
 		})
 	}
 	return &interfaceIterator{items: out}, nil
