@@ -447,7 +447,11 @@ private fun ConnectScreen(
       SectionLabel("Route")
       Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         ValueRow("Exit", egress.removePrefix("egress ").ifBlank { "not measured" })
-        ValueRow("Checked", check?.let { clockOf(it.atMs) + "  " + lastWord(it.summary()) } ?: "not yet")
+        ValueRow("Round trip", check?.legs?.pingMs?.let { "${it}ms" } ?: "not measured")
+        ValueRow("Whole request", check?.let { clockOf(it.atMs) + "  " + lastWord(it.summary()) } ?: "not yet")
+        // Where that time went. The total is one number for four round trips over three legs, and
+        // which leg grew is the only part of it anyone can act on.
+        check?.legs?.let { ValueRow("Spent on", it.summary()) }
         ValueRow("Planes", carriedBy(status))
         ValueRow("Core", status.version)
       }
@@ -522,7 +526,14 @@ private fun StateBand(headline: String, grade: Grade, check: Health.Check?, vpnU
       when {
         !vpnUp -> "Traffic is leaving this phone the ordinary way."
         check == null -> "The exit has not been measured yet."
-        check.ok -> "The exit answered in " + lastWord(check.summary()) + " at " + clockOf(check.atMs) + "."
+        // The round trip, not the whole request. The band used to carry the total - four round trips,
+        // two handshakes and a resolver - which is half a second on a perfectly healthy phone and reads
+        // like a ping to anyone who glances at it. The total still exists; it moved down to the
+        // measurements, where a number is expected to need reading.
+        check.ok && check.legs?.pingMs != null ->
+          "The exit answers in " + check.legs.pingMs + "ms, measured at " + clockOf(check.atMs) + "."
+        check.ok -> "A full HTTPS request through the tunnel took " + lastWord(check.summary()) +
+          " at " + clockOf(check.atMs) + "."
         else -> "Last measurement at " + clockOf(check.atMs) + ": " + check.detail + "."
       },
       style = MaterialTheme.typography.bodySmall,

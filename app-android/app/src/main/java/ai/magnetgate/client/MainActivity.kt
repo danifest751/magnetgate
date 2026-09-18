@@ -180,7 +180,14 @@ class MainActivity : ComponentActivity() {
     // human looking at a screen cannot be part of an acceptance run.
     val health = Health.lastCheck
     val line = buildString {
-      append(if (health == null) "check=none" else "check=${if (health.ok) "ok" else "failed"} took=${health.tookMs}ms at=${health.atMs} detail=${health.detail}")
+      append(
+        if (health == null) {
+          "check=none"
+        } else {
+          "check=${if (health.ok) "ok" else "failed"} took=${health.tookMs}ms at=${health.atMs}" +
+            (health.legs?.let { " legs=$it" } ?: "") + " detail=${health.detail}"
+        },
+      )
       if (Health.engineError.isNotEmpty()) append(" engineError=${Health.engineError}")
     }
     runCatching { File(filesDir, "health.txt").writeText(line) }

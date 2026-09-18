@@ -26,8 +26,40 @@ object Health {
   /** Longer than this and the exit is reachable but not usable; the DNS regress looked exactly so. */
   const val SLOW_MS = 4_000L
 
+  /**
+   * Where the time went, for a measurement that finished.
+   *
+   * The total on its own reads like a ping and frightens people who compare it with one: it is nothing
+   * of the sort. Every check opens a **new** connection and carries a whole HTTPS request through the
+   * entire chain - SOCKS, the engine's own resolver, reality to an exit in another country, then that
+   * exit's own TCP and TLS to the destination - so half a second is what a healthy phone looks like,
+   * and what matters is which leg grew, not the sum.
+   */
+  data class Legs(
+    val connectMs: Long,
+    val tlsMs: Long,
+    val answerMs: Long,
+    /**
+     * One round trip over the connection the legs above paid for, which is the only number here that
+     * means what a person expects a number under "Connected" to mean. Null when the destination hung up
+     * after its first answer, which it is entitled to do.
+     */
+    val pingMs: Long? = null,
+  ) {
+    /** Compact and in a fixed order, so two readings can be compared by eye or by grep. */
+    override fun toString(): String = "$connectMs/$tlsMs/$answerMs" + (pingMs?.let { "/$it" } ?: "")
+
+    fun summary(): String = "connect ${connectMs}ms · TLS ${tlsMs}ms · answer ${answerMs}ms"
+  }
+
   /** One measurement of the path traffic actually takes. */
-  data class Check(val atMs: Long, val ok: Boolean, val tookMs: Long, val detail: String) {
+  data class Check(
+    val atMs: Long,
+    val ok: Boolean,
+    val tookMs: Long,
+    val detail: String,
+    val legs: Legs? = null,
+  ) {
     val slow: Boolean get() = ok && tookMs >= SLOW_MS
 
     /** What the connect screen says in one line, without the timestamp. */
@@ -81,13 +113,17 @@ object Health {
     val result = runCatching { fetch(socksPort, url) }
     val took = System.currentTimeMillis() - started
     val check = result.fold(
-      onSuccess = { Check(System.currentTimeMillis(), ok = true, tookMs = took, detail = it) },
+      onSuccess = { Check(System.currentTimeMillis(), ok = true, tookMs = took, detail = it.first, legs = it.second) },
       onFailure = {
         Check(System.currentTimeMillis(), ok = false, tookMs = took, detail = it.message ?: it.javaClass.simpleName)
       },
     )
     lastCheck = check
-    if (!check.ok || check.slow) Log.w(TAG, "exit check: ${check.summary()}")
+    // The legs go to the log and not into summary(): the screen takes the last word of that line as the
+    // measurement, and a reading with three more numbers after it would quietly become "278ms".
+    if (!check.ok || check.slow) {
+      Log.w(TAG, "exit check: ${check.summary()}" + (check.legs?.let { " ($it)" } ?: ""))
+    }
     return check
   }
 
@@ -99,7 +135,7 @@ object Health {
    * listener have to resolve it. Through the engine's listener that is the engine's own resolver - the
    * part that broke on 17.09 - and a check that let Java resolve locally would test nothing of it.
    */
-  private fun fetch(socksPort: Int, url: String): String {
+  private fun fetch(socksPort: Int, url: String): Pair<String, Legs> {
     val parsed = URL(url)
     val host = parsed.host
     val port = if (parsed.port != -1) parsed.port else if (parsed.protocol == "https") 443 else 80
@@ -108,7 +144,12 @@ object Health {
     val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
     socket.use {
       it.soTimeout = 15_000
+      // Three legs, timed apart, because the sum says nothing about where a slow phone is slow: this
+      // one covers the SOCKS handshake, the engine resolving the name and everything up to the exit
+      // having a stream to the destination.
+      val before = System.currentTimeMillis()
       it.connect(InetSocketAddress.createUnresolved(host, port), 15_000)
+      val connected = System.currentTimeMillis()
       val stream: Socket = if (parsed.protocol == "https") {
         (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(it, host, port, false).also { tls ->
           (tls as SSLSocket).startHandshake()
@@ -116,18 +157,74 @@ object Health {
       } else {
         it
       }
+      // TLS is end to end with the destination, so this leg is round trips over the whole chain and
+      // never anything our own machinery can shorten.
+      val handshaken = System.currentTimeMillis()
       val writer = stream.getOutputStream().bufferedWriter()
-      writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\nUser-Agent: magnetgate/1.0\r\n\r\n")
-      writer.flush()
-      val text = stream.getInputStream().bufferedReader().readText()
-      val separator = text.indexOf("\r\n\r\n")
-      if (separator < 0) throw IllegalStateException("the exit answered with nothing")
-      val status = text.lineSequence().firstOrNull().orEmpty()
-      if (!status.contains(" 200")) throw IllegalStateException(status.ifEmpty { "no status line" })
-      val body = text.substring(separator + 4).trim()
+      val reader = stream.getInputStream().bufferedReader()
+      // The connection is kept open on purpose: the second request over it is the measurement a person
+      // actually recognises (see [Legs.pingMs]), and it only exists if nobody hung up first.
+      val body = request(writer, reader, host, path, close = false)
       if (body.isEmpty()) throw IllegalStateException("the exit answered with no body")
-      return body.take(64)
+      val done = System.currentTimeMillis()
+
+      // One round trip over an open connection: no SOCKS, no resolver, no handshakes - phone to exit to
+      // destination and back. Never allowed to fail the check: a server within its rights to close after
+      // the first answer would otherwise turn a healthy exit into a red screen.
+      val ping = runCatching {
+        val asked = System.currentTimeMillis()
+        request(writer, reader, host, path, close = true)
+        System.currentTimeMillis() - asked
+      }.getOrNull()
+
+      return body.take(64) to Legs(
+        connectMs = connected - before,
+        tlsMs = handshaken - connected,
+        answerMs = done - handshaken,
+        pingMs = ping,
+      )
     }
+  }
+
+  /**
+   * One HTTP request and its answer, read by `Content-Length` rather than by the connection closing.
+   *
+   * Reading to end-of-stream is simpler and is what this did before, but it can only ever be done once:
+   * it needs the other side to hang up. Framing the answer properly is what leaves the connection usable
+   * for the round trip that follows.
+   */
+  private fun request(
+    writer: java.io.Writer,
+    reader: java.io.BufferedReader,
+    host: String,
+    path: String,
+    close: Boolean,
+  ): String {
+    writer.write(
+      "GET $path HTTP/1.1\r\nHost: $host\r\n" +
+        "Connection: ${if (close) "close" else "keep-alive"}\r\nUser-Agent: magnetgate/1.0\r\n\r\n",
+    )
+    writer.flush()
+    val status = reader.readLine() ?: throw IllegalStateException("the exit answered with nothing")
+    if (!status.contains(" 200")) throw IllegalStateException(status.ifEmpty { "no status line" })
+    var length = -1
+    while (true) {
+      val line = reader.readLine() ?: throw IllegalStateException("the answer ended inside its headers")
+      if (line.isEmpty()) break
+      val name = line.substringBefore(':').trim().lowercase()
+      if (name == "content-length") length = line.substringAfter(':').trim().toIntOrNull() ?: -1
+    }
+    // No length means the answer is framed by the connection closing (or chunked), and then this is the
+    // last request this connection can carry - read it to the end and let the caller find out.
+    if (length < 0) return reader.readText().trim()
+    val body = CharArray(length)
+    var read = 0
+    while (read < length) {
+      val got = reader.read(body, read, length - read)
+      if (got < 0) break
+      read += got
+    }
+    return String(body, 0, read).trim()
   }
 
   private const val TAG = "magnetgate"
