@@ -8,8 +8,24 @@
 // Backoff grows with consecutive failures so a client does not hammer a dead path, and any success
 // clears the pair immediately.
 //
+// Failure is not the only way a plane stops being usable. A path that answers, but takes seconds to do
+// it, keeps winning against a healthy alternative — it never fails, so it is never paused — while the
+// applications on top give up on their own timeouts. Measured on a phone on 2026-09-17: reality slid
+// from 8 ms to whole seconds over two hours, a third of all connections ended in the app closing the
+// socket before the tunnel answered, and hy2 was offered by both nodes the entire time and never once
+// used. So a slow success demotes the plane: it stays usable, but it goes to the back of the queue
+// until it proves itself fast again.
+//
 // Pure and side-effect free so the policy can be unit-tested without a network.
 export const BACKOFF_MS = [30_000, 120_000, 600_000]
+
+// An open that takes this long is not healthy. A data-plane open is milliseconds when the path is well
+// (8-20 ms on that phone); by a second and a half something is wrong with the path, not with the load.
+export const SLOW_MS = 1_500
+
+// How long a plane stays at the back of the queue after answering slowly. Long enough for the traffic
+// to move somewhere else, short enough that a path which recovers is tried again on its own.
+export const DEMOTE_MS = 60_000
 
 export function nextBackoff(fails) {
   const count = Math.max(1, Number(fails) || 1)
@@ -24,28 +40,50 @@ export function createPlaneHealth({ now = () => Date.now() } = {}) {
     // record a transport failure for one plane of one node, and return the cooldown applied
     fail(exitId, type) {
       const key = keyOf(exitId, type)
-      const previous = state.get(key) ?? { fails: 0, until: 0 }
+      const previous = state.get(key) ?? { fails: 0, until: 0, demotedUntil: 0 }
       const fails = previous.fails + 1
       const until = now() + nextBackoff(fails)
-      state.set(key, { fails, until })
+      state.set(key, { fails, until, demotedUntil: previous.demotedUntil })
       return { fails, until, backoffMs: nextBackoff(fails) }
     },
-    // a plane that worked is immediately healthy again
+    // a plane that worked quickly is immediately healthy again, demotion and all
     ok(exitId, type) {
       state.delete(keyOf(exitId, type))
+    },
+    // a plane that worked, but slowly: it is not paused - it may be the only way out - but anything
+    // else is tried before it until the demotion expires
+    slow(exitId, type) {
+      const key = keyOf(exitId, type)
+      const previous = state.get(key) ?? { fails: 0, until: 0, demotedUntil: 0 }
+      const demotedUntil = now() + DEMOTE_MS
+      // it answered, so the escalation from earlier failures is over; only the demotion remains
+      state.set(key, { fails: 0, until: 0, demotedUntil })
+      return { demotedUntil, demoteMs: DEMOTE_MS }
     },
     usable(exitId, type) {
       const entry = state.get(keyOf(exitId, type))
       return !entry || entry.until <= now()
     },
-    // what diagnostics should show: which planes of this node are paused and until when
+    // usable, but only after everything else has been offered a turn
+    degraded(exitId, type) {
+      const entry = state.get(keyOf(exitId, type))
+      return Boolean(entry) && entry.demotedUntil > now()
+    },
+    // what diagnostics should show: which planes of this node are paused or demoted, and until when
     cooling(exitId) {
       const out = []
       for (const [key, entry] of state) {
-        if (entry.until <= now()) continue
+        const paused = entry.until > now()
+        const demoted = entry.demotedUntil > now()
+        if (!paused && !demoted) continue
         const separator = key.lastIndexOf(':')
         if (key.slice(0, separator) !== String(exitId)) continue
-        out.push({ t: key.slice(separator + 1), until: entry.until, fails: entry.fails })
+        out.push({
+          t: key.slice(separator + 1),
+          until: paused ? entry.until : entry.demotedUntil,
+          fails: entry.fails,
+          slow: !paused
+        })
       }
       return out.sort((a, b) => a.t.localeCompare(b.t))
     }

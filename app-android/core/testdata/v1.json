@@ -627,7 +627,8 @@
           "until": 1030000,
           "backoffMs": 30000
         },
-        "usable": false
+        "usable": false,
+        "degraded": false
       },
       {
         "op": "fail",
@@ -639,7 +640,8 @@
           "until": 1130000,
           "backoffMs": 120000
         },
-        "usable": false
+        "usable": false,
+        "degraded": false
       },
       {
         "op": "fail",
@@ -651,7 +653,8 @@
           "until": 1050000,
           "backoffMs": 30000
         },
-        "usable": false
+        "usable": false,
+        "degraded": false
       },
       {
         "op": "fail",
@@ -663,7 +666,8 @@
           "until": 1050000,
           "backoffMs": 30000
         },
-        "usable": false
+        "usable": false,
+        "degraded": false
       },
       {
         "op": "fail",
@@ -675,7 +679,8 @@
           "until": 1630001,
           "backoffMs": 600000
         },
-        "usable": false
+        "usable": false,
+        "degraded": false
       },
       {
         "op": "ok",
@@ -683,7 +688,8 @@
         "plane": "reality",
         "atMs": 1040000,
         "record": null,
-        "usable": true
+        "usable": true,
+        "degraded": false
       },
       {
         "op": "fail",
@@ -695,14 +701,55 @@
           "until": 1080000,
           "backoffMs": 30000
         },
-        "usable": false
+        "usable": false,
+        "degraded": false
+      },
+      {
+        "op": "slow",
+        "exit": "fi-1",
+        "plane": "reality",
+        "atMs": 1060000,
+        "record": {
+          "demotedUntil": 1120000,
+          "demoteMs": 60000
+        },
+        "usable": true,
+        "degraded": true
+      },
+      {
+        "op": "slow",
+        "exit": "nl-1",
+        "plane": "hy2",
+        "atMs": 1060000,
+        "record": {
+          "demotedUntil": 1120000,
+          "demoteMs": 60000
+        },
+        "usable": true,
+        "degraded": true
+      },
+      {
+        "op": "ok",
+        "exit": "fi-1",
+        "plane": "reality",
+        "atMs": 1070000,
+        "record": null,
+        "usable": true,
+        "degraded": false
       }
     ],
     "cooling": [
       {
+        "t": "hy2",
+        "until": 1120000,
+        "fails": 0,
+        "slow": true
+      },
+      {
         "t": "reality",
         "until": 1080000,
-        "fails": 1
+        "fails": 1,
+        "slow": false
       }
     ],
     "coolingOther": []

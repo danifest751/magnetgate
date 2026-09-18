@@ -14,12 +14,13 @@ import (
 type vectorFile struct {
 	Health struct {
 		Steps []struct {
-			Op     string  `json:"op"`
-			Exit   string  `json:"exit"`
-			Plane  string  `json:"plane"`
-			AtMs   int64   `json:"atMs"`
-			Record *Record `json:"record"`
-			Usable bool    `json:"usable"`
+			Op       string           `json:"op"`
+			Exit     string           `json:"exit"`
+			Plane    string           `json:"plane"`
+			AtMs     int64            `json:"atMs"`
+			Record   *json.RawMessage `json:"record"`
+			Usable   bool             `json:"usable"`
+			Degraded bool             `json:"degraded"`
 		} `json:"steps"`
 		Cooling      []Cooling `json:"cooling"`
 		CoolingOther []Cooling `json:"coolingOther"`
@@ -52,11 +53,17 @@ func TestTimelineMatchesNodePolicy(t *testing.T) {
 		switch step.Op {
 		case "fail":
 			got := h.Fail(step.Exit, step.Plane)
-			if step.Record == nil {
-				t.Fatalf("step %d: the vectors expect no record", i)
+			var want Record
+			decodeRecord(t, i, step.Record, &want)
+			if got != want {
+				t.Errorf("step %d (%s %s/%s): got %+v, want %+v", i, step.Op, step.Exit, step.Plane, got, want)
 			}
-			if got != *step.Record {
-				t.Errorf("step %d (%s %s/%s): got %+v, want %+v", i, step.Op, step.Exit, step.Plane, got, *step.Record)
+		case "slow":
+			got := h.Slow(step.Exit, step.Plane)
+			var want Demotion
+			decodeRecord(t, i, step.Record, &want)
+			if got != want {
+				t.Errorf("step %d (%s %s/%s): got %+v, want %+v", i, step.Op, step.Exit, step.Plane, got, want)
 			}
 		case "ok":
 			h.Ok(step.Exit, step.Plane)
@@ -66,6 +73,10 @@ func TestTimelineMatchesNodePolicy(t *testing.T) {
 		if got := h.Usable(step.Exit, step.Plane); got != step.Usable {
 			t.Errorf("step %d (%s %s/%s): usable=%v, want %v", i, step.Op, step.Exit, step.Plane, got, step.Usable)
 		}
+		// a demoted plane is still usable, so this is the half the `usable` column cannot see
+		if got := h.Degraded(step.Exit, step.Plane); got != step.Degraded {
+			t.Errorf("step %d (%s %s/%s): degraded=%v, want %v", i, step.Op, step.Exit, step.Plane, got, step.Degraded)
+		}
 	}
 
 	if got := h.Cooling("nl-1"); !sameCooling(got, v.Health.Cooling) {
@@ -73,6 +84,18 @@ func TestTimelineMatchesNodePolicy(t *testing.T) {
 	}
 	if got := h.Cooling("fi-1"); !sameCooling(got, v.Health.CoolingOther) {
 		t.Errorf("cooling(fi-1): got %+v, want %+v", got, v.Health.CoolingOther)
+	}
+}
+
+// The two sides carry different records for different operations, so the vector's record stays raw
+// until the step says what it is.
+func decodeRecord(t *testing.T, step int, raw *json.RawMessage, into any) {
+	t.Helper()
+	if raw == nil {
+		t.Fatalf("step %d: the vectors expect no record", step)
+	}
+	if err := json.Unmarshal(*raw, into); err != nil {
+		t.Fatalf("step %d: parse record: %v", step, err)
 	}
 }
 

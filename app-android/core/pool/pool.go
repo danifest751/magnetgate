@@ -28,6 +28,11 @@ import (
 // (OFFER_TTL_MS), because a node publishes every minute.
 const DefaultFresh = 12 * time.Minute
 
+// DefaultOpenTimeout bounds one attempt at one plane. It sits between health.SlowMs, past which a plane
+// is demoted, and the patience of the applications above: a browser gives up in a few seconds and shows
+// a reset connection, so the pool has to have tried the alternative well before that.
+const DefaultOpenTimeout = 4 * time.Second
+
 var (
 	// ErrNoNode means nothing fresh has been discovered yet.
 	ErrNoNode = errors.New("pool: no exit discovered yet")
@@ -81,9 +86,13 @@ type Config struct {
 	// without any health effect — we never tried it, so we have nothing to report about it.
 	Connectors map[string]Connector
 	Health     *health.Health
-	Fresh      time.Duration
-	Now        func() time.Time
-	Logf       func(format string, args ...any)
+	// OpenTimeout bounds one attempt at one plane. Without it a path that has degraded but not died
+	// holds the caller for as long as it likes - measured at 15 to 18 seconds on a phone - while the
+	// application on top gives up after three and reports a reset connection. Zero means the default.
+	OpenTimeout time.Duration
+	Fresh       time.Duration
+	Now         func() time.Time
+	Logf        func(format string, args ...any)
 }
 
 // Pool is the data plane.
@@ -136,6 +145,9 @@ func New(cfg Config) *Pool {
 	}
 	if cfg.Fresh <= 0 {
 		cfg.Fresh = DefaultFresh
+	}
+	if cfg.OpenTimeout <= 0 {
+		cfg.OpenTimeout = DefaultOpenTimeout
 	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
@@ -204,46 +216,72 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 
 	var lastErr error
 	attempts, cooling := 0, 0
-	for i := range candidates {
-		node := candidates[(start+i)%len(candidates)]
-		for _, plane := range p.cfg.Preference {
-			connector := p.cfg.Connectors[plane]
-			if connector == nil {
-				continue // we cannot speak this plane, so there is nothing to report about it
+	slowEnough := time.Duration(health.SlowMs) * time.Millisecond
+	// Two rounds over the same candidates: the planes that are behaving, and then the ones that only
+	// answered slowly. A demoted plane is never dropped - it may be the only way out of this network -
+	// but it waits until everything healthy has had its turn, which is what lets traffic leave a path
+	// that is rotting rather than failing.
+	for round := 0; round < 2 && lastErrIsRetryable(lastErr); round++ {
+		wantDegraded := round == 1
+		for i := range candidates {
+			node := candidates[(start+i)%len(candidates)]
+			for _, plane := range p.cfg.Preference {
+				connector := p.cfg.Connectors[plane]
+				if connector == nil {
+					continue // we cannot speak this plane, so there is nothing to report about it
+				}
+				if !p.cfg.Health.Usable(idOf(node.Slot), plane) {
+					if !wantDegraded {
+						cooling++ // counted once, not once per round
+					}
+					continue
+				}
+				if p.cfg.Health.Degraded(idOf(node.Slot), plane) != wantDegraded {
+					continue
+				}
+				raw := node.Offer.Pick([]string{plane})
+				if raw == nil {
+					continue // this node does not offer that plane
+				}
+				attempts++
+				openCtx, cancel := context.WithTimeout(ctx, p.cfg.OpenTimeout)
+				started := p.now()
+				conn, err := connector.Open(openCtx, node, raw, target)
+				took := p.now().Sub(started)
+				// no connector keeps the context after Open returns (socks5client clears the deadline,
+				// session.Connect only dials with it), so this cannot pull a live stream down
+				cancel()
+				if err == nil {
+					if took >= slowEnough {
+						demotion := p.cfg.Health.Slow(idOf(node.Slot), plane)
+						p.logf("slow plane: %s slot %d answered in %s, others go first for %s",
+							plane, node.Slot, took.Round(time.Millisecond),
+							time.Duration(demotion.DemoteMs)*time.Millisecond)
+					} else {
+						p.cfg.Health.Ok(idOf(node.Slot), plane)
+					}
+					p.mu.Lock()
+					p.rr = (start + i + 1) % len(candidates)
+					p.mu.Unlock()
+					p.logf("stream to %s:%d via %s slot %d", host, port, plane, node.Slot)
+					return conn, nil
+				}
+				lastErr = err
+				// A plane the engine has not been told about yet is this client reconfiguring itself, not
+				// the node failing, and pausing the pair for it is actively harmful. Measured on the phone
+				// on 17.09: every engine reload emptied the port map for an instant, all four engine planes
+				// were cooled for 30s at once, and the pool fell through to the plane the engine does not
+				// carry - on a network that blocks that plane, the tunnel had nowhere left to go and the
+				// pause escalated to ten minutes. The same thing happened at startup, when a node was found
+				// before the engine had a listener for it.
+				if errors.Is(err, errUnknownPlane) {
+					p.unwired(node.Slot, plane)
+					continue
+				}
+				record := p.cfg.Health.Fail(idOf(node.Slot), plane)
+				p.logf("transport failed: %s slot %d (paused %s after %d failure(s)): %v",
+					plane, node.Slot, time.Duration(record.BackoffMs)*time.Millisecond, record.Fails, err)
 			}
-			if !p.cfg.Health.Usable(idOf(node.Slot), plane) {
-				cooling++
-				continue
-			}
-			raw := node.Offer.Pick([]string{plane})
-			if raw == nil {
-				continue // this node does not offer that plane
-			}
-			attempts++
-			conn, err := connector.Open(ctx, node, raw, target)
-			if err == nil {
-				p.cfg.Health.Ok(idOf(node.Slot), plane)
-				p.mu.Lock()
-				p.rr = (start + i + 1) % len(candidates)
-				p.mu.Unlock()
-				p.logf("stream to %s:%d via %s slot %d", host, port, plane, node.Slot)
-				return conn, nil
-			}
-			lastErr = err
-			// A plane the engine has not been told about yet is this client reconfiguring itself, not
-			// the node failing, and pausing the pair for it is actively harmful. Measured on the phone
-			// on 17.09: every engine reload emptied the port map for an instant, all four engine planes
-			// were cooled for 30s at once, and the pool fell through to the plane the engine does not
-			// carry - on a network that blocks that plane, the tunnel had nowhere left to go and the
-			// pause escalated to ten minutes. The same thing happened at startup, when a node was found
-			// before the engine had a listener for it.
-			if errors.Is(err, errUnknownPlane) {
-				p.unwired(node.Slot, plane)
-				continue
-			}
-			record := p.cfg.Health.Fail(idOf(node.Slot), plane)
-			p.logf("transport failed: %s slot %d (paused %s after %d failure(s)): %v",
-				plane, node.Slot, time.Duration(record.BackoffMs)*time.Millisecond, record.Fails, err)
 		}
 	}
 	if attempts == 0 {
@@ -253,6 +291,12 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 		return nil, ErrNoPlane
 	}
 	return nil, lastErr
+}
+
+// lastErrIsRetryable keeps the second round from running when the caller has already given up: a
+// cancelled context is not a reason to go through every demoted plane as well.
+func lastErrIsRetryable(err error) bool {
+	return !errors.Is(err, context.Canceled)
 }
 
 // Snapshot is the diagnostics view: every fresh node with the planes it advertises and the ones this

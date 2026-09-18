@@ -89,8 +89,17 @@ function buildHealthVectors() {
     clock = atMs
     let record = null
     if (op === 'fail') record = tracker.fail(exit, plane)
+    else if (op === 'slow') record = tracker.slow(exit, plane)
     else tracker.ok(exit, plane)
-    steps.push({ op, exit, plane, atMs, record, usable: tracker.usable(exit, plane) })
+    steps.push({
+      op,
+      exit,
+      plane,
+      atMs,
+      record,
+      usable: tracker.usable(exit, plane),
+      degraded: tracker.degraded(exit, plane)
+    })
   }
   step('fail', 'nl-1', 'reality', 1_000_000)
   step('fail', 'nl-1', 'reality', 1_010_000) // still inside the first pause
@@ -99,6 +108,11 @@ function buildHealthVectors() {
   step('fail', 'nl-1', 'reality', 1_030_001) // first pause expired: second failure backs off further
   step('ok', 'nl-1', 'reality', 1_040_000) // a success clears the escalation
   step('fail', 'nl-1', 'reality', 1_050_000) // ...so this is a first failure again
+  // a plane that answers slowly is not paused - it may be the only way out - but it loses its turn,
+  // and answering at all ends the escalation from its earlier failures
+  step('slow', 'fi-1', 'reality', 1_060_000)
+  step('slow', 'nl-1', 'hy2', 1_060_000)
+  step('ok', 'fi-1', 'reality', 1_070_000) // proving itself fast clears the demotion
   const cooling = tracker.cooling('nl-1')
   const coolingOther = tracker.cooling('fi-1')
   return { steps, cooling, coolingOther }

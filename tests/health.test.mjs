@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { BACKOFF_MS, createPlaneHealth, nextBackoff } from '../src/health.mjs'
+import { BACKOFF_MS, DEMOTE_MS, SLOW_MS, createPlaneHealth, nextBackoff } from '../src/health.mjs'
 
 test('backoff grows with consecutive failures and stops growing', () => {
   assert.equal(nextBackoff(1), BACKOFF_MS[0])
@@ -69,4 +69,60 @@ test('cooling() reports what diagnostics needs, and only for the asked node', ()
   clock += BACKOFF_MS[0] + 1
   assert.deepEqual(health.cooling(0), [], 'expired cooldowns are not reported')
   assert.equal(health.cooling(2).length, 0, 'an unknown node has nothing cooling')
+})
+
+// The failure that cost an evening: a plane answering in seconds is never paused, so it keeps winning
+// against a healthy alternative while applications give up on their own timeouts.
+test('a slow plane keeps working but loses its turn', () => {
+  let clock = 100
+  const health = createPlaneHealth({ now: () => clock })
+
+  health.slow(0, 'reality')
+  assert.equal(health.usable(0, 'reality'), true, 'a slow plane may still be the only way out')
+  assert.equal(health.degraded(0, 'reality'), true, 'but everything else is tried first')
+  assert.equal(health.degraded(0, 'hy2'), false, 'the alternative is untouched')
+
+  clock += DEMOTE_MS + 1
+  assert.equal(health.degraded(0, 'reality'), false, 'the demotion expires on its own')
+})
+
+test('a fast success clears a demotion, and a slow one clears the escalation', () => {
+  let clock = 100
+  const health = createPlaneHealth({ now: () => clock })
+
+  health.slow(0, 'reality')
+  health.ok(0, 'reality')
+  assert.equal(health.degraded(0, 'reality'), false, 'proving itself fast is enough')
+
+  health.fail(0, 'reality')
+  health.fail(0, 'reality')
+  clock += BACKOFF_MS[1] + 1
+  const record = health.slow(0, 'reality')
+  assert.equal(record.demoteMs, DEMOTE_MS)
+  assert.equal(health.usable(0, 'reality'), true, 'it answered, so it is not paused any more')
+  assert.equal(health.degraded(0, 'reality'), true)
+  health.fail(0, 'reality')
+  assert.equal(
+    health.cooling(0)[0].fails,
+    1,
+    'a success - even a slow one - ends the escalation, so the next failure starts over'
+  )
+})
+
+test('cooling() distinguishes a paused plane from a demoted one', () => {
+  let clock = 100
+  const health = createPlaneHealth({ now: () => clock })
+  health.fail(0, 'hy2')
+  health.slow(0, 'reality')
+
+  const cooling = health.cooling(0)
+  assert.deepEqual(cooling.map((c) => c.t), ['hy2', 'reality'])
+  assert.equal(cooling[0].slow, false, 'hy2 is paused after a failure')
+  assert.equal(cooling[1].slow, true, 'reality only lost its turn')
+  assert.equal(cooling[1].until, clock + DEMOTE_MS)
+})
+
+test('the slow threshold is what an open costs when the path is unwell, not when it is busy', () => {
+  assert.ok(SLOW_MS >= 1_000, 'a normal open is milliseconds; anything under a second would be noise')
+  assert.ok(SLOW_MS <= BACKOFF_MS[0] / 10, 'and it has to fire long before a pause would')
 })

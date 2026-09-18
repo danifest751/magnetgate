@@ -38,17 +38,36 @@ type fakePlane struct {
 	failUntil int
 	calls     int
 	nodes     []int
+	// How long this plane takes to answer. With a clock it moves that clock, so a test of the slow-plane
+	// policy stays instant and deterministic; without one it really waits, which is how the bound on a
+	// single attempt is checked.
+	delay time.Duration
+	clock *time.Time
 }
 
-func (f *fakePlane) Open(_ context.Context, node Node, _ json.RawMessage, _ Target) (Conn, error) {
+func (f *fakePlane) Open(ctx context.Context, node Node, _ json.RawMessage, _ Target) (Conn, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls++
 	f.nodes = append(f.nodes, node.Slot)
-	if f.err != nil && (f.failUntil == 0 || f.calls <= f.failUntil) {
+	failing := f.err != nil && (f.failUntil == 0 || f.calls <= f.failUntil)
+	delay, clock, plane := f.delay, f.clock, f.plane
+	f.mu.Unlock()
+
+	if delay > 0 {
+		if clock != nil {
+			*clock = clock.Add(delay)
+		} else {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+	if failing {
 		return nil, f.err
 	}
-	return &fakeConn{plane: f.plane}, nil
+	return &fakeConn{plane: plane}, nil
 }
 
 func (f *fakePlane) ok() {
@@ -471,5 +490,98 @@ func TestAReloadDoesNotCoolTheEnginePlanes(t *testing.T) {
 	defer conn.Close()
 	if native.count() != before {
 		t.Fatal("the engine plane was available again and should have carried the stream")
+	}
+}
+
+// A plane that answers slowly never fails, so it was never paused - and it kept winning against a
+// healthy alternative while the applications on top gave up on their own timeouts. Measured on a phone
+// on 17.09: hy2 was offered by both nodes for two hours and never once used.
+func TestASlowPlaneLosesItsTurnToAHealthyOne(t *testing.T) {
+	clock := time.Unix(0, 0)
+	slow := &fakePlane{plane: "reality", delay: time.Duration(health.SlowMs+100) * time.Millisecond, clock: &clock}
+	fast := &fakePlane{plane: "hy2"}
+	p := New(Config{
+		Preference: []string{"reality", "hy2"},
+		Connectors: map[string]Connector{"reality": slow, "hy2": fast},
+		Now:        func() time.Time { return clock },
+	})
+	p.Update(node(t, 0, "reality", "hy2"))
+
+	// the first stream still goes through reality - it is preferred, and nothing is known against it
+	if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	if slow.count() != 1 || fast.count() != 0 {
+		t.Fatalf("expected reality to carry the first stream, got reality=%d hy2=%d", slow.count(), fast.count())
+	}
+	cooling := p.Cooling(0)
+	if len(cooling) != 1 || cooling[0].Plane != "reality" || !cooling[0].Slow {
+		t.Fatalf("a slow success must be reported as demoted, not paused: %+v", cooling)
+	}
+
+	// the next one does not: reality answered, so it is not paused, but it waits its turn
+	if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+		t.Fatalf("second dial: %v", err)
+	}
+	if fast.count() != 1 {
+		t.Fatalf("expected hy2 to carry the second stream, got reality=%d hy2=%d", slow.count(), fast.count())
+	}
+
+	// and once the demotion expires the preferred plane is offered again
+	clock = clock.Add(time.Duration(health.DemoteMs+1) * time.Millisecond)
+	if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+		t.Fatalf("third dial: %v", err)
+	}
+	if slow.count() != 2 {
+		t.Fatalf("expected reality to be tried again, got reality=%d", slow.count())
+	}
+}
+
+// Demotion must never mean "unusable": on a network where the alternative does not work at all, the
+// slow plane is the tunnel.
+func TestADemotedPlaneStillCarriesTrafficWhenItIsTheOnlyOne(t *testing.T) {
+	clock := time.Unix(0, 0)
+	slow := &fakePlane{plane: "reality", delay: time.Duration(health.SlowMs+100) * time.Millisecond, clock: &clock}
+	p := New(Config{
+		Preference: []string{"reality"},
+		Connectors: map[string]Connector{"reality": slow},
+		Now:        func() time.Time { return clock },
+	})
+	p.Update(node(t, 0, "reality"))
+
+	for i := 0; i < 3; i++ {
+		if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+	}
+	if slow.count() != 3 {
+		t.Fatalf("a demoted plane must still be used when nothing else is: got %d", slow.count())
+	}
+}
+
+// Without a bound on one attempt, a path that has degraded but not died holds the caller for as long as
+// it likes - 15 to 18 seconds in the log of 17.09 - while the browser above gives up after three.
+func TestOneAttemptIsBounded(t *testing.T) {
+	hang := &fakePlane{plane: "reality", delay: time.Hour}
+	fast := &fakePlane{plane: "hy2"}
+	p := New(Config{
+		Preference:  []string{"reality", "hy2"},
+		Connectors:  map[string]Connector{"reality": hang, "hy2": fast},
+		OpenTimeout: 50 * time.Millisecond,
+	})
+	p.Update(node(t, 0, "reality", "hy2"))
+
+	started := time.Now()
+	if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("the hanging plane was not cut short: %s", took)
+	}
+	if fast.count() != 1 {
+		t.Fatal("the alternative should have carried the stream")
+	}
+	if cooling := p.Cooling(0); len(cooling) != 1 || cooling[0].Plane != "reality" || cooling[0].Slow {
+		t.Fatalf("a plane that could not answer in time is paused, not demoted: %+v", cooling)
 	}
 }
