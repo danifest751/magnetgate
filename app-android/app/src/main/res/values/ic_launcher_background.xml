@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!--
+    The ground the mark sits on: the same slate the app itself is set on, not black. A launcher icon that
+    goes pure black loses its edge against a dark wallpaper and reads as a hole rather than as a thing.
+  -->
+  <color name="ic_launcher_background">#0E1418</color>
+</resources>

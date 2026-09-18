@@ -67,6 +67,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.Dp
 
 private const val TAG = "magnetgate"
 
@@ -273,11 +281,14 @@ fun AppRoot(
   Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
     // The product name sits here rather than inside the first screen: it belongs to the window, not to
     // one tab, and the tab that is open should be the first thing under it.
-    Text(
-      "MagnetGate",
-      style = MaterialTheme.typography.headlineSmall,
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
       modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
-    )
+    ) {
+      ProductMark(size = 30.dp)
+      Text("MagnetGate", style = MaterialTheme.typography.headlineSmall)
+    }
     TabRow(
       selectedTabIndex = screen.ordinal,
       containerColor = MaterialTheme.colorScheme.background,
@@ -580,6 +591,47 @@ private fun Notice(
         ) { Text(action.first, style = MaterialTheme.typography.labelLarge) }
       }
     }
+  }
+}
+
+/**
+ * The product mark: a horseshoe magnet standing as a gate, with the way through laid across its poles.
+ *
+ * The same drawing as the launcher icon, and drawn here rather than loaded from a vector so it takes its
+ * two colours from the theme: the gate in the text ink of whichever theme is on, the path in the accent
+ * the app spends on its one control. A two-colour vector would have to hard-code both, and would be
+ * wrong in one of the two themes.
+ */
+@Composable
+private fun ProductMark(size: Dp = 30.dp) {
+  val gate = MaterialTheme.colorScheme.onBackground
+  val path = MaterialTheme.colorScheme.primary
+  Canvas(modifier = Modifier.size(size)) {
+    val unit = this.size.minDimension / 108f
+    val stroke = 11f * unit
+
+    // the magnet, standing as a gate: one continuous stroke, poles down
+    val magnet = Path().apply {
+      moveTo(30f * unit, 80f * unit)
+      lineTo(30f * unit, 52f * unit)
+      arcTo(
+        rect = Rect(left = 30f * unit, top = 28f * unit, right = 78f * unit, bottom = 76f * unit),
+        startAngleDegrees = 180f,
+        sweepAngleDegrees = 180f,
+        forceMoveTo = false,
+      )
+      lineTo(78f * unit, 80f * unit)
+    }
+    drawPath(magnet, color = gate, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
+
+    // the way through, laid across its poles
+    drawLine(
+      color = path,
+      start = Offset(30f * unit, 66f * unit),
+      end = Offset(78f * unit, 66f * unit),
+      strokeWidth = 9f * unit,
+      cap = StrokeCap.Round,
+    )
   }
 }
 
