@@ -121,8 +121,21 @@ object SingBoxConfig {
       .put("mtu", 1400)
       .put("auto_route", true)
       .put("strict_route", false)
-      // a userspace stack: no kernel module, no root, and it is what libbox is being used for
-      .put("stack", "gvisor")
+      // System TCP, userspace UDP - which is what sing-box itself picks when nothing forces a stack.
+      //
+      // Under a pure gvisor stack a tun connection is lazy (sing-tun's gLazyConn): the application's TCP
+      // handshake is not completed when its SYN arrives but when the engine first touches the connection,
+      // and at the latest after the outbound is up (route/conn.go calls ReportConnHandshakeSuccess only
+      // once it has dialled). Everything our chain does - sniffing, routing, the core, the plane, the
+      // exit - therefore happens while the application sits with an unanswered SYN, retrying on its own
+      // ladder. Measured on the owner's phone on 18.09: 272 connections died as
+      // `report handshake success: connection refused` at ages of exactly 1.0s, 3.0s, 7.0s, 15.0s and
+      // 31.0s - the retransmission schedule - while the core was answering in 145 ms and both exits were
+      // healthy. To the owner that is "sites stopped opening, Telegram is just slow".
+      //
+      // With the system stack the kernel answers the SYN, so a slow path makes a connection slow instead
+      // of making it fail to open at all.
+      .put("stack", "mixed")
       .apply {
         // The engine passes these to the platform, which turns them into addDisallowedApplication: an
         // excluded app keeps using the normal network and never enters the tunnel.
