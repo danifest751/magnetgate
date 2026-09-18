@@ -7,7 +7,12 @@ import org.json.JSONObject
 data class Plane(val type: String, val endpoint: String)
 
 /** One plane this client is sitting out, with the reason the user needs to see: how long, and how often. */
-data class Pause(val type: String, val untilMs: Long, val fails: Int) {
+/**
+ * A plane the pool is sitting out. [slow] tells the two apart: a paused plane failed, a slow one
+ * answered and only lost its turn - which is the difference between "this path is broken" and "this
+ * path is rotting", and the second is what made a tunnel look healthy while nothing loaded.
+ */
+data class Pause(val type: String, val untilMs: Long, val fails: Int, val slow: Boolean = false) {
   fun remainingMs(now: Long): Long = (untilMs - now).coerceAtLeast(0)
 }
 
@@ -101,7 +106,12 @@ data class CoreStatus(
         val cooling = exit.optJSONArray("cooling") ?: JSONArray()
         for (pause in 0 until cooling.length()) {
           val entry = cooling.optJSONObject(pause) ?: continue
-          paused += Pause(entry.optString("t"), entry.optLong("until"), entry.optInt("fails"))
+          paused += Pause(
+            entry.optString("t"),
+            entry.optLong("until"),
+            entry.optInt("fails"),
+            entry.optBoolean("slow"),
+          )
         }
         nodes += NodeRow(
           slot = exit.optInt("slot"),

@@ -102,7 +102,11 @@ object SingBoxConfig {
         .put("type", "socks")
         .put("tag", "core")
         .put("server", "127.0.0.1")
-        .put("server_port", socksPort),
+        .put("server_port", socksPort)
+        // The core answers on loopback, so this is not about the network: it is the bound on how long a
+        // request may sit inside the core while it works through its planes. Past it the caller is told,
+        // rather than left to a browser's own patience.
+        .put("connect_timeout", CORE_TIMEOUT),
     )
     outbounds.put(JSONObject().put("type", "direct").put("tag", "direct"))
 
@@ -247,6 +251,23 @@ object SingBoxConfig {
    * Mirrors src/transport-config.cjs: what a node's data-plane entry means as a sing-box outbound. Nothing
    * here weakens TLS verification - the certificate is pinned where the entry carries one.
    */
+  /**
+   * How long the engine may spend opening one connection to an exit.
+   *
+   * sing-box's own default let a degraded path hold a connection for 15 to 18 seconds (measured in the
+   * engine log on 17.09) while the browser above gave up after three and showed a reset connection. The
+   * core's pool bounds its attempt at 4s (pool.DefaultOpenTimeout) and moves to the next plane; the
+   * engine must not sit past that, or the bound means nothing.
+   */
+  private const val CONNECT_TIMEOUT = "5s"
+
+  /**
+   * How long one request may spend inside the core. The pool tries the planes of every node in turn,
+   * each bounded by pool.DefaultOpenTimeout, so this is deliberately larger than one attempt and still
+   * smaller than the patience of the application above.
+   */
+  private const val CORE_TIMEOUT = "10s"
+
   fun transportOutbound(plane: JSONObject): JSONObject? {
     val host = plane.optString("host")
     val port = plane.optInt("port")
@@ -262,6 +283,7 @@ object SingBoxConfig {
           .put("type", "vless")
           .put("server", host)
           .put("server_port", port)
+          .put("connect_timeout", CONNECT_TIMEOUT)
           .put("uuid", uuid)
           .put("flow", "xtls-rprx-vision")
           .put(
@@ -290,6 +312,7 @@ object SingBoxConfig {
           .put("type", "hysteria2")
           .put("server", host)
           .put("server_port", port)
+          .put("connect_timeout", CONNECT_TIMEOUT)
           .put("password", password)
           .put("obfs", JSONObject().put("type", "salamander").put("password", obfs))
           .put(

@@ -400,7 +400,10 @@ private fun HealthCard(status: CoreStatus, check: Health.Check?, engineError: St
     for (node in status.nodes) {
       for (pause in node.paused) {
         val seconds = (pause.remainingMs(System.currentTimeMillis()) / 1000).toInt()
-        add("${node.title}: ${pause.type} is paused for ${seconds}s after ${pause.fails} failure(s)")
+        add(
+          if (pause.slow) "${node.title}: ${pause.type} answers slowly, others go first for ${seconds}s"
+          else "${node.title}: ${pause.type} is paused for ${seconds}s after ${pause.fails} failure(s)"
+        )
       }
     }
   }
@@ -453,7 +456,8 @@ private fun NodeCard(node: NodeRow) {
       for (pause in node.paused) {
         val seconds = (pause.remainingMs(System.currentTimeMillis()) / 1000).toInt()
         Text(
-          "${pause.type} is paused for ${seconds}s after ${pause.fails} failure(s)",
+          if (pause.slow) "${pause.type} answers slowly, others go first for ${seconds}s"
+          else "${pause.type} is paused for ${seconds}s after ${pause.fails} failure(s)",
           style = MaterialTheme.typography.bodySmall,
         )
       }
@@ -657,7 +661,12 @@ private fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.
           if (node.paused.isNotEmpty()) {
             append('\n')
             append("  paused: ")
-            append(node.paused.joinToString(" ") { "${it.type}(${(it.remainingMs(now) / 1000).toInt()}s)" })
+            append(
+              node.paused.joinToString(" ") {
+                val mark = if (it.slow) "slow" else "${it.fails}f"
+                "${it.type}(${(it.remainingMs(now) / 1000).toInt()}s $mark)"
+              }
+            )
           }
         },
         style = MaterialTheme.typography.bodySmall,
