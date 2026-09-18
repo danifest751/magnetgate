@@ -421,11 +421,15 @@ try {
     Add-Check 'the tunnel comes back after a Disconnect' ($back -eq 'up') "ip route get $probeV4 -> $(if ($back) { 'dev tun' } else { 'no tun' })"
   }
 
-  # --- 5. nothing leaks when the app dies ---------------------------------------
+  # --- 5. the app dies: nothing leaks, and the tunnel comes back -----------------
+  # Two different promises, and they used to share one gate. The leak check needs the lockdown to mean
+  # anything - without it a phone with no tunnel is simply a phone on its own network. The recovery
+  # check needs nothing: a tunnel that does not come back is broken either way, and gating it on the
+  # lockdown meant that a phone with the lockdown switched off silently stopped testing the one thing
+  # the watchdog exists for.
   if ($NoFailClosed) {
     Add-Skip 'nothing leaks while the app is dead' '-NoFailClosed'
-  } elseif (-not $lockedDown) {
-    Add-Skip 'nothing leaks while the app is dead' 'the VPN lockdown is not on for this app'
+    Add-Skip 'the tunnel comes back after the process dies' '-NoFailClosed'
   } else {
     $hasCurl = (Shell 'command -v curl').Trim()
     # How the app is made to die decides what is being measured. `am force-stop` suppresses the restart
@@ -436,27 +440,36 @@ try {
     Say 'killing the app to see whether the network closes and what comes back'
     $howItDied = 'the kill hook'
     Adb @('shell', 'am', 'start', '--activity-single-top', '-n', $activity, '-e', 'kill', 'true') | Out-Null
-    Start-Sleep -Seconds 5
+    # The hook finishes its activity before it dies, so that the system has no foreground screen to
+    # restore and no reason to restart the app (goto 88) - that takes it a few seconds, and only after
+    # them is a live process evidence that the hook is missing rather than evidence that it is working.
+    Start-Sleep -Seconds 8
     if ((Shell "pidof $appId").Trim()) {
       $howItDied = 'am crash (the kill hook did nothing: not a debuggable build?)'
       Shell "am crash $appId" | Out-Null
     }
     Start-Sleep -Seconds 10
-    # measured from the shell uid on purpose: lockdown lets the VPN app itself out, so `run-as curl`
-    # would report success and "prove" a protection that is not there (goto 63)
-    $route = Shell "ip route get $probeV4 2>&1"
-    $http = if ($hasCurl) { (Shell "curl -s -o /dev/null -m 10 -w '%{http_code}' $Url").Trim() } else { '' }
-    $closed = ($route -match 'Permission denied' -or $route -match 'Network is unreachable')
-    if ($hasCurl) { $closed = ($closed -and $http -eq '000') }
-    Add-Check 'nothing leaks while the app is dead' $closed `
-      "died by $howItDied; ip route get -> $(($route -split "`n")[0].Trim()); curl -> $(if ($hasCurl) { $http } else { 'no curl on the device' })"
+    if (-not $lockedDown) {
+      Add-Skip 'nothing leaks while the app is dead' 'the VPN lockdown is not on for this app'
+    } else {
+      # measured from the shell uid on purpose: lockdown lets the VPN app itself out, so `run-as curl`
+      # would report success and "prove" a protection that is not there (goto 63)
+      $route = Shell "ip route get $probeV4 2>&1"
+      $http = if ($hasCurl) { (Shell "curl -s -o /dev/null -m 10 -w '%{http_code}' $Url").Trim() } else { '' }
+      $closed = ($route -match 'Permission denied' -or $route -match 'Network is unreachable')
+      if ($hasCurl) { $closed = ($closed -and $http -eq '000') }
+      Add-Check 'nothing leaks while the app is dead' $closed `
+        "died by $howItDied; ip route get -> $(($route -split "`n")[0].Trim()); curl -> $(if ($hasCurl) { $http } else { 'no curl on the device' })"
+    }
 
-    Say "waiting up to ${RestartSeconds}s for the system to bring the service back by itself"
+    Say "waiting up to ${RestartSeconds}s for the tunnel to come back without a person"
     $revived = Wait-Until $RestartSeconds 15 {
       if (((Shell "pidof $appId").Trim() -ne '') -and (Tun-Of $probeV4) -ne '') { 'up' } else { $null }
     }
-    Add-Check 'the system brings the tunnel back without a person' ($revived -eq 'up') `
-      $(if ($revived) { 'the service was restarted and the tun is back' } else { "no tunnel after ${RestartSeconds}s: MIUI autostart off (goto 68)?" })
+    # The watchdog ticks once a minute, and a tunnel takes seconds to find a node, so a pass here is a
+    # process that came back and an interface that carries a route - not merely a process.
+    Add-Check 'the tunnel comes back after the process dies' ($revived -eq 'up') `
+      $(if ($revived) { "died by $howItDied; the process came back and the tun with it" } else { "no tunnel after ${RestartSeconds}s: is the watchdog job scheduled (adb shell dumpsys jobscheduler | grep magnetgate)?" })
   }
 } finally {
   # ---------------------------------------------------------------- put it back

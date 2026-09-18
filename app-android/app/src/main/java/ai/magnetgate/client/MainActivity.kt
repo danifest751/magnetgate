@@ -20,6 +20,9 @@ import java.io.File
 
 private const val TAG = "magnetgate"
 
+/** How long the activity is given to go away before the process behind it is ended; see `killProcess`. */
+private const val KILL_DELAY_MS = 3_000L
+
 /**
  * The activity is a shell: it reads the launch extras (which exist for the acceptance scripts), hands the
  * screens their initial parameters, and answers the `dump` hook. Everything else lives in the screens
@@ -116,7 +119,19 @@ class MainActivity : ComponentActivity() {
    */
   private fun killProcess() {
     Log.w(TAG, "killing this process on request (the acceptance run measures what comes back)")
-    android.os.Process.killProcess(android.os.Process.myPid())
+    // The screen goes first, and the death is delayed behind it. A process that dies while one of its
+    // activities is in the foreground is put back by the system to restore that activity - with the
+    // launch extras it had, which on an acceptance run are `autotest vpn`, so the tunnel returns in
+    // under a second and the run "passes" without anything of ours having run. Measured on 18.09: the
+    // process died at 14:20:07.464 and its replacement asked for a VPN at 14:20:08.075.
+    //
+    // That is not the death this has to survive. The owner's app is in the background with no activity
+    // at all, the service is what carries the tunnel, and the system has nothing to restore.
+    finishAndRemoveTask()
+    android.os.Handler(mainLooper).postDelayed(
+      { android.os.Process.killProcess(android.os.Process.myPid()) },
+      KILL_DELAY_MS,
+    )
   }
 
   /**
