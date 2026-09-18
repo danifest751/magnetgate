@@ -244,6 +244,14 @@ object SingBoxConfig {
         .apply { if (ruleSetDefs.length() > 0) put("rule_set", ruleSetDefs) }
         // what nothing matched: in split mode that is the open internet, in full mode it is the tunnel
         .put("final", if (mode == Settings.Mode.SPLIT) "direct" else "core")
+        // Off, and deliberately: the engine's sockets are kept on the right network by the platform
+        // (AutoDetectInterfaceControl -> VpnService.protect), and an application on Android may not bind
+        // a socket to an interface by index. Turning this on stopped the traffic dead - the tunnel came
+        // up with every plane and the exit check answered `connection closed` (measured 18.09).
+        //
+        // What the engine does now get is the news: MgVpnService.watchNetwork reports Android's current
+        // network through Mgbox.updateDefaultInterface, so a change refreshes sing-box's view instead of
+        // leaving it with whatever it saw at startup.
         .put("auto_detect_interface", false)
         // Which resolver the routing rules themselves use when a rule names a domain. Without it a
         // domain rule resolves through whatever the platform would have used, which is the network's

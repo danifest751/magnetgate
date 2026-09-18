@@ -5,6 +5,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -81,6 +85,21 @@ class MgVpnService : VpnService() {
 
   /** The packages the tunnel must leave alone, read from settings when the tunnel comes up. */
   private var excludedPackages: List<String> = emptyList()
+
+  /**
+   * Watches the network under the tunnel and tells the engine when it changes.
+   *
+   * Android moves a VPN between networks whenever it likes - Wi-Fi sleeps, the radio re-registers, the
+   * phone is carried outside - and usually while nobody is looking. The engine has no way to notice on
+   * its own: it is inside an app, its sockets are protected rather than bound, and everything it knows
+   * about the network it was told at startup. Measured twice on the owner's phone: every long-lived
+   * connection aborted in the same second, and every dial after that answered `network is unreachable`
+   * until the tunnel was restarted by hand.
+   */
+  private var networkWatch: ConnectivityManager.NetworkCallback? = null
+
+  /** The interface last reported, so the same network is not announced on every capability change. */
+  private var lastNetwork = ""
 
   /** Where the engine writes its own log for this tunnel; see [prepareEngineLog]. */
   private var engineLog = ""
@@ -236,6 +255,7 @@ class MgVpnService : VpnService() {
         }
         running = true
         corePort = port
+        watchNetwork()
         checkPort = built.checkPort
         watching = true
         Log.i(
@@ -499,6 +519,7 @@ class MgVpnService : VpnService() {
     running = false
     starting = false
     watching = false
+    forgetNetwork()
     try {
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.stopEngine()
@@ -512,6 +533,81 @@ class MgVpnService : VpnService() {
     Mgbox.stopCore()
     stopForeground(STOP_FOREGROUND_REMOVE)
     Log.i(TAG, "tunnel down")
+  }
+
+  /**
+   * Starts reporting Android's default network to the engine, and reports it once right away.
+   *
+   * The callback is the system's own view of "what this phone is using", which is exactly what the
+   * engine's outbound sockets end up on. `onLost` with nothing to take over is reported as index -1:
+   * no network at all is a state the engine has to know, not a gap in the reporting.
+   */
+  private fun watchNetwork() {
+    if (networkWatch != null) return
+    val manager = getSystemService(ConnectivityManager::class.java) ?: return
+    val callback = object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) = report(network)
+
+      override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) =
+        report(network, properties)
+
+      override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) =
+        report(network, capabilities = capabilities)
+
+      override fun onLost(network: Network) {
+        Log.i(TAG, "the network under the tunnel went away")
+        runCatching { Mgbox.updateDefaultInterface("", -1L, false) }
+          .onFailure { Log.w(TAG, "telling the engine the network is gone: ${it.message}") }
+      }
+
+      private fun report(
+        network: Network,
+        properties: LinkProperties? = null,
+        capabilities: NetworkCapabilities? = null,
+      ) {
+        val manager = getSystemService(ConnectivityManager::class.java) ?: return
+        val link = properties ?: manager.getLinkProperties(network)
+        val name = link?.interfaceName ?: return
+        // the engine needs the index, which only the interface itself can give
+        val index = runCatching { java.net.NetworkInterface.getByName(name)?.index ?: -1 }.getOrDefault(-1)
+        val able = capabilities ?: manager.getNetworkCapabilities(network)
+        // belt and braces: our own tunnel is never the network the tunnel rides on
+        if (able?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) return
+        val expensive = able?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true
+        if (index <= 0) return
+        if (name == lastNetwork) return
+        lastNetwork = name
+        Log.i(TAG, "the tunnel now rides $name (index $index, metered $expensive)")
+        runCatching { Mgbox.updateDefaultInterface(name, index.toLong(), expensive) }
+          .onFailure { Log.w(TAG, "telling the engine about $name: ${it.message}") }
+      }
+    }
+    // Not the default network: once the tunnel is up, that is the tunnel itself, and the engine would
+    // be told it rides tun0 - measured on the first try. What matters is the network underneath, so the
+    // request asks for one that is not a VPN.
+    val request = android.net.NetworkRequest.Builder()
+      .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+      .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+      .build()
+    runCatching {
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        // one callback that follows the best match, rather than one event per candidate network
+        manager.registerBestMatchingNetworkCallback(request, callback, android.os.Handler(mainLooper))
+      } else {
+        manager.registerNetworkCallback(request, callback)
+      }
+    }
+      .onSuccess { networkWatch = callback }
+      .onFailure { Log.w(TAG, "watching the network: ${it.message}") }
+  }
+
+  private fun forgetNetwork() {
+    val callback = networkWatch ?: return
+    networkWatch = null
+    lastNetwork = ""
+    val manager = getSystemService(ConnectivityManager::class.java)
+    runCatching { manager?.unregisterNetworkCallback(callback) }
+      .onFailure { Log.w(TAG, "unwatching the network: ${it.message}") }
   }
 
   private fun createChannel() {

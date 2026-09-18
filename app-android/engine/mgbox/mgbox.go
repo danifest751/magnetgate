@@ -15,6 +15,7 @@ package mgbox
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"strconv"
 	"sync"
 
@@ -251,9 +252,97 @@ func (p *platform) LookupUser(string) (*libbox.PlatformUser, error) {
 	return nil, errors.New("mgbox: user lookup is not implemented")
 }
 
-func (p *platform) GetInterfaces() (libbox.NetworkInterfaceIterator, error)           { return nil, nil }
-func (p *platform) StartDefaultInterfaceMonitor(libbox.InterfaceUpdateListener) error { return nil }
-func (p *platform) CloseDefaultInterfaceMonitor(libbox.InterfaceUpdateListener) error { return nil }
+// The default network under the tunnel, and whoever inside the engine wants to hear about it changing.
+//
+// Android switches the network under a running VPN whenever it feels like it - Wi-Fi goes to sleep, the
+// radio re-registers, the phone is simply carried out of the flat - and it does so most often while
+// nobody is looking. Until this was implemented the engine was never told: `StartDefaultInterfaceMonitor`
+// accepted the listener and dropped it, `GetInterfaces` returned nothing, and `auto_detect_interface` was
+// off, so sing-box's picture of the network was whatever it had been at startup. Measured on the owner's
+// phone twice: every long-lived connection aborted in the same second (ages 15m, 15m, 3m, 59s - all from
+// the Wi-Fi address), and from then on new dials answered `connect: network is unreachable` until the
+// tunnel was restarted by hand. To the owner: "the phone lay there with Telegram, I picked it up and no
+// site would open".
+var (
+	networkMu        sync.Mutex
+	networkListener  libbox.InterfaceUpdateListener
+	networkName      string
+	networkIndex     int32 = -1
+	networkExpensive bool
+)
+
+// UpdateDefaultInterface is how the app reports what Android's default network is now. An index of -1
+// means there is none at the moment, which the engine has to hear as well: a tunnel over no network at
+// all is a different thing from a tunnel over a network that has changed.
+func UpdateDefaultInterface(name string, index int, expensive bool) {
+	networkMu.Lock()
+	networkName, networkIndex, networkExpensive = name, int32(index), expensive
+	listener := networkListener
+	networkMu.Unlock()
+	if listener != nil {
+		listener.UpdateDefaultInterface(name, int32(index), expensive, false)
+	}
+}
+
+func (p *platform) StartDefaultInterfaceMonitor(listener libbox.InterfaceUpdateListener) error {
+	networkMu.Lock()
+	networkListener = listener
+	name, index, expensive := networkName, networkIndex, networkExpensive
+	networkMu.Unlock()
+	// tell it where we are now rather than waiting for the next change, or the engine starts blind
+	listener.UpdateDefaultInterface(name, index, expensive, false)
+	return nil
+}
+
+func (p *platform) CloseDefaultInterfaceMonitor(libbox.InterfaceUpdateListener) error {
+	networkMu.Lock()
+	networkListener = nil
+	networkMu.Unlock()
+	return nil
+}
+
+// GetInterfaces lists what this device has, which is how the engine turns the index above into an
+// interface it can bind to. Returning nothing here was the other half of the same defect: even a
+// reported change could not be resolved.
+func (p *platform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*libbox.NetworkInterface, 0, len(interfaces))
+	for _, item := range interfaces {
+		addresses, err := item.Addrs()
+		if err != nil {
+			addresses = nil
+		}
+		texts := make([]string, 0, len(addresses))
+		for _, address := range addresses {
+			texts = append(texts, address.String())
+		}
+		out = append(out, &libbox.NetworkInterface{
+			Index:     int32(item.Index),
+			MTU:       int32(item.MTU),
+			Name:      item.Name,
+			Addresses: &stringIterator{items: texts},
+			Flags:     int32(item.Flags),
+		})
+	}
+	return &interfaceIterator{items: out}, nil
+}
+
+type interfaceIterator struct {
+	items []*libbox.NetworkInterface
+	next  int
+}
+
+func (i *interfaceIterator) HasNext() bool { return i.next < len(i.items) }
+
+func (i *interfaceIterator) Next() *libbox.NetworkInterface {
+	value := i.items[i.next]
+	i.next++
+	return value
+}
+
 func (p *platform) StartNeighborMonitor(libbox.NeighborUpdateListener) error          { return nil }
 func (p *platform) CloseNeighborMonitor(libbox.NeighborUpdateListener) error          { return nil }
 func (p *platform) SendNotification(*libbox.Notification) error                       { return nil }
