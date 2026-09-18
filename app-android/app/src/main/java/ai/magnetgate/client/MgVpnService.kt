@@ -49,6 +49,10 @@ class MgVpnService : VpnService() {
 
     /** How large the engine's log may grow before it is emptied; one generation of it is also kept. */
     private const val MAX_ENGINE_LOG = 16L * 1024 * 1024
+
+    /** Every measurement, one line each, so a whole session can be read as a curve; see [recordCheck]. */
+    private const val HEALTH_FILE = "health.csv"
+    private const val MAX_HEALTH_FILE = 2L * 1024 * 1024
     private const val NOTIFICATION_ID = 1
 
     @Volatile
@@ -224,6 +228,34 @@ class MgVpnService : VpnService() {
   }
 
   /**
+   * Writes every measurement down, one line per check, for as long as the tunnel is up.
+   *
+   * Until now a measurement lived in memory and reached a file only when someone asked for a dump - and
+   * asking means starting the activity, which on the owner's phone means taking over their screen. So a
+   * whole evening of degradation left exactly one reading: the last one. The session of 18.09 was
+   * diagnosed from the engine's log while the one number that would have said "the path itself got three
+   * times slower" existed once, by luck, two minutes before the tunnel was switched off.
+   *
+   * The file is plain text and append-only, so it can be pulled over the cable at any moment without
+   * touching the phone: `adb shell run-as … cat files/health.csv`.
+   */
+  private fun recordCheck(check: Health.Check) {
+    runCatching {
+      val file = java.io.File(filesDir, HEALTH_FILE)
+      // A day of checks is 1440 lines of some 60 bytes; the cap is generous and exists only so that a
+      // phone left running for a month does not carry a file nobody will ever read to its end.
+      if (file.length() > MAX_HEALTH_FILE) file.delete()
+      if (!file.exists()) file.appendText("at,ok,tookMs,connectMs,tlsMs,answerMs,pingMs,detail\n")
+      val legs = check.legs
+      file.appendText(
+        "${check.atMs},${if (check.ok) 1 else 0},${check.tookMs}," +
+          "${legs?.connectMs ?: ""},${legs?.tlsMs ?: ""},${legs?.answerMs ?: ""},${legs?.pingMs ?: ""}," +
+          check.detail.replace(',', ' ').replace('\n', ' ') + "\n",
+      )
+    }.onFailure { Log.w(TAG, "recording the measurement: ${it.message}") }
+  }
+
+  /**
    * Keeps the running tunnel's log from growing without end.
    *
    * sing-box opens it with O_APPEND (log/observable.go), so emptying the file under it is safe: the next
@@ -384,7 +416,7 @@ class MgVpnService : VpnService() {
       val through = if (checkPort != 0) checkPort else corePort
       if (System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS && through != 0) {
         checkedAt = System.currentTimeMillis()
-        Health.check(through, CHECK_URL)
+        recordCheck(Health.check(through, CHECK_URL))
         trimEngineLog()
       }
       val next = nodeSignature()
