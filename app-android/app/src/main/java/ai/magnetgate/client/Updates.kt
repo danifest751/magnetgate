@@ -5,11 +5,13 @@ import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.util.Log
 import java.io.File
-import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
+import java.net.Socket
 import java.net.URL
 import java.security.MessageDigest
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 
 /**
  * Updating the client from the client.
@@ -121,44 +123,8 @@ object Updates {
   fun download(context: Context, update: UpdateRow, socksPort: Int, onProgress: (Progress) -> Unit): File? {
     val target = File(context.filesDir, FILE)
     runCatching { target.delete() }
-    val url = runCatching { URL(update.url) }.getOrNull()
-    // http is accepted as well as https. What guards this download is the digest from the sealed
-    // manifest and Android's signature check at install, neither of which TLS adds to; the nodes that
-    // serve these packages have no domain and so no certificate. The request also travels inside this
-    // client's own tunnel, so the only stretch TLS would cover is exit to host.
-    if (url == null || (url.protocol != "https" && url.protocol != "http")) {
-      onProgress(Progress.Failed("the update source is not an http address"))
-      return null
-    }
     return try {
-      val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
-      val connection = (url.openConnection(proxy) as HttpURLConnection).apply {
-        connectTimeout = 30_000
-        readTimeout = 60_000
-        instanceFollowRedirects = true
-      }
-      connection.inputStream.use { input ->
-        if (connection.responseCode != 200) throw IllegalStateException("HTTP ${connection.responseCode}")
-        val digest = MessageDigest.getInstance("SHA-256")
-        var written = 0L
-        target.outputStream().use { output ->
-          val buffer = ByteArray(CHUNK)
-          while (true) {
-            val read = input.read(buffer)
-            if (read <= 0) break
-            written += read
-            if (written > update.bytes) throw IllegalStateException("the source is serving more than the manifest promised")
-            digest.update(buffer, 0, read)
-            output.write(buffer, 0, read)
-            onProgress(Progress.Downloading(written, update.bytes))
-          }
-        }
-        if (written != update.bytes) throw IllegalStateException("got $written B of ${update.bytes} B")
-        val got = digest.digest().joinToString("") { "%02x".format(it) }
-        if (!got.equals(update.sha256, ignoreCase = true)) {
-          throw IllegalStateException("the package does not match the manifest")
-        }
-      }
+      fetch(update, socksPort, target, onProgress)
       Log.i(TAG, "update ${update.versionCode} downloaded and verified")
       onProgress(Progress.Verified)
       target
@@ -167,6 +133,105 @@ object Updates {
       Log.w(TAG, "update ${update.versionCode}: ${error.message}")
       onProgress(Progress.Failed(error.message ?: error.javaClass.simpleName))
       null
+    }
+  }
+
+  /**
+   * One GET through the tunnel, written by hand rather than through the platform's HTTP client.
+   *
+   * Two reasons, and the second is the one that forced it. The destination is left as a **name** so
+   * that whatever is behind the SOCKS listener resolves it, exactly as the health check does - a client
+   * that resolved locally would be testing its own resolver rather than the tunnel's. And Android
+   * refuses cleartext through its own stack from targetSdk 28 (`Cleartext HTTP traffic not permitted`),
+   * which is a sound default this application keeps for everything else: the alternatives were flipping
+   * it off for the whole app, or naming the update hosts in the manifest - and the hosts are discovered
+   * at runtime, so naming them in a package would defeat the point of discovering them.
+   *
+   * The body is read to exactly the length the sealed manifest promised and hashed as it arrives, so a
+   * source that sends more, less or other bytes fails here rather than on disk.
+   */
+  private fun fetch(update: UpdateRow, socksPort: Int, target: File, onProgress: (Progress) -> Unit) {
+    var url = URL(update.url)
+    var redirects = 0
+    while (true) {
+      if (url.protocol != "http" && url.protocol != "https") {
+        throw IllegalStateException("the update source is not an http address")
+      }
+      val host = url.host
+      val port = if (url.port != -1) url.port else if (url.protocol == "https") 443 else 80
+      val path = (url.path.ifEmpty { "/" }) + (url.query?.let { "?$it" } ?: "")
+      val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
+      socket.soTimeout = 60_000
+      socket.connect(InetSocketAddress.createUnresolved(host, port), 30_000)
+      val stream: Socket = if (url.protocol == "https") {
+        (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(socket, host, port, false).also {
+          (it as SSLSocket).startHandshake()
+        }
+      } else {
+        socket
+      }
+      var redirect: String? = null
+      socket.use {
+        val writer = stream.getOutputStream().bufferedWriter()
+        writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\nUser-Agent: magnetgate\r\n\r\n")
+        writer.flush()
+        val input = stream.getInputStream()
+        val status = readLine(input) ?: throw IllegalStateException("the source answered with nothing")
+        val code = status.split(' ').getOrNull(1)?.toIntOrNull() ?: 0
+        var location: String? = null
+        while (true) {
+          val header = readLine(input) ?: throw IllegalStateException("the answer ended inside its headers")
+          if (header.isEmpty()) break
+          if (header.startsWith("Location:", ignoreCase = true)) location = header.substringAfter(':').trim()
+        }
+        when {
+          code in 300..399 && location != null -> redirect = location
+          code != 200 -> throw IllegalStateException("HTTP $code")
+          else -> readBody(input, update, target, onProgress)
+        }
+      }
+      val next = redirect ?: return
+      if (++redirects > 3) throw IllegalStateException("too many redirects")
+      url = URL(url, next)
+    }
+  }
+
+  /** Reads exactly what the manifest promised, hashing as it goes, and refuses anything else. */
+  private fun readBody(
+    input: java.io.InputStream,
+    update: UpdateRow,
+    target: File,
+    onProgress: (Progress) -> Unit,
+  ) {
+    val digest = MessageDigest.getInstance("SHA-256")
+    var written = 0L
+    target.outputStream().use { output ->
+      val buffer = ByteArray(CHUNK)
+      while (written < update.bytes) {
+        val want = minOf(CHUNK.toLong(), update.bytes - written).toInt()
+        val read = input.read(buffer, 0, want)
+        if (read <= 0) break
+        written += read
+        digest.update(buffer, 0, read)
+        output.write(buffer, 0, read)
+        onProgress(Progress.Downloading(written, update.bytes))
+      }
+    }
+    if (written != update.bytes) throw IllegalStateException("got $written B of ${update.bytes} B")
+    val got = digest.digest().joinToString("") { "%02x".format(it) }
+    if (!got.equals(update.sha256, ignoreCase = true)) {
+      throw IllegalStateException("the package does not match the manifest")
+    }
+  }
+
+  /** One CRLF-terminated line, read byte by byte because the body after it must stay unbuffered. */
+  private fun readLine(input: java.io.InputStream): String? {
+    val line = StringBuilder()
+    while (true) {
+      val byte = input.read()
+      if (byte < 0) return if (line.isEmpty()) null else line.toString()
+      if (byte == '\n'.code) return line.toString().trimEnd('\r')
+      line.append(byte.toChar())
     }
   }
 
