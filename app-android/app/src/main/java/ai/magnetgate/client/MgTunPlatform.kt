@@ -70,8 +70,32 @@ class MgTunPlatform(private val service: MgVpnService) : PlatformHandler {
    *
    * The flags are Go's `net.Flags`, which is what libbox expects on the other side.
    */
+  private companion object {
+    // libbox's own order (experimental/libbox/platform.go): wifi, cellular, ethernet, other.
+    const val INTERFACE_WIFI = 0
+    const val INTERFACE_CELLULAR = 1
+    const val INTERFACE_ETHERNET = 2
+    const val INTERFACE_OTHER = 3
+  }
+
   override fun interfaces(): String {
     val out = JSONArray()
+    // What each interface actually is, asked of the system rather than guessed from its name. Without
+    // it every interface reaches the engine as type 0, which is `wifi` - so a phone on LTE told the
+    // engine it was on Wi-Fi, and any decision about metered networks was made on a fiction. Names are
+    // matched because that is the only key both sides share.
+    val kinds = mutableMapOf<String, Int>()
+    val manager = service.getSystemService(android.net.ConnectivityManager::class.java)
+    for (network in manager?.allNetworks.orEmpty()) {
+      val name = manager?.getLinkProperties(network)?.interfaceName ?: continue
+      val able = manager.getNetworkCapabilities(network) ?: continue
+      kinds[name] = when {
+        able.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> INTERFACE_WIFI
+        able.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> INTERFACE_CELLULAR
+        able.hasTransport(android.net.NetworkCapabilities.TRANSPORT_ETHERNET) -> INTERFACE_ETHERNET
+        else -> INTERFACE_OTHER
+      }
+    }
     val listed = runCatching { java.net.NetworkInterface.getNetworkInterfaces() }.getOrNull()
       ?: return out.toString()
     for (item in listed) {
@@ -95,6 +119,9 @@ class MgTunPlatform(private val service: MgVpnService) : PlatformHandler {
           .put("mtu", runCatching { item.mtu }.getOrDefault(0))
           .put("name", item.name)
           .put("flags", flags)
+          // An interface the system does not name as a network - loopback, dummy0, a stale tun - is
+          // "other" rather than Wi-Fi: saying nothing is better than saying something wrong.
+          .put("type", kinds[item.name] ?: INTERFACE_OTHER)
           .put("addresses", addresses),
       )
     }

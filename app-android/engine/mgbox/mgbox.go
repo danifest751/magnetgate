@@ -325,10 +325,13 @@ func (p *platform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) {
 		return nil, err
 	}
 	var listed []struct {
-		Index     int32    `json:"index"`
-		MTU       int32    `json:"mtu"`
-		Name      string   `json:"name"`
-		Flags     int32    `json:"flags"`
+		Index int32  `json:"index"`
+		MTU   int32  `json:"mtu"`
+		Name  string `json:"name"`
+		Flags int32  `json:"flags"`
+		// What the interface is: wifi, cellular, ethernet or other, as libbox numbers them. Left unset
+		// it is zero, which means wifi - so a phone on LTE used to tell the engine it was on Wi-Fi.
+		Type      int32    `json:"type"`
 		Addresses []string `json:"addresses"`
 	}
 	if err := json.Unmarshal([]byte(raw), &listed); err != nil {
@@ -342,6 +345,7 @@ func (p *platform) GetInterfaces() (libbox.NetworkInterfaceIterator, error) {
 			Name:      item.Name,
 			Addresses: &stringIterator{items: item.Addresses},
 			Flags:     item.Flags,
+			Type:      item.Type,
 		})
 	}
 	return &interfaceIterator{items: out}, nil
