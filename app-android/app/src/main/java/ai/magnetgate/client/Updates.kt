@@ -103,12 +103,25 @@ object Updates {
    * which lengthens the queue (the record of what was left grew 15 -> 17 -> 19 while it "downloaded").
    */
   private const val WORKERS = 2
-  private const val RATE_START = 192L * 1024
-  private const val RATE_FLOOR = 48L * 1024
-  private const val RATE_CEIL = 448L * 1024
+  private const val RATE_START = 1536L * 1024
+  private const val RATE_FLOOR = 64L * 1024
+  private const val RATE_CEIL = 4096L * 1024
 
   /** How many times one slice is taken again, on its own, before the whole attempt is called failed. */
   private const val SLICE_TRIES = 4
+
+  /**
+   * What the download watches while it runs: how long the tunnel takes to open a new connection.
+   *
+   * Not throughput, and not the package's own progress - both of those look healthy while everything
+   * else on the phone is stuck behind a full queue. A new connection is what a person is waiting for
+   * when they open something, and it is what failed on 20.09: 0.5 s idle, 12 s under the download,
+   * 15-19 s deadlines in the engine. So that is the number the rate answers to, measured every few
+   * seconds through the core, exactly as the person's own traffic goes.
+   */
+  private const val PROBE_EVERY_MS = 3_000L
+  private const val HURTS_MS = 2_000L
+  private const val FINE_MS = 900L
 
   /**
    * The update worth offering, or null.
@@ -197,16 +210,24 @@ object Updates {
       }
     }
 
-    /** Called with each fresh measurement of the tunnel; null means nothing has been measured yet. */
-    fun steer(check: Health.Check?) {
+    /**
+     * Moves the rate after each measurement of how long a new connection now takes.
+     *
+     * Fast, because the thing being protected is fast: a person opening a page waits seconds, not
+     * minutes, and a regulator that learns once a minute either starves them for a minute or crawls
+     * for the whole download. The first version did the latter, which is the same failure wearing the
+     * other hat - the update took forever and the owner said so.
+     */
+    fun steer(connectMs: Long) {
       val was = rate
       rate = when {
-        check == null -> return
-        !check.ok || check.tookMs > Health.SLOW_MS -> maxOf(RATE_FLOOR, rate / 2)
-        check.tookMs < Health.SLOW_MS / 4 -> minOf(RATE_CEIL, rate + rate / 4)
+        connectMs > HURTS_MS -> maxOf(RATE_FLOOR, rate / 2)
+        connectMs < FINE_MS -> minOf(RATE_CEIL, rate + rate / 4)
         else -> rate
       }
-      if (rate != was) Log.i(TAG, "update rate ${was / 1024} -> ${rate / 1024} KB/s (check ${if (check?.ok == true) "ok" else "failed"} ${check?.tookMs}ms)")
+      if (rate != was) {
+        Log.i(TAG, "update rate ${was / 1024} -> ${rate / 1024} KB/s (an answer took ${if (connectMs == Long.MAX_VALUE) "forever" else connectMs.toString() + "ms"})")
+      }
     }
   }
 
@@ -232,7 +253,7 @@ object Updates {
     context: Context,
     update: UpdateRow,
     socksPort: Int,
-    planePorts: List<Int> = emptyList(),
+    planes: List<EnginePlane> = emptyList(),
     onProgress: (Progress) -> Unit,
   ): File? {
     val target = File(context.filesDir, FILE)
@@ -258,7 +279,7 @@ object Updates {
     while (true) {
       attempt++
       try {
-        fetch(update, socksPort, planePorts, target, onProgress)
+        fetch(update, socksPort, planes, target, onProgress)
         Log.i(TAG, "update ${update.versionCode} downloaded and verified")
         rememberStaged(context, update.versionCode)
         onProgress(Progress.Verified)
@@ -306,13 +327,20 @@ object Updates {
   private fun fetch(
     update: UpdateRow,
     socksPort: Int,
-    planePorts: List<Int>,
+    planes: List<EnginePlane>,
     target: File,
     onProgress: (Progress) -> Unit,
   ) {
-    // The roads this package may take, fastest first, and the core's own listener if there are none.
-    // A slice that fails moves to the next one rather than trying the same road harder.
-    val roads = planePorts.ifEmpty { listOf(socksPort) }
+    // The fastest road first, another only when it will not carry.
+    //
+    // Measured on the owner's phone, 8 MB from one CDN: the hy2 listeners 2.2-3.6 MB/s, the reality
+    // ones 0.5-1.8 with an outright failure among them, the core - which picks per connection by time
+    // to first byte, the right question for a page and the wrong one for 88 MB - in between. So every
+    // slice starts on an hy2 listener, spread across the nodes that have one; a slice that fails takes
+    // the next road down the list, ending at the core itself, which can always find *a* way.
+    val fast = planes.filter { it.plane == "hy2" }.map { it.port }
+    val roads = (planes.map { it.port } + socksPort).distinct()
+    val first = fast.ifEmpty { roads }
     val total = update.bytes
     val pieces = ((total + PIECE - 1) / PIECE).toInt()
     // the file is laid out in full once, so that any slice may be written at its own offset
@@ -325,16 +353,13 @@ object Updates {
     val pacer = Pacer(RATE_START)
     // The tunnel's own opinion, read as it arrives. The check runs on the service's timer and knows
     // nothing about updates, which is exactly what makes it worth listening to here.
+    val watched = URL(update.url)
+    val watchedPort = if (watched.port != -1) watched.port else if (watched.protocol == "https") 443 else 80
     val steering = Thread {
-      var seen: Health.Check? = null
       while (true) {
-        val check = Health.lastCheck
-        if (check !== seen) {
-          seen = check
-          pacer.steer(check)
-        }
+        pacer.steer(firstByteMs(socksPort, watched, watchedPort))
         try {
-          Thread.sleep(2_000)
+          Thread.sleep(PROBE_EVERY_MS)
         } catch (_: InterruptedException) {
           return@Thread
         }
@@ -360,7 +385,8 @@ object Updates {
           for (attempt in 1..SLICE_TRIES) {
             if (failure.get() != null) break
             try {
-              slice(roads[(piece + attempt - 1) % roads.size], target, from, to, pacer, update.url)
+              val road = if (attempt == 1) first[piece % first.size] else roads[(piece + attempt) % roads.size]
+              slice(road, target, from, to, pacer, update.url)
               taken = true
               break
             } catch (error: Throwable) {
@@ -407,9 +433,38 @@ object Updates {
     runCatching { partsFile(target).delete() }
   }
 
+  /**
+   * How long the tunnel takes to get an answer **from the far side** right now, or [Long.MAX_VALUE].
+   *
+   * A first version of this timed the SOCKS connect and was proud of 2 ms - which is trap 92 of this
+   * project, made a second time by the same hands: the core answers a SOCKS request before it has
+   * dialled anything, so that number is the same whether the road is clear, jammed, or gone. It sent
+   * the rate straight to the ceiling while claiming the tunnel was perfect.
+   *
+   * So the probe asks for something and waits for the first byte of the reply. Through the core,
+   * because that is the road the person's own traffic takes, and to the machine already serving this
+   * package, because it is ours and one HEAD costs it nothing.
+   */
+  private fun firstByteMs(socksPort: Int, url: URL, port: Int): Long {
+    val started = System.nanoTime()
+    return try {
+      Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))).use { probe ->
+        probe.soTimeout = 5_000
+        probe.connect(InetSocketAddress.createUnresolved(url.host, port), 5_000)
+        val path = url.path.ifEmpty { "/" }
+        val request = "HEAD $path HTTP/1.1\r\nHost: ${url.host}\r\nConnection: close\r\n\r\n"
+        probe.getOutputStream().apply { write(request.toByteArray()); flush() }
+        if (probe.getInputStream().read() < 0) return Long.MAX_VALUE
+      }
+      (System.nanoTime() - started) / 1_000_000
+    } catch (_: Throwable) {
+      Long.MAX_VALUE
+    }
+  }
+
   /** One slice, over its own connection through the tunnel, at no more than the pacer allows. */
-  private fun slice(port: Int, target: File, from: Long, to: Long, pacer: Pacer, from_url: String) {
-    var url = URL(from_url)
+  private fun slice(proxyPort: Int, target: File, from: Long, to: Long, pacer: Pacer, source: String) {
+    var url = URL(source)
     var redirects = 0
     while (true) {
       if (url.protocol != "http" && url.protocol != "https") {
@@ -418,7 +473,10 @@ object Updates {
       val host = url.host
       val port = if (url.port != -1) url.port else if (url.protocol == "https") 443 else 80
       val path = (url.path.ifEmpty { "/" }) + (url.query?.let { "?$it" } ?: "")
-      val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
+      // proxyPort, not port: `port` a few lines up is the *destination's* port, and naming the proxy
+      // the same thing made every slice dial 127.0.0.1:45443 and be refused. Cost: one round of
+      // builds at one in the morning.
+      val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort)))
       socket.soTimeout = 60_000
       socket.connect(InetSocketAddress.createUnresolved(host, port), 30_000)
       var redirect: String? = null

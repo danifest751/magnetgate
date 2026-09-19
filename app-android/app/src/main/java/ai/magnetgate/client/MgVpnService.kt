@@ -79,8 +79,8 @@ class MgVpnService : VpnService() {
      * A package is different: it is verified by a digest from a sealed offer, so which road it came by
      * changes nothing about whether it may be installed.
      */
-    fun planePorts(): List<Int> =
-      current?.enginePlanes.orEmpty().sortedBy { if (it.plane == "hy2") 0 else 1 }.map { it.port }
+    fun planes(): List<EnginePlane> =
+      current?.enginePlanes.orEmpty().sortedBy { if (it.plane == "hy2") 0 else 1 }
 
     /** Проверка выполняется тем же наблюдателем и через тот же DNS-путь, что и фоновая. */
     fun requestCheck(): Boolean {
