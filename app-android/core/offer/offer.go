@@ -71,7 +71,15 @@ func (u *Update) Valid() bool {
 	if u == nil || u.V < 1 || u.VersionCode < 1 || u.VersionName == "" {
 		return false
 	}
-	if !strings.HasPrefix(u.URL, "https://") || u.Bytes <= 0 || u.Bytes > MaxUpdateBytes {
+	// https is preferred and http is allowed, which deserves saying out loud. What protects this
+	// download is not the transport: it is the digest, which travelled sealed under the group key, and
+	// Android's refusal to install a package signed with another key. TLS would add confidentiality
+	// only - and the request already travels inside this client's own tunnel, so the only stretch it
+	// would cover is between the exit and the host. The nodes that serve these packages have no domain
+	// and therefore no certificate anyone would trust; refusing http would mean no updates at all,
+	// which is the worse answer. With a domain, this becomes https-only again by deleting one branch.
+	scheme := strings.HasPrefix(u.URL, "https://") || strings.HasPrefix(u.URL, "http://")
+	if !scheme || u.Bytes <= 0 || u.Bytes > MaxUpdateBytes {
 		return false
 	}
 	if len(u.SHA256) != 64 {

@@ -20,7 +20,7 @@
 //     release.
 //
 // Usage:
-//   node scripts/publish-update.mjs --apk <path> --url <https://...> [--out /etc/magnetgate-update.json]
+//   node scripts/publish-update.mjs --apk <path> --url <http[s]://...> [--out /etc/magnetgate-update.json]
 //   node scripts/publish-update.mjs --show [--out ...]
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -45,7 +45,7 @@ function die(message) {
 
 function readCurrent(out) {
   try {
-    return JSON.parse(fs.readFileSync(out, 'utf8').replace(/^﻿/, ''))
+    return JSON.parse(fs.readFileSync(out, 'utf8').replace(/^\uFEFF/, ''))
   } catch {
     return null
   }
@@ -79,7 +79,10 @@ if (has('show')) {
 const apk = arg('apk')
 const url = arg('url')
 if (!apk || !url) die('need --apk <path> and --url <https://...> (or --show)')
-if (!/^https:\/\//.test(url)) die('the URL must be https')
+// https or http: the digest is the control here, not the transport (see core/offer.Update), and the
+// nodes that serve these packages have no domain and therefore no certificate. Anything else - a file
+// path, an ftp URL - is a mistake worth catching now rather than on a phone.
+if (!/^https?:\/\//.test(url)) die('the URL must be http or https')
 if (!fs.existsSync(apk)) die('no such package: ' + apk)
 
 const bytes = fs.statSync(apk).size

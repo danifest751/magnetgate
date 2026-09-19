@@ -170,7 +170,10 @@ function readUpdate() {
     // exists; a manifest without a sane one is not describing a release.
     if (!Number.isInteger(vc) || vc < 1) return null
     if (typeof doc?.vn !== 'string' || !doc.vn || doc.vn.length > 64) return null
-    if (!/^https:\/\//.test(doc?.url ?? '')) return null
+    // http is allowed as well as https: the digest below is what protects this download, not the
+    // transport, and the nodes that serve these packages have no domain and so no certificate worth
+    // trusting. See core/offer.Update for the whole argument.
+    if (!/^https?:\/\//.test(doc?.url ?? '')) return null
     if (!/^[0-9a-f]{64}$/.test(doc?.sha256 ?? '')) return null
     if (!Number.isInteger(doc?.bytes) || doc.bytes <= 0 || doc.bytes > MAX_UPDATE_BYTES) return null
     return { v, vc, vn: doc.vn, url: doc.url, sha256: doc.sha256, bytes: doc.bytes }

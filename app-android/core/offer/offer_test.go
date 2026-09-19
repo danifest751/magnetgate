@@ -278,6 +278,13 @@ func TestUpdateManifestValidity(t *testing.T) {
 	if !good.Valid() {
 		t.Fatal("a complete manifest must be valid")
 	}
+	// http is accepted deliberately: the digest is what protects this download, not the transport, and
+	// the nodes serving these packages have no domain and therefore no certificate. See Update.
+	overHTTP := good
+	overHTTP.URL = "http://198.51.100.7:45000/x/magnetgate.apk"
+	if !overHTTP.Valid() {
+		t.Fatal("an http source with a pinned digest is valid; refusing it would mean no updates at all")
+	}
 
 	var missing *Update
 	if missing.Valid() {
@@ -287,7 +294,7 @@ func TestUpdateManifestValidity(t *testing.T) {
 	cases := map[string]func(u *Update){
 		"no version code is not a release":       func(u *Update) { u.VersionCode = 0 },
 		"no version name is not a release":       func(u *Update) { u.VersionName = "" },
-		"http is not good enough for a package":  func(u *Update) { u.URL = "http://example.test/a.apk" },
+		"a url that is neither http nor https":   func(u *Update) { u.URL = "ftp://example.test/a.apk" },
 		"a relative url is not a source":         func(u *Update) { u.URL = "/a.apk" },
 		"a short digest is not a digest":         func(u *Update) { u.SHA256 = "abc" },
 		"a digest must be hex":                   func(u *Update) { u.SHA256 = "zz23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },

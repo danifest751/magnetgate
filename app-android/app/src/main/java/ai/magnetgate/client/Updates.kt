@@ -122,8 +122,12 @@ object Updates {
     val target = File(context.filesDir, FILE)
     runCatching { target.delete() }
     val url = runCatching { URL(update.url) }.getOrNull()
-    if (url == null || url.protocol != "https") {
-      onProgress(Progress.Failed("the update source is not an https address"))
+    // http is accepted as well as https. What guards this download is the digest from the sealed
+    // manifest and Android's signature check at install, neither of which TLS adds to; the nodes that
+    // serve these packages have no domain and so no certificate. The request also travels inside this
+    // client's own tunnel, so the only stretch TLS would cover is exit to host.
+    if (url == null || (url.protocol != "https" && url.protocol != "http")) {
+      onProgress(Progress.Failed("the update source is not an http address"))
       return null
     }
     return try {
