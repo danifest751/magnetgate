@@ -84,7 +84,31 @@ object Updates {
 
   /** How much of the package one slice covers, and how many slices travel at once. */
   private const val PIECE = 4L * 1024 * 1024
-  private const val WORKERS = 4
+
+  /**
+   * How much of the tunnel this download is allowed to take, and how many streams it takes it with.
+   *
+   * Four streams and no ceiling is what shipped, and on 20.09 it made the client unusable while it
+   * updated. Measured on the owner's phone, on Wi-Fi: the tunnel itself tops out near 6 Mbit/s
+   * (764 KB/s from the node, 745 KB/s from a public CDN - the ceiling is the tunnel, not the source),
+   * and four slices take all of it. Nothing was starved of bandwidth; everything was starved of *turn*.
+   * A request that took 0.5 s idle took 12 s, the engine reported 15-19 s deadlines on new connections,
+   * the exit check failed three times running - and the phone was 90% idle throughout, so it was never
+   * about the processor either. It was a full queue.
+   *
+   * The cure for a full queue is not to fill it. The download paces itself well under the ceiling and
+   * leaves the rest for the person using the phone, which is the whole point of the client; 88 MB at
+   * this rate is minutes, and minutes in the background are free. It also stops the loop that made it
+   * worse: slices that time out behind their own queue are re-queued, which opens more connections,
+   * which lengthens the queue (the record of what was left grew 15 -> 17 -> 19 while it "downloaded").
+   */
+  private const val WORKERS = 2
+  private const val RATE_START = 192L * 1024
+  private const val RATE_FLOOR = 48L * 1024
+  private const val RATE_CEIL = 448L * 1024
+
+  /** How many times one slice is taken again, on its own, before the whole attempt is called failed. */
+  private const val SLICE_TRIES = 4
 
   /**
    * The update worth offering, or null.
@@ -138,6 +162,54 @@ object Updates {
     context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
   }.getOrDefault("")
 
+  /**
+   * Holds the download to a rate, and lowers it when the tunnel says it is hurting.
+   *
+   * A token bucket, shared by every worker: a slice asks before it keeps what it read, and waits when
+   * the bucket is empty. Waiting is the point - an unpaced bulk transfer fills the queue on the way
+   * out, and everything else on the phone then waits behind it (see the comment on RATE_START).
+   *
+   * The rate is not fixed, because no single number is right on every network. It starts low, climbs
+   * while the exit check keeps coming back quickly, and halves the moment a check fails or crawls.
+   * That check runs on its own timer for its own reasons; here it is used as the one honest answer to
+   * "is this download in someone's way", measured through the same tunnel by code that knows nothing
+   * about updates.
+   */
+  private class Pacer(@Volatile var rate: Long) {
+    private val lock = Object()
+    private var allowance = 0.0
+    private var last = System.nanoTime()
+
+    fun take(bytes: Int) {
+      while (true) {
+        val sleepMs: Long
+        synchronized(lock) {
+          val now = System.nanoTime()
+          allowance = minOf(allowance + (now - last) / 1e9 * rate, rate.toDouble())
+          last = now
+          if (allowance >= bytes) {
+            allowance -= bytes
+            return
+          }
+          sleepMs = (((bytes - allowance) / rate) * 1000).toLong().coerceIn(1, 250)
+        }
+        Thread.sleep(sleepMs)
+      }
+    }
+
+    /** Called with each fresh measurement of the tunnel; null means nothing has been measured yet. */
+    fun steer(check: Health.Check?) {
+      val was = rate
+      rate = when {
+        check == null -> return
+        !check.ok || check.tookMs > Health.SLOW_MS -> maxOf(RATE_FLOOR, rate / 2)
+        check.tookMs < Health.SLOW_MS / 4 -> minOf(RATE_CEIL, rate + rate / 4)
+        else -> rate
+      }
+      if (rate != was) Log.i(TAG, "update rate ${was / 1024} -> ${rate / 1024} KB/s (check ${if (check?.ok == true) "ok" else "failed"} ${check?.tookMs}ms)")
+    }
+  }
+
   /** What a download is doing, for the screen. */
   sealed interface Progress {
     data class Downloading(val bytes: Long, val total: Long) : Progress
@@ -156,7 +228,13 @@ object Updates {
    * Returns the verified file, or null; every failure leaves nothing behind and is reported rather
    * than thrown.
    */
-  fun download(context: Context, update: UpdateRow, socksPort: Int, onProgress: (Progress) -> Unit): File? {
+  fun download(
+    context: Context,
+    update: UpdateRow,
+    socksPort: Int,
+    planePorts: List<Int> = emptyList(),
+    onProgress: (Progress) -> Unit,
+  ): File? {
     val target = File(context.filesDir, FILE)
     // A part-file from an earlier attempt is an asset, not rubbish: the first live download of this
     // took half an hour and then died at 47 of 88 MB, and starting from zero is how a phone on a
@@ -180,7 +258,7 @@ object Updates {
     while (true) {
       attempt++
       try {
-        fetch(update, socksPort, target, onProgress)
+        fetch(update, socksPort, planePorts, target, onProgress)
         Log.i(TAG, "update ${update.versionCode} downloaded and verified")
         rememberStaged(context, update.versionCode)
         onProgress(Progress.Verified)
@@ -225,7 +303,16 @@ object Updates {
    * stall costs at most four megabytes rather than the whole package, and the record of what is done
    * outlives the process - which, on a phone that is updating its own VPN, may well die mid-way.
    */
-  private fun fetch(update: UpdateRow, socksPort: Int, target: File, onProgress: (Progress) -> Unit) {
+  private fun fetch(
+    update: UpdateRow,
+    socksPort: Int,
+    planePorts: List<Int>,
+    target: File,
+    onProgress: (Progress) -> Unit,
+  ) {
+    // The roads this package may take, fastest first, and the core's own listener if there are none.
+    // A slice that fails moves to the next one rather than trying the same road harder.
+    val roads = planePorts.ifEmpty { listOf(socksPort) }
     val total = update.bytes
     val pieces = ((total + PIECE - 1) / PIECE).toInt()
     // the file is laid out in full once, so that any slice may be written at its own offset
@@ -235,6 +322,25 @@ object Updates {
     val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
     val fetched = java.util.concurrent.atomic.AtomicLong(done.size.toLong() * PIECE)
 
+    val pacer = Pacer(RATE_START)
+    // The tunnel's own opinion, read as it arrives. The check runs on the service's timer and knows
+    // nothing about updates, which is exactly what makes it worth listening to here.
+    val steering = Thread {
+      var seen: Health.Check? = null
+      while (true) {
+        val check = Health.lastCheck
+        if (check !== seen) {
+          seen = check
+          pacer.steer(check)
+        }
+        try {
+          Thread.sleep(2_000)
+        } catch (_: InterruptedException) {
+          return@Thread
+        }
+      }
+    }.apply { isDaemon = true; start() }
+
     val workers = (1..minOf(WORKERS, maxOf(1, pieces - done.size))).map {
       Thread {
         while (failure.get() == null) {
@@ -243,20 +349,44 @@ object Updates {
           if (!done.add(piece)) continue // already on disk from an earlier attempt
           val from = piece.toLong() * PIECE
           val to = minOf(from + PIECE, total) - 1
-          try {
-            slice(update, socksPort, target, from, to)
-            noteDone(target, piece)
-            val got = fetched.addAndGet(to - from + 1)
-            onProgress(Progress.Downloading(minOf(got, total), total))
-          } catch (error: Throwable) {
+          var taken = false
+          var last: Throwable? = null
+          // One slice failing used to fail the whole round: every other worker stopped, and the next
+          // attempt opened all its connections again from the top. On a tunnel that was slow *because
+          // of this download*, that is a storm and not a retry. A slice that timed out is a slice that
+          // was slow - the same distinction the layer policy had to learn on 19.09 - so it is taken
+          // again on its own, more gently each time, and only a slice that cannot be had at all fails
+          // the attempt.
+          for (attempt in 1..SLICE_TRIES) {
+            if (failure.get() != null) break
+            try {
+              slice(roads[(piece + attempt - 1) % roads.size], target, from, to, pacer, update.url)
+              taken = true
+              break
+            } catch (error: Throwable) {
+              last = error
+              Log.w(TAG, "update slice $piece, try $attempt of $SLICE_TRIES: ${error.message}")
+              pacer.rate = maxOf(RATE_FLOOR, pacer.rate / 2)
+              try {
+                Thread.sleep(1_000L * attempt)
+              } catch (_: InterruptedException) {
+                return@Thread
+              }
+            }
+          }
+          if (!taken) {
             done.remove(piece) // it is not done, and the next attempt has to take it again
-            failure.compareAndSet(null, error)
+            failure.compareAndSet(null, last ?: IllegalStateException("slice $piece did not arrive"))
             return@Thread
           }
+          noteDone(target, piece)
+          val got = fetched.addAndGet(to - from + 1)
+          onProgress(Progress.Downloading(minOf(got, total), total))
         }
       }.apply { isDaemon = true; start() }
     }
     workers.forEach { it.join() }
+    steering.interrupt()
     failure.get()?.let { throw it }
 
     // Hashed from the finished file rather than in flight: the bytes arrived over several connections
@@ -277,9 +407,9 @@ object Updates {
     runCatching { partsFile(target).delete() }
   }
 
-  /** One slice, over its own connection through the tunnel. */
-  private fun slice(update: UpdateRow, socksPort: Int, target: File, from: Long, to: Long) {
-    var url = URL(update.url)
+  /** One slice, over its own connection through the tunnel, at no more than the pacer allows. */
+  private fun slice(port: Int, target: File, from: Long, to: Long, pacer: Pacer, from_url: String) {
+    var url = URL(from_url)
     var redirects = 0
     while (true) {
       if (url.protocol != "http" && url.protocol != "https") {
@@ -288,7 +418,7 @@ object Updates {
       val host = url.host
       val port = if (url.port != -1) url.port else if (url.protocol == "https") 443 else 80
       val path = (url.path.ifEmpty { "/" }) + (url.query?.let { "?$it" } ?: "")
-      val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
+      val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", port)))
       socket.soTimeout = 60_000
       socket.connect(InetSocketAddress.createUnresolved(host, port), 30_000)
       var redirect: String? = null
@@ -330,6 +460,9 @@ object Updates {
                 if (read <= 0) break
                 file.write(buffer, 0, read)
                 written += read
+                // Asked for after the bytes are safely on disk, so a wait never holds a half-written
+                // buffer; the socket's own window does the rest of the work upstream.
+                pacer.take(read)
               }
             }
             if (written != want) throw IllegalStateException("slice $from-$to: got $written of $want B")

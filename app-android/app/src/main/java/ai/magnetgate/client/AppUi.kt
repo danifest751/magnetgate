@@ -209,7 +209,7 @@ fun AppRoot(
     busy = true
     scope.launch {
       val apk = withContext(Dispatchers.IO) {
-        Updates.download(context, offered, port) { progress ->
+        Updates.download(context, offered, port, MgVpnService.planePorts()) { progress ->
           updateState = when (progress) {
             is Updates.Progress.Downloading ->
               ui.text(R.string.update_downloading, (progress.bytes * 100 / progress.total.coerceAtLeast(1)).toInt())

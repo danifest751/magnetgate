@@ -66,6 +66,22 @@ class MgVpnService : VpnService() {
     fun appliedSettingsRevision(): Long = current?.appliedRevision ?: -1L
     fun appliedRouting(): RoutingDraft? = current?.activeRouting
 
+    /**
+     * The engine's own listeners, one per node and layer, fastest kind first.
+     *
+     * For a bulk transfer of ours - the update package - and nothing else. Measured on the owner's
+     * phone on 20.09, same phone, same Wi-Fi, same 8 MB from the same CDN: through the core's SOCKS
+     * 490-658 KB/s, through the engine's reality listeners 1.25-1.82 MB/s, through its hy2 listeners
+     * 3.27-3.97 MB/s. The core's own framing costs six to eight times the throughput, and the update
+     * was taking the slowest road on the phone while filling it.
+     *
+     * Ordinary traffic keeps going through the core, which is what chooses a node and judges a layer.
+     * A package is different: it is verified by a digest from a sealed offer, so which road it came by
+     * changes nothing about whether it may be installed.
+     */
+    fun planePorts(): List<Int> =
+      current?.enginePlanes.orEmpty().sortedBy { if (it.plane == "hy2") 0 else 1 }.map { it.port }
+
     /** Проверка выполняется тем же наблюдателем и через тот же DNS-путь, что и фоновая. */
     fun requestCheck(): Boolean {
       val service = current?.takeIf { it.running } ?: return false
@@ -89,6 +105,7 @@ class MgVpnService : VpnService() {
   @Volatile private var appliedRevision = -1L
   @Volatile private var activeRouting: RoutingDraft? = null
   @Volatile private var checkRequested = false
+  @Volatile private var enginePlanes: List<EnginePlane> = emptyList()
   private var watching = false
 
   /** The manifest already acted on to a settled end, so it is not worked through again every tick. */
@@ -343,6 +360,7 @@ class MgVpnService : VpnService() {
 
         Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
         Mgbox.startEngine(built.json, MgTunPlatform(this))
+        enginePlanes = built.planes
         for (plane in built.planes) {
           Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
         }
@@ -410,6 +428,7 @@ class MgVpnService : VpnService() {
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.reloadEngine(built.json)
       checkPort = built.checkPort
+      enginePlanes = built.planes
       for (plane in built.planes) {
         Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
       }
@@ -488,6 +507,7 @@ class MgVpnService : VpnService() {
         Mgbox.forgetPlaneSocksPorts()
         Mgbox.reloadEngine(built.json)
         checkPort = built.checkPort
+        enginePlanes = built.planes
         for (plane in built.planes) {
           Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
         }
