@@ -12,9 +12,14 @@ import crypto from 'node:crypto'
 import { schnorr } from '@noble/curves/secp256k1.js'
 import { unseal } from './common.mjs'
 
+// Measured on 2026-09-19 with core/cmd/nostr-probe, four subscriptions each, our own sealed offers
+// rather than a ping: nos.lol and nostr.mom served ten, relay.primal.net and relay.snort.social nine,
+// relay.damus.io seven with one handshake refused by its edge (503) - so it goes last. Candidates left
+// out for the failure this project keeps meeting: offchain.pub connected four times of four and served
+// nothing at all, nostr.wine refused. Five, because relay health varies by day and by network.
 export const NOSTR_RELAYS = (
   process.env.MAGNETGATE_NOSTR_RELAYS ??
-  'wss://relay.damus.io,wss://nos.lol,wss://relay.primal.net,wss://relay.snort.social,wss://nostr.mom'
+  'wss://nos.lol,wss://nostr.mom,wss://relay.primal.net,wss://relay.snort.social,wss://relay.damus.io'
 )
   .split(',')
   .map((s) => s.trim())

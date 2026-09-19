@@ -112,6 +112,8 @@ type Pool struct {
 	// tunnel came up; see Traffic.
 	sent     int64
 	received int64
+	// live is what the client is carrying, for the diagnostics screen; see live.go
+	live liveRing
 	// when each (node, plane) was last reported as not yet wired to the engine; see unwired
 	saidUnwired map[string]time.Time
 }
@@ -304,6 +306,14 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 					// worth more, so the verdict is revisited when the first byte comes back - or fails
 					// to (see watchFirstByte).
 					id, slot := idOf(node.Slot), node.Slot
+					entry := &liveEntry{row: Live{
+						Host:     host,
+						Port:     port,
+						Plane:    plane,
+						Slot:     slot,
+						OpenedAt: p.now().UnixMilli(),
+					}}
+					p.live.add(entry)
 					return watchFirstByte(conn, p.cfg.FirstByteDeadline, func(verdict health.Verdict, after time.Duration) {
 						switch verdict {
 						case health.VerdictOk:
@@ -319,7 +329,10 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 								plane, slot, after.Round(time.Millisecond),
 								time.Duration(record.BackoffMs)*time.Millisecond)
 						}
-					}, p.countBytes), nil
+					}, func(sent, received int64) {
+						entry.count(sent, received)
+						p.countBytes(sent, received)
+					}, func() { entry.close(p.now().UnixMilli()) }), nil
 				}
 				lastErr = err
 				// A plane the engine has not been told about yet is this client reconfiguring itself, not

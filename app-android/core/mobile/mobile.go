@@ -64,11 +64,14 @@ type State struct {
 	Country   string           `json:"country,omitempty"`
 	// Sent and Received are every byte carried through a plane since the core started, for the counters
 	// on the screen. They are totals rather than a sample: everything the tunnel carries passes here.
-	Sent     int64    `json:"sent"`
-	Received int64    `json:"received"`
-	Logs     []string `json:"logs"`
-	Error    string   `json:"error,omitempty"`
-	Version  string   `json:"version"`
+	Sent     int64 `json:"sent"`
+	Received int64 `json:"received"`
+	// Live is what the client is carrying, newest first and bounded: the diagnostics view of "what is
+	// this phone talking to". It names hosts, so it belongs on a screen the owner opened, nowhere else.
+	Live    []pool.Live `json:"live,omitempty"`
+	Logs    []string    `json:"logs"`
+	Error   string      `json:"error,omitempty"`
+	Version string      `json:"version"`
 }
 
 // running is the process-wide core: gomobile bindings are plain functions, so the app talks to one core
@@ -357,6 +360,7 @@ func (inst *instance) status() State {
 		out.Countries = inst.planes.SeenCountries()
 		out.Country = inst.planes.Country()
 		out.Sent, out.Received = inst.planes.Traffic()
+		out.Live = inst.planes.Live()
 	}
 	if inst.rendez != nil {
 		out.Slots = inst.rendez.Slots()

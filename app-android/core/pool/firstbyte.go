@@ -27,11 +27,13 @@ func watchFirstByte(
 	// stream the client carries already passes through it: a second one would be a second cost for the
 	// same numbers.
 	count func(sent, received int64),
+	// done is called once, when the stream is over, so the diagnostics row stops being a live one.
+	done func(),
 ) Conn {
 	if deadline <= 0 {
 		deadline = time.Duration(health.FirstByteDeadlineMs) * time.Millisecond
 	}
-	watched := &firstByteConn{Conn: stream, started: time.Now(), deadline: deadline, report: report, count: count}
+	watched := &firstByteConn{Conn: stream, started: time.Now(), deadline: deadline, report: report, count: count, done: done}
 	// Silence is evidence too, and nobody will come back to look: a connection that produces nothing is
 	// precisely the one whose Read never returns. So the deadline is a timer rather than a check on the
 	// next read.
@@ -45,10 +47,12 @@ type firstByteConn struct {
 	deadline time.Duration
 	report   func(health.Verdict, time.Duration)
 	count    func(sent, received int64)
+	done     func()
 
 	mu     sync.Mutex
 	timer  *time.Timer
 	judged bool
+	closed bool
 }
 
 // judge reports at most once. Whichever comes first - a byte, the deadline, or a death - is the verdict
@@ -105,6 +109,11 @@ func (c *firstByteConn) Close() error {
 	if !c.judged && c.timer != nil {
 		c.timer.Stop()
 	}
+	finished := c.closed
+	c.closed = true
 	c.mu.Unlock()
+	if !finished && c.done != nil {
+		c.done()
+	}
 	return c.Conn.Close()
 }

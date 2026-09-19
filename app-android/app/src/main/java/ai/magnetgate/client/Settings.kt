@@ -102,7 +102,27 @@ object Settings {
   fun bootstrap(context: Context): String = get(context, KEY_BOOTSTRAP)
   fun setBootstrap(context: Context, value: String) = put(context, KEY_BOOTSTRAP, value.trim())
 
-  fun relays(context: Context): String = get(context, KEY_RELAYS)
+  /**
+   * The relays a phone falls back on when nothing has been typed in.
+   *
+   * There was no default at all: a device provisioned without relays had no Nostr channel, which means
+   * no hy2 and no rule-set manifest, and nothing said so. The list mirrors src/nostr.mjs, where it lives
+   * first.
+   *
+   * Which relays, measured on 2026-09-19 with `cmd/nostr-probe` (four subscriptions each, our own sealed
+   * offers, not a ping): nos.lol and nostr.mom served ten, relay.primal.net and relay.snort.social nine,
+   * relay.damus.io seven with one handshake refused by its edge (503). Two candidates were dropped for
+   * the reason this project keeps meeting: offchain.pub connected four times out of four and served
+   * **nothing**, and nostr.wine refused. A relay that connects and stays mute is the failure mode the
+   * channel was rewritten to notice, so it must not be in the default list.
+   *
+   * Five and not one: relay health varies by day and by network - on 18.09 nos.lol answered 502 from
+   * this same phone while primal carried everything.
+   */
+  const val DEFAULT_RELAYS =
+    "wss://nos.lol,wss://nostr.mom,wss://relay.primal.net,wss://relay.snort.social,wss://relay.damus.io"
+
+  fun relays(context: Context): String = get(context, KEY_RELAYS).ifBlank { DEFAULT_RELAYS }
   fun setRelays(context: Context, value: String) = put(context, KEY_RELAYS, value.trim())
 
   /**

@@ -1041,6 +1041,30 @@ private fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.
     }
     if (status.error.isNotEmpty()) Complaint("Core: " + status.error, Grade.BAD)
 
+    // What the phone is actually talking to. It comes from the core rather than from the engine's own
+    // connection table: everything the tunnel carries is routed to the core, so this is the same list
+    // without a command server inside the engine and a streaming client in the app. The engine's own
+    // DNS is the one thing missing - those queries are hijacked and answered there.
+    if (status.live.isNotEmpty()) {
+      val open = status.live.count { it.open }
+      SectionLabel("Carrying  ($open open of ${status.live.size} recent)")
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        for (row in status.live.take(20)) {
+          ValueRow(
+            if (row.open) row.where else "· " + row.where,
+            "${row.plane} ${row.slot}   ${bytes(row.sent)}↑ ${bytes(row.received)}↓",
+          )
+        }
+      }
+      if (status.live.size > 20) {
+        Text(
+          "Showing the twenty newest.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+
     SectionLabel("Exits")
     if (status.nodes.isEmpty()) {
       Text("none", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

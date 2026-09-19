@@ -773,3 +773,54 @@ func TestTrafficCountsEveryByteTheTunnelCarries(t *testing.T) {
 		t.Fatalf("expected 5 bytes out and 1 back, got %d and %d", sent, received)
 	}
 }
+
+func TestTheLiveListShowsWhatIsBeingCarried(t *testing.T) {
+	answering := &scriptedConn{after: time.Millisecond}
+	p := New(Config{
+		Preference:        []string{"reality"},
+		Connectors:        map[string]Connector{"reality": scripted("reality", answering)},
+		FirstByteDeadline: time.Hour,
+	})
+	p.Update(node(t, 0, "reality"))
+	stream, err := p.Dial(context.Background(), "example.test", 443)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	live := p.Live()
+	if len(live) != 1 || live[0].Host != "example.test" || live[0].Port != 443 || live[0].Plane != "reality" {
+		t.Fatalf("a stream must appear as it is opened: %+v", live)
+	}
+	if live[0].ClosedAt != 0 {
+		t.Fatalf("a stream still open must not be listed as finished: %+v", live[0])
+	}
+	if _, err := stream.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	live = p.Live()
+	if live[0].Sent != 5 {
+		t.Fatalf("a row must count its own bytes: %+v", live[0])
+	}
+	if live[0].ClosedAt == 0 {
+		t.Fatalf("a finished stream must say when it finished, or the list reads as all-live: %+v", live[0])
+	}
+}
+
+func TestTheLiveListIsBounded(t *testing.T) {
+	p := New(Config{
+		Preference:        []string{"reality"},
+		Connectors:        map[string]Connector{"reality": &fakePlane{plane: "reality"}},
+		FirstByteDeadline: time.Hour,
+	})
+	p.Update(node(t, 0, "reality"))
+	for i := 0; i < LiveMax+40; i++ {
+		if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+	}
+	if got := len(p.Live()); got != LiveMax {
+		t.Fatalf("a busy minute must not grow diagnostics without bound: %d rows", got)
+	}
+}

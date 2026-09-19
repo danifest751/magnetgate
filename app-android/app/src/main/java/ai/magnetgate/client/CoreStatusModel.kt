@@ -56,6 +56,26 @@ data class NodeRow(
  * The document (see `core/mobile`) is the core's whole outward state: whether it runs, where its SOCKS
  * listener is, which nodes it found, and the tail of its log.
  */
+/**
+ * One connection the client is carrying, or has just finished carrying.
+ *
+ * It names a host, which is why it appears only on the diagnostics screen someone opened deliberately,
+ * and never in a notification or a log the app writes by itself.
+ */
+data class LiveRow(
+  val host: String,
+  val port: Int,
+  val plane: String,
+  val slot: Int,
+  val openedAt: Long,
+  val sent: Long,
+  val received: Long,
+  val closedAt: Long,
+) {
+  val open: Boolean get() = closedAt == 0L
+  val where: String get() = if (port == 0) host else "$host:$port"
+}
+
 /** One country the client can send traffic through, with how many nodes stand behind it. */
 data class CountryRow(val code: String, val nodes: Int) {
   val flag: String get() = flagOf(code)
@@ -76,6 +96,8 @@ data class CoreStatus(
   /** Every byte carried through a plane since the core started. */
   val sent: Long = 0,
   val received: Long = 0,
+  /** What the client is carrying, newest first; bounded by the core. */
+  val live: List<LiveRow> = emptyList(),
 ) {
   /** Relays configured but none of them serving us: the push channel is configured and useless. */
   val relaysConfiguredButSilent: Boolean get() = relays.isNotEmpty() && relays.none { it.answering }
@@ -153,6 +175,21 @@ data class CoreStatus(
         val entry = countryArray.optJSONObject(index) ?: continue
         countries += CountryRow(entry.optString("cc"), entry.optInt("nodes"))
       }
+      val live = mutableListOf<LiveRow>()
+      val liveArray = root.optJSONArray("live") ?: JSONArray()
+      for (index in 0 until liveArray.length()) {
+        val entry = liveArray.optJSONObject(index) ?: continue
+        live += LiveRow(
+          host = entry.optString("host"),
+          port = entry.optInt("port"),
+          plane = entry.optString("t"),
+          slot = entry.optInt("slot"),
+          openedAt = entry.optLong("at"),
+          sent = entry.optLong("sent"),
+          received = entry.optLong("received"),
+          closedAt = entry.optLong("closed"),
+        )
+      }
       return CoreStatus(
         running = root.optBoolean("running"),
         socksPort = root.optInt("socksPort"),
@@ -166,6 +203,7 @@ data class CoreStatus(
         country = root.optString("country"),
         sent = root.optLong("sent"),
         received = root.optLong("received"),
+        live = live,
       )
     }
 
