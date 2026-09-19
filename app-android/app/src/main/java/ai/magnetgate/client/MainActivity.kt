@@ -64,7 +64,23 @@ class MainActivity : ComponentActivity() {
         ?.let { Settings.setSlots(this, Settings.parseSlots(it)) }
       extras.getStringExtra("mode")?.takeIf { it.isNotBlank() }
         ?.let { Settings.setMode(this, Settings.Mode.of(it)) }
-      Log.i(TAG, "settings saved from extras: bootstrap/relays/slots/mode")
+      // `any` rather than an empty string, because an empty extra is indistinguishable from an absent
+      // one and "no preference" has to be sayable from a command line.
+      extras.getStringExtra("country")?.takeIf { it.isNotBlank() }
+        ?.let { Settings.setCountry(this, if (it.equals("any", ignoreCase = true)) "" else it) }
+      extras.getStringExtra("apps")?.takeIf { it.isNotBlank() }
+        ?.let { Settings.setApps(this, Settings.Apps.of(it)) }
+      // `none` clears the list, for the same reason `any` clears the country: an empty extra cannot be
+      // told apart from an absent one, and a run has to be able to put the phone back as it found it.
+      extras.getStringExtra("packages")?.takeIf { it.isNotBlank() }?.let { value ->
+        val packages = if (value.equals("none", ignoreCase = true)) {
+          emptyList()
+        } else {
+          value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        }
+        Settings.setExcluded(this, packages)
+      }
+      Log.i(TAG, "settings saved from extras: bootstrap/relays/slots/mode/country/apps")
     }
     setContent {
       MagnetGateTheme {

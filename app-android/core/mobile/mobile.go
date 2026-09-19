@@ -57,10 +57,18 @@ type State struct {
 	// Relays is what the Nostr channel is actually getting from each relay. It is here because a relay
 	// that connects and then answers nothing looks exactly like one with nothing to serve, and that
 	// difference decides whether hy2 and the rule-set manifest can arrive at all.
-	Relays  []nostr.RelayState `json:"relays,omitempty"`
-	Logs    []string           `json:"logs"`
-	Error   string             `json:"error,omitempty"`
-	Version string             `json:"version"`
+	Relays []nostr.RelayState `json:"relays,omitempty"`
+	// Countries is what the screen may offer to choose from - the codes actually discovered, with how
+	// many nodes stand behind each - and Country is the preference in force. Addresses never appear here.
+	Countries []pool.Countries `json:"countries,omitempty"`
+	Country   string           `json:"country,omitempty"`
+	// Sent and Received are every byte carried through a plane since the core started, for the counters
+	// on the screen. They are totals rather than a sample: everything the tunnel carries passes here.
+	Sent     int64    `json:"sent"`
+	Received int64    `json:"received"`
+	Logs     []string `json:"logs"`
+	Error    string   `json:"error,omitempty"`
+	Version  string   `json:"version"`
 }
 
 // running is the process-wide core: gomobile bindings are plain functions, so the app talks to one core
@@ -288,6 +296,30 @@ func ForgetPlaneSocksPorts() {
 	}
 }
 
+// SetCountry records which country the user wants their traffic to leave through; empty means any.
+//
+// It does not rebuild anything. The nodes are already discovered and their planes already wired, so all
+// this changes is which of them the next stream prefers - which is why the screen can offer it as a
+// control rather than as a reason to reconnect.
+//
+// The choice is a preference, exactly as on the desktop (app/countries.cjs): when the chosen country has
+// nothing live, traffic goes through whatever is there and the log says so. Refusing to carry it would
+// be the worse answer.
+func SetCountry(country string) {
+	mu.Lock()
+	inst := current
+	mu.Unlock()
+	if inst == nil || inst.planes == nil {
+		return
+	}
+	inst.planes.SetCountry(country)
+	if code := pool.CountryOf(country); code != "" {
+		inst.logs.addf("traffic will leave through %s when a node there is available", code)
+	} else {
+		inst.logs.add("traffic will leave through any country")
+	}
+}
+
 // Stop tears the core down: listeners, sessions and channels.
 func Stop() {
 	mu.Lock()
@@ -322,6 +354,9 @@ func (inst *instance) status() State {
 	}
 	if inst.planes != nil {
 		out.Snapshot = inst.planes.Snapshot()
+		out.Countries = inst.planes.SeenCountries()
+		out.Country = inst.planes.Country()
+		out.Sent, out.Received = inst.planes.Traffic()
 	}
 	if inst.rendez != nil {
 		out.Slots = inst.rendez.Slots()

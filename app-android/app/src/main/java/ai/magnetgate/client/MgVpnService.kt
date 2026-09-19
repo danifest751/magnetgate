@@ -87,8 +87,9 @@ class MgVpnService : VpnService() {
    */
   private var checkPort = 0
 
-  /** The packages the tunnel must leave alone, read from settings when the tunnel comes up. */
+  /** The packages the tunnel must leave alone - or carry, and only them - read when it comes up. */
   private var excludedPackages: List<String> = emptyList()
+  private var appsMode: Settings.Apps = Settings.Apps.EXCEPT
 
   /**
    * Watches the network under the tunnel and tells the engine when it changes.
@@ -309,6 +310,7 @@ class MgVpnService : VpnService() {
         val port = if (coreless) 0 else startCoreAndWaitForNode(bootstrap, relays)
         val nodes = if (coreless) emptyList() else discoveredNodes()
         excludedPackages = Settings.excluded(this)
+        appsMode = Settings.apps(this)
         policy = Policy(
           // an acceptance run may name the mode; otherwise the stored setting decides
           mode = if (modeExtra.isBlank()) Settings.mode(this) else Settings.Mode.of(modeExtra),
@@ -320,7 +322,7 @@ class MgVpnService : VpnService() {
         val built = SingBoxConfig.build(
           port, coreless, nodes, excludedPackages,
           policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
-          brokenSlot,
+          brokenSlot, appsMode,
         )
 
         Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
@@ -328,6 +330,10 @@ class MgVpnService : VpnService() {
         for (plane in built.planes) {
           Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
         }
+        // The country the user prefers is told to the core once it is up: it changes which node the next
+        // stream prefers, not how anything is built, so it never needs a reconnect.
+        runCatching { Mgbox.setCountry(Settings.country(this)) }
+          .onFailure { Log.w(TAG, "the country preference did not reach the core: ${it.message}") }
         running = true
         corePort = port
         watchNetwork()
@@ -381,7 +387,7 @@ class MgVpnService : VpnService() {
       val built = SingBoxConfig.build(
         corePort, false, discoveredNodes(), excludedPackages,
         policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
-        brokenSlot,
+        brokenSlot, appsMode,
       )
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.reloadEngine(built.json)
@@ -554,11 +560,27 @@ class MgVpnService : VpnService() {
     }
     Log.i(TAG, "tun request: $request")
     forEachString(request.optJSONArray("DNSServerAddress")) { builder.addDnsServer(it) }
-    forEachString(request.optJSONArray("ExcludePackage")) { builder.addDisallowedApplication(it) }
 
-    // The core's own sockets must not enter this tunnel, and it runs in this app's process, so the app
-    // excludes itself. The engine's sockets are protected one by one instead.
-    builder.addDisallowedApplication(packageName)
+    // Android refuses to mix the two lists, so this is one choice and not two. A named package that is
+    // no longer installed throws, and an app the user removed must not be the reason a tunnel fails to
+    // come up: each name is applied on its own and a missing one is logged and skipped.
+    val include = request.optJSONArray("IncludePackage")
+    if (include != null && include.length() > 0) {
+      // "Only these apps": everything else, this app included, stays on the ordinary network - which is
+      // why nothing is excluded here. Our own sockets are out of the tunnel by construction.
+      forEachString(include) {
+        runCatching { builder.addAllowedApplication(it) }
+          .onFailure { error -> Log.w(TAG, "not tunnelling $it: ${error.message}") }
+      }
+    } else {
+      forEachString(request.optJSONArray("ExcludePackage")) {
+        runCatching { builder.addDisallowedApplication(it) }
+          .onFailure { error -> Log.w(TAG, "not excluding $it: ${error.message}") }
+      }
+      // The core's own sockets must not enter this tunnel, and it runs in this app's process, so the app
+      // excludes itself. The engine's sockets are protected one by one instead.
+      builder.addDisallowedApplication(packageName)
+    }
 
     val descriptor = builder.establish() ?: throw IllegalStateException("VpnService.establish returned nothing")
     // the engine duplicates this fd, so replacing a tunnel means dropping ours - the old interface would

@@ -32,6 +32,8 @@ object Settings {
   private const val KEY_MODE = "mode"
   private const val KEY_DIRECT_DOMAINS = "directDomains"
   private const val KEY_TUNNEL_DOMAINS = "tunnelDomains"
+  private const val KEY_COUNTRY = "country"
+  private const val KEY_APPS = "apps"
 
   @Volatile
   private var cached: SharedPreferences? = null
@@ -125,6 +127,39 @@ object Settings {
   fun setSlots(context: Context, slots: List<Int>) = put(context, KEY_SLOTS, slots.joinToString(","))
 
   /** Packages the tunnel must leave alone, as stored. */
+  /**
+   * Which country the user wants their traffic to leave through, or empty for any.
+   *
+   * A preference and not a restriction, exactly as on the desktop: when the chosen country has no live
+   * node, the client uses whatever is there rather than refusing to carry traffic (pool.SelectCountry).
+   */
+  fun country(context: Context): String = get(context, KEY_COUNTRY).uppercase()
+
+  fun setCountry(context: Context, value: String) =
+    put(context, KEY_COUNTRY, value.trim().uppercase().take(2))
+
+  /**
+   * What the chosen list of applications means.
+   *
+   * The same list reads two ways, and the difference is the whole feature: [Apps.EXCEPT] is "everything
+   * goes through the tunnel but these", which is what this client has always done, and [Apps.ONLY] is
+   * "nothing goes through it except these" - a phone that tunnels one messenger and leaves banking and
+   * local services alone.
+   */
+  enum class Apps(val stored: String) {
+    EXCEPT("except"),
+    ONLY("only"),
+    ;
+
+    companion object {
+      fun of(value: String): Apps = entries.firstOrNull { it.stored == value } ?: EXCEPT
+    }
+  }
+
+  fun apps(context: Context): Apps = Apps.of(get(context, KEY_APPS, Apps.EXCEPT.stored))
+
+  fun setApps(context: Context, value: Apps) = put(context, KEY_APPS, value.stored)
+
   fun excluded(context: Context): List<String> =
     open(context)?.getStringSet(KEY_EXCLUDED, emptySet())?.sorted().orEmpty()
 

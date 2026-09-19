@@ -56,6 +56,11 @@ data class NodeRow(
  * The document (see `core/mobile`) is the core's whole outward state: whether it runs, where its SOCKS
  * listener is, which nodes it found, and the tail of its log.
  */
+/** One country the client can send traffic through, with how many nodes stand behind it. */
+data class CountryRow(val code: String, val nodes: Int) {
+  val flag: String get() = flagOf(code)
+}
+
 data class CoreStatus(
   val running: Boolean = false,
   val socksPort: Int = 0,
@@ -65,6 +70,12 @@ data class CoreStatus(
   val nodes: List<NodeRow> = emptyList(),
   val relays: List<RelayRow> = emptyList(),
   val logs: List<String> = emptyList(),
+  /** The countries actually discovered, and the one the user asked for (empty means any). */
+  val countries: List<CountryRow> = emptyList(),
+  val country: String = "",
+  /** Every byte carried through a plane since the core started. */
+  val sent: Long = 0,
+  val received: Long = 0,
 ) {
   /** Relays configured but none of them serving us: the push channel is configured and useless. */
   val relaysConfiguredButSilent: Boolean get() = relays.isNotEmpty() && relays.none { it.answering }
@@ -136,6 +147,12 @@ data class CoreStatus(
       val logs = mutableListOf<String>()
       val log = root.optJSONArray("logs") ?: JSONArray()
       for (index in 0 until log.length()) logs += log.optString(index)
+      val countries = mutableListOf<CountryRow>()
+      val countryArray = root.optJSONArray("countries") ?: JSONArray()
+      for (index in 0 until countryArray.length()) {
+        val entry = countryArray.optJSONObject(index) ?: continue
+        countries += CountryRow(entry.optString("cc"), entry.optInt("nodes"))
+      }
       return CoreStatus(
         running = root.optBoolean("running"),
         socksPort = root.optInt("socksPort"),
@@ -145,6 +162,10 @@ data class CoreStatus(
         nodes = nodes,
         relays = relays,
         logs = logs,
+        countries = countries,
+        country = root.optString("country"),
+        sent = root.optLong("sent"),
+        received = root.optLong("received"),
       )
     }
 

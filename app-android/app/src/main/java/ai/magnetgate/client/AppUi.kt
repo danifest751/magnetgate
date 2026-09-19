@@ -145,6 +145,8 @@ fun AppRoot(
   var slots by remember { mutableStateOf(Settings.slots(context).joinToString(",")) }
   var excluded by remember { mutableStateOf(Settings.excluded(context).toSet()) }
   var mode by remember { mutableStateOf(Settings.mode(context)) }
+  var country by remember { mutableStateOf(Settings.country(context)) }
+  var apps by remember { mutableStateOf(Settings.apps(context)) }
   var directDomains by remember { mutableStateOf(Settings.directDomains(context).joinToString("\n")) }
   var tunnelDomains by remember { mutableStateOf(Settings.tunnelDomains(context).joinToString("\n")) }
 
@@ -329,6 +331,15 @@ fun AppRoot(
         check = check,
         engineError = engineError,
         notice = notice,
+        country = country,
+        onCountry = { code ->
+          country = code
+          Settings.setCountry(context, code)
+          // The core is told at once rather than at the next connect: the nodes are discovered and the
+          // planes are wired, so this changes only which of them the next stream prefers.
+          runCatching { Mgbox.setCountry(code) }
+            .onFailure { Log.w(TAG, "the country preference did not reach the core: ${it.message}") }
+        },
         onConnect = { connect() },
         onDisconnect = { stopVpn(context); notice = "" },
         onTest = { scope.launch { checkEgress(status.socksPort) } },
@@ -341,6 +352,7 @@ fun AppRoot(
         relays = relays,
         slots = slots,
         excluded = excluded,
+        appsMode = apps,
         mode = mode,
         directDomains = directDomains,
         tunnelDomains = tunnelDomains,
@@ -350,6 +362,7 @@ fun AppRoot(
         onRelays = { relays = it },
         onSlots = { slots = it },
         onExcluded = { excluded = it },
+        onAppsMode = { apps = it },
         onMode = { mode = it },
         onDirectDomains = { directDomains = it },
         onTunnelDomains = { tunnelDomains = it },
@@ -359,6 +372,7 @@ fun AppRoot(
           Settings.setRelays(context, relays)
           Settings.setSlots(context, Settings.parseSlots(slots))
           Settings.setExcluded(context, excluded)
+          Settings.setApps(context, apps)
           Settings.setMode(context, mode)
           Settings.setDirectDomains(context, directDomains)
           Settings.setTunnelDomains(context, tunnelDomains)
@@ -407,6 +421,8 @@ private fun ConnectScreen(
   check: Health.Check?,
   engineError: String,
   notice: String,
+  country: String,
+  onCountry: (String) -> Unit,
   onConnect: () -> Unit,
   onDisconnect: () -> Unit,
   onTest: () -> Unit,
@@ -446,6 +462,36 @@ private fun ConnectScreen(
       }
     }
 
+    // The country control lives on the Connect screen rather than in Settings because it is a thing
+    // people change while looking at where their traffic is going, and because it needs no reconnect:
+    // the core applies it to the next stream. It appears only when there is a choice to make.
+    if (status.countries.size > 1) {
+      SectionLabel("Country")
+      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+          selected = country.isEmpty(),
+          onClick = { onCountry("") },
+          label = { Text("Any") },
+        )
+        for (row in status.countries) {
+          FilterChip(
+            selected = country == row.code,
+            onClick = { onCountry(row.code) },
+            label = { Text("${row.flag} ${row.code}" + if (row.nodes > 1) "  ${row.nodes}" else "") },
+          )
+        }
+      }
+      // A preference that cannot be honoured right now is honoured as far as it can be, and said out
+      // loud: refusing to carry traffic because a country is momentarily gone would be the worse answer.
+      if (country.isNotEmpty() && status.nodes.none { it.country.equals(country, ignoreCase = true) }) {
+        Text(
+          "No node in $country right now - traffic leaves through the others until one returns.",
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+    }
+
     if (vpnUp || status.socksPort != 0) {
       SectionLabel("Route")
       Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -456,6 +502,10 @@ private fun ConnectScreen(
         // which leg grew is the only part of it anyone can act on.
         check?.legs?.let { ValueRow("Spent on", it.summary()) }
         ValueRow("Planes", carriedBy(status))
+        // Counters, because "connected" and "carrying something" are different claims and this screen
+        // has been wrong about the difference before. They count every byte the core carried, which is
+        // every byte the tunnel carried: the engine routes all of it through the core.
+        ValueRow("Carried", "${bytes(status.sent)} out · ${bytes(status.received)} in")
         ValueRow("Core", status.version)
       }
       TextButton(
@@ -478,6 +528,24 @@ private fun ConnectScreen(
     }
     Spacer(Modifier.height(24.dp))
   }
+}
+
+/**
+ * A byte count a person can read at a glance.
+ *
+ * Powers of two and one decimal, in Locale.US like every other measurement here, so that a reading can
+ * be compared with a log line rather than being a different number on a different phone.
+ */
+private fun bytes(value: Long): String {
+  if (value < 1024) return "$value B"
+  val units = listOf("KB", "MB", "GB", "TB")
+  var scaled = value.toDouble() / 1024
+  var unit = 0
+  while (scaled >= 1024 && unit < units.lastIndex) {
+    scaled /= 1024
+    unit++
+  }
+  return String.format(java.util.Locale.US, "%.1f %s", scaled, units[unit])
 }
 
 /** The tail of a summary, which is where its measurement sits ("... in 788ms"). */
@@ -789,6 +857,7 @@ private fun SettingsScreen(
   relays: String,
   slots: String,
   excluded: Set<String>,
+  appsMode: Settings.Apps,
   mode: Settings.Mode,
   directDomains: String,
   tunnelDomains: String,
@@ -798,6 +867,7 @@ private fun SettingsScreen(
   onRelays: (String) -> Unit,
   onSlots: (String) -> Unit,
   onExcluded: (Set<String>) -> Unit,
+  onAppsMode: (Settings.Apps) -> Unit,
   onMode: (Settings.Mode) -> Unit,
   onDirectDomains: (String) -> Unit,
   onTunnelDomains: (String) -> Unit,
@@ -894,10 +964,35 @@ private fun SettingsScreen(
     if (notice.isNotEmpty()) Text(notice, style = MaterialTheme.typography.bodySmall)
 
     HorizontalDivider()
-    Text("Excluded applications", style = MaterialTheme.typography.titleMedium)
+    Text("Applications", style = MaterialTheme.typography.titleMedium)
+    // The same list, read two ways. "Everything but these" is what this client has always done; "only
+    // these" is the phone that tunnels one messenger and leaves banking and local services alone.
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      FilterChip(
+        selected = appsMode == Settings.Apps.EXCEPT,
+        onClick = { onAppsMode(Settings.Apps.EXCEPT) },
+        label = { Text("Everything but these") },
+      )
+      FilterChip(
+        selected = appsMode == Settings.Apps.ONLY,
+        onClick = { onAppsMode(Settings.Apps.ONLY) },
+        label = { Text("Only these") },
+      )
+    }
     Text(
-      "Their traffic stays outside the tunnel and uses the normal network.",
+      if (appsMode == Settings.Apps.ONLY) {
+        "Only the applications ticked below go through the tunnel; everything else uses the normal " +
+          "network. Tick nothing and the tunnel carries everything, because a tunnel for no application " +
+          "at all is never what an empty list meant."
+      } else {
+        "Their traffic stays outside the tunnel and uses the normal network."
+      },
       style = MaterialTheme.typography.bodySmall,
+    )
+    Text(
+      "A change here needs a reconnect: the list is handed to the system when the tunnel is built.",
+      style = MaterialTheme.typography.bodySmall,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     if (apps.isEmpty()) Text("No launchable applications were found.", style = MaterialTheme.typography.bodySmall)
     for (app in apps) {

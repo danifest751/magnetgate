@@ -67,6 +67,11 @@ object SingBoxConfig {
     // stream itself (health.JudgeFirstByte), so proving that the client leaves such a path needs the
     // real chain - core, engine, reality - with one real exit replaced by a black hole. -1 is off.
     brokenSlot: Int = -1,
+    // What the package list means: the apps that stay out of the tunnel, or the only ones allowed into
+    // it. The engine has both options and the platform turns them into addDisallowedApplication or
+    // addAllowedApplication; the difference matters to a person who wants one messenger tunnelled and
+    // their bank left alone. Last in the list because the callers pass these positionally.
+    appsMode: Settings.Apps = Settings.Apps.EXCEPT,
   ): Built {
     val outbounds = JSONArray()
     val planeInbounds = JSONArray()
@@ -140,9 +145,14 @@ object SingBoxConfig {
       // a userspace stack: no kernel module, no root, and it is what libbox is being used for
       .put("stack", "gvisor")
       .apply {
-        // The engine passes these to the platform, which turns them into addDisallowedApplication: an
-        // excluded app keeps using the normal network and never enters the tunnel.
-        if (excludePackages.isNotEmpty()) put("exclude_package", JSONArray(excludePackages))
+        // The engine passes these to the platform, which turns them into addDisallowedApplication (an
+        // excluded app keeps using the normal network) or addAllowedApplication (nothing else enters
+        // the tunnel at all). An empty list means neither: "only these apps, and there are none" would
+        // be a tunnel that carries nothing, which is never what an empty list was meant to say.
+        if (excludePackages.isNotEmpty()) {
+          val key = if (appsMode == Settings.Apps.ONLY) "include_package" else "exclude_package"
+          put(key, JSONArray(excludePackages))
+        }
       }
     val inbounds = JSONArray().put(tun)
     for (index in 0 until planeInbounds.length()) inbounds.put(planeInbounds.get(index))

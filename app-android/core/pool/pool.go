@@ -104,9 +104,14 @@ type Pool struct {
 	now  func() time.Time
 	logf func(string, ...any)
 
-	mu    sync.Mutex
-	nodes map[int]Node
-	rr    int
+	mu      sync.Mutex
+	nodes   map[int]Node
+	rr      int
+	country string
+	// carried and delivered are every byte this client has sent and received through a plane since the
+	// tunnel came up; see Traffic.
+	sent     int64
+	received int64
 	// when each (node, plane) was last reported as not yet wired to the engine; see unwired
 	saidUnwired map[string]time.Time
 }
@@ -189,6 +194,25 @@ func (p *Pool) Nodes() []Node {
 	return out
 }
 
+// countBytes adds one stream's traffic to the totals. Called from whichever goroutine is reading or
+// writing that stream, which is why it takes the lock rather than trusting atomics to be enough for a
+// pair of numbers that are also read together.
+func (p *Pool) countBytes(sent, received int64) {
+	p.mu.Lock()
+	p.sent += sent
+	p.received += received
+	p.mu.Unlock()
+}
+
+// Traffic is every byte carried through a plane since this pool was built: what the screen shows as
+// counters, and the only place they can be counted honestly. Everything the tunnel carries passes
+// through here - the engine routes all of it to the core - so these are totals, not a sample.
+func (p *Pool) Traffic() (sent, received int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sent, p.received
+}
+
 // Cooling lists the planes of one node that are paused, for the diagnostics table.
 func (p *Pool) Cooling(slot int) []health.Cooling { return p.cfg.Health.Cooling(idOf(slot)) }
 
@@ -211,6 +235,14 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 	candidates := p.Nodes()
 	if len(candidates) == 0 {
 		return nil, ErrNoNode
+	}
+	// The country the user asked for, if they asked and it is there. A preference that cannot be
+	// honoured right now is reported once per stream rather than enforced: see SelectCountry.
+	if selection := SelectCountry(candidates, p.Country()); selection.Country != "" {
+		candidates = selection.Nodes
+		if selection.Fallback {
+			p.logf("no node in %s right now, using every country for this stream", selection.Country)
+		}
 	}
 
 	p.mu.Lock()
@@ -287,7 +319,7 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 								plane, slot, after.Round(time.Millisecond),
 								time.Duration(record.BackoffMs)*time.Millisecond)
 						}
-					}), nil
+					}, p.countBytes), nil
 				}
 				lastErr = err
 				// A plane the engine has not been told about yet is this client reconfiguring itself, not

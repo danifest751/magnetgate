@@ -19,11 +19,19 @@ import (
 //
 // The first byte cannot be faked that way: it has travelled the whole chain. Watching it costs no extra
 // traffic, because it is the user's own connection being watched, and it reports exactly once.
-func watchFirstByte(stream Conn, deadline time.Duration, report func(health.Verdict, time.Duration)) Conn {
+func watchFirstByte(
+	stream Conn,
+	deadline time.Duration,
+	report func(health.Verdict, time.Duration),
+	// count is told every byte that passes, in each direction. It shares this wrapper because every
+	// stream the client carries already passes through it: a second one would be a second cost for the
+	// same numbers.
+	count func(sent, received int64),
+) Conn {
 	if deadline <= 0 {
 		deadline = time.Duration(health.FirstByteDeadlineMs) * time.Millisecond
 	}
-	watched := &firstByteConn{Conn: stream, started: time.Now(), deadline: deadline, report: report}
+	watched := &firstByteConn{Conn: stream, started: time.Now(), deadline: deadline, report: report, count: count}
 	// Silence is evidence too, and nobody will come back to look: a connection that produces nothing is
 	// precisely the one whose Read never returns. So the deadline is a timer rather than a check on the
 	// next read.
@@ -36,6 +44,7 @@ type firstByteConn struct {
 	started  time.Time
 	deadline time.Duration
 	report   func(health.Verdict, time.Duration)
+	count    func(sent, received int64)
 
 	mu     sync.Mutex
 	timer  *time.Timer
@@ -68,11 +77,22 @@ func (c *firstByteConn) judge(gotByte, closedWithError bool) {
 func (c *firstByteConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
+		if c.count != nil {
+			c.count(0, int64(n))
+		}
 		c.judge(true, false)
 	} else if err != nil {
 		// Nothing ever came back and the stream is over: this is the failure the open was unable to
 		// report, and the only place the pool can learn about it.
 		c.judge(false, true)
+	}
+	return n, err
+}
+
+func (c *firstByteConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 && c.count != nil {
+		c.count(int64(n), 0)
 	}
 	return n, err
 }

@@ -45,6 +45,13 @@ func SetPlaneSocksPort(slot int, plane string, port int) error {
 	return mobile.SetPlaneSocksPort(slot, plane, port)
 }
 
+// SetCountry records which country the user wants their traffic to leave through; empty means any.
+//
+// Nothing is rebuilt: the nodes are discovered and their planes wired already, so this only changes
+// which of them the next stream prefers. It is a preference and not a restriction - when the chosen
+// country has nothing live, traffic leaves through whatever is there, the same rule the desktop applies.
+func SetCountry(country string) { mobile.SetCountry(country) }
+
 // ForgetPlaneSocksPorts drops every mapping, for when the engine is rebuilt.
 func ForgetPlaneSocksPorts() { mobile.ForgetPlaneSocksPorts() }
 
@@ -353,12 +360,12 @@ func (i *interfaceIterator) Next() *libbox.NetworkInterface {
 	return value
 }
 
-func (p *platform) StartNeighborMonitor(libbox.NeighborUpdateListener) error          { return nil }
-func (p *platform) CloseNeighborMonitor(libbox.NeighborUpdateListener) error          { return nil }
-func (p *platform) SendNotification(*libbox.Notification) error                       { return nil }
-func (p *platform) CancelNotification(string, int32) error                            { return nil }
-func (p *platform) LookupSFTPServer() (string, error)                                 { return "", nil }
-func (p *platform) ReadSystemSSHHostKey() (string, error)                             { return "", nil }
+func (p *platform) StartNeighborMonitor(libbox.NeighborUpdateListener) error { return nil }
+func (p *platform) CloseNeighborMonitor(libbox.NeighborUpdateListener) error { return nil }
+func (p *platform) SendNotification(*libbox.Notification) error              { return nil }
+func (p *platform) CancelNotification(string, int32) error                   { return nil }
+func (p *platform) LookupSFTPServer() (string, error)                        { return "", nil }
+func (p *platform) ReadSystemSSHHostKey() (string, error)                    { return "", nil }
 
 func (p *platform) CheckPlatformShell() error {
 	return errors.New("mgbox: shell sessions are not used")

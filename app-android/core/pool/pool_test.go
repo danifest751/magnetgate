@@ -694,3 +694,82 @@ func TestSilenceDemotesThePlaneWithoutWaitingForTheCaller(t *testing.T) {
 	}
 	t.Fatalf("a stream silent past the deadline must demote its plane: %+v", p.Cooling(0))
 }
+
+func TestCountryIsAPreferenceAndNotARestriction(t *testing.T) {
+	nl := node(t, 0, "reality")
+	nl.Offer.Country = "NL"
+	fi := node(t, 1, "reality")
+	fi.Offer.Country = "FI"
+
+	any := SelectCountry([]Node{nl, fi}, "")
+	if len(any.Nodes) != 2 || any.Country != "" || any.Fallback {
+		t.Fatalf("no preference means every node: %+v", any)
+	}
+
+	picked := SelectCountry([]Node{nl, fi}, "fi")
+	if len(picked.Nodes) != 1 || picked.Nodes[0].Slot != 1 || picked.Fallback {
+		t.Fatalf("a preference that can be honoured must be honoured exactly: %+v", picked)
+	}
+
+	// The country the user wants is not there at this moment. Refusing to carry traffic would be worse
+	// than carrying it through the wrong country, and the caller is told which happened.
+	gone := SelectCountry([]Node{nl}, "FI")
+	if len(gone.Nodes) != 1 || gone.Nodes[0].Slot != 0 || !gone.Fallback || gone.Country != "FI" {
+		t.Fatalf("an unavailable preference must fall back to everything, and say so: %+v", gone)
+	}
+
+	if CountryOf(" nl ") != "NL" || CountryOf("NLD") != "" || CountryOf("n1") != "" {
+		t.Fatal("a country code is two letters, trimmed and upper-cased, or it is no selection at all")
+	}
+}
+
+func TestTheCountryPreferenceDecidesWhichNodeCarriesAStream(t *testing.T) {
+	fast := &fakePlane{plane: "reality"}
+	p := New(Config{
+		Preference: []string{"reality"},
+		Connectors: map[string]Connector{"reality": fast},
+	})
+	nl := node(t, 0, "reality")
+	nl.Offer.Country = "NL"
+	fi := node(t, 1, "reality")
+	fi.Offer.Country = "FI"
+	p.Update(nl)
+	p.Update(fi)
+
+	p.SetCountry("FI")
+	for i := 0; i < 4; i++ {
+		if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+	}
+	for _, slot := range fast.served() {
+		if slot != 1 {
+			t.Fatalf("every stream must leave through the country that was asked for, got slot %d", slot)
+		}
+	}
+}
+
+func TestTrafficCountsEveryByteTheTunnelCarries(t *testing.T) {
+	answering := &scriptedConn{after: time.Millisecond}
+	p := New(Config{
+		Preference:        []string{"reality"},
+		Connectors:        map[string]Connector{"reality": scripted("reality", answering)},
+		FirstByteDeadline: time.Hour,
+	})
+	p.Update(node(t, 0, "reality"))
+	stream, err := p.Dial(context.Background(), "target.test", 80)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if _, err := stream.Write([]byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	buf := make([]byte, 1)
+	if _, err := stream.Read(buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	sent, received := p.Traffic()
+	if sent != 5 || received != 1 {
+		t.Fatalf("expected 5 bytes out and 1 back, got %d and %d", sent, received)
+	}
+}
