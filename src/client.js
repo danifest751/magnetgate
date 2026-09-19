@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// node src/client.js <psk> | node src/client.js <config.json>   (env: DHT_BOOTSTRAP, MAGNETGATE_RULES)
+// node src/client.js <config.json>   (env: DHT_BOOTSTRAP, MAGNETGATE_CONFIG; routing uses JSON rules)
 // A config file enables multiple exits: { "exits": [{"name":"nl","psk":"..."}], ... }
 import DHT from 'bittorrent-dht'
 import net from 'node:net'

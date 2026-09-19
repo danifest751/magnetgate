@@ -24,7 +24,7 @@
   The tunnel must already be up. Wi-Fi is switched back on whatever happens, including on Ctrl+C.
 
 .EXAMPLE
-  powershell -File scripts/android/switch-check.ps1 -Serial 4c75140c -Rounds 2
+  powershell -File scripts/android/switch-check.ps1 -Serial '<device-serial>' -Rounds 2
 #>
 [CmdletBinding()]
 param(

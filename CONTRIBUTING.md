@@ -27,8 +27,8 @@ Commit messages are **English only**, imperative mood ("add", not "added"/"adds"
 
 | Type | When to use |
 |---|---|
-| `feat` | a new feature (bumps MINOR version) |
-| `fix` | a bug fix (bumps PATCH version) |
+| `feat` | a new feature (normally a MINOR change when released) |
+| `fix` | a bug fix (normally a PATCH change when released) |
 | `docs` | documentation only |
 | `style` | formatting, whitespace — no logic change |
 | `refactor` | a code change that neither fixes nor adds behavior |
@@ -86,5 +86,62 @@ docs: translate testing guide to english
 git config commit.template .gitmessage
 git config core.hooksPath .githooks
 npm ci
-npm test   # crypto/codec/handshake unit tests (node:test)
+npm test   # Node core, security, consistency and local integration tests
 ```
+
+## Components and validation
+
+Use Node.js 20.19+ for the root package, or 22.12+ when also developing the desktop app.
+Run commands from the repository root unless shown otherwise.
+
+```powershell
+npm ci
+npm test
+npm --prefix app ci
+npm --prefix app test
+```
+
+Desktop tests that exercise sing-box need the pinned files described in [app/README.md](app/README.md).
+For Android, prepare JDK 17, Android SDK/NDK and the combined AAR using the
+[Android build guide](app-android/README.md), then run:
+
+```powershell
+.\app-android\gradlew.bat -p app-android :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
+```
+
+The Go core is a separate module (`go 1.26.0` in its go.mod):
+
+```powershell
+Push-Location app-android/core
+go test ./...
+Pop-Location
+```
+
+Run the checks appropriate to the changed component. A successful unit suite does not replace device
+network tests or elevated Windows firewall tests. Android acceptance scripts can interrupt the VPN
+and network; their behavior and prerequisites are described in the Android guide.
+
+Before committing:
+
+```powershell
+git diff --check
+node scripts/check-hygiene.mjs
+# After staging, include new files in the repository gate:
+node scripts/check-hygiene.mjs --staged
+```
+
+## Documentation and releases
+
+Keep [README.md](README.md) and [README.ru.md](README.ru.md) aligned. Platform-specific behavior
+belongs in [app/README.md](app/README.md) or the paired Android guides. Record new behavior in
+[CHANGELOG.md](CHANGELOG.md) under Unreleased, and remove completed work from future-only roadmap
+lists. Historical changelog entries describe their revision; the current guides describe `main`.
+
+Root, desktop and Android versions are maintained independently in `package.json`,
+`app/package.json` and `app-android/app/build.gradle.kts`. Wire/offer versions are separate again.
+A Conventional Commit does not automatically bump package versions or publish a release.
+
+Keep secrets, APKs/AARs, EXEs, user configurations, logs and device captures out of commits.
+`docs/` is internal and ignored: put public instructions in tracked Markdown outside it. Use
+documentation-only addresses and placeholders in examples; never copy live device evidence into a
+README. Preserve third-party notices, including [Lucide](app-android/THIRD_PARTY_ICONS.txt).

@@ -1,9 +1,7 @@
 # Shared helpers for the Android AAR builds. Dot-source this file; it defines functions only.
 
-# Every gomobile binding brings the same go.Seq support classes with it, so two AARs in one app collide
-# ("Duplicate class go.Seq"). Both of our AARs are therefore built with the same toolchain - sing-box's
-# fork, which is what its own libbox build uses - and the core's copy is stripped afterwards so the app
-# ends up with exactly one set of them.
+# The app has one combined core + engine binding and one Go runtime. Use the pinned SagerNet
+# gomobile fork required by sing-box; build-aar.ps1 produces app-android/libs/mgcore.aar.
 function Get-GomobileSagernet($Pins, [string]$Sdk, [string]$GoExe) {
   $pin = $Pins.singBoxSource
   if (-not $pin) { throw 'scripts/pins.json has no singBoxSource entry' }

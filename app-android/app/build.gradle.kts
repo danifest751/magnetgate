@@ -73,8 +73,8 @@ android {
   }
 
   // One libmgcore.so is ~82 MB, so a package carrying every ABI came to ~188 MB and most of it was
-  // dead weight on any given device. arm64-v8a is every real phone, x86_64 is the emulator; nothing
-  // else is a target. No universal APK: it would just be the old fat one under a new name, and the
+  // dead weight on any given device. We target arm64-v8a phones and x86_64 emulators; 32-bit phones
+  // are not supported by these APKs. No universal APK: it would be the old fat one, and the
   // scripts pick the package matching the device's ABI.
   splits {
     abi {

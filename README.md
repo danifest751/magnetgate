@@ -2,7 +2,7 @@
 
 > A censorship-resistant tunnel with **no broker and a rendezvous that has no fixed address**: the
 > client finds the exit on its own over two independent channels, then connects through a camouflaged
-> data plane. The exit itself is still one address and one port — see below.
+> data plane. Each exit still exposes network endpoints — see below.
 
 **RU:** [README.ru.md](README.ru.md)
 
@@ -18,11 +18,27 @@ discovers it from a shared secret (PSK) and connects — preferring a strongly c
 centralized broker: rendezvous rides the BitTorrent Mainline DHT **and** a pool of Nostr relays, and
 the data plane looks like ordinary TLS / QUIC to a real website.
 
-**What that does and does not mean.** Nothing in the *rendezvous* is a fixed address a censor can
-simply block, and no third party sits in the middle. The *exit* itself is still one `host:port`:
-credential rotation makes it look new on the wire, but it does not move it, so an address-level block
-is a hard stop until the exit overlay (entry/egress split, `ROADMAP.md` §4) lands. Treat this as a
-tool for a small trusted group, not as anonymity infrastructure — see "Known limitations" below.
+**Scope.** Discovery has no single central broker, but DHT bootstrap nodes, Nostr relays and exit
+endpoints are still network addresses that can be blocked. Several exits can share one PSK through
+rendezvous slots. Credential rotation does not move their IP addresses; fail-over helps only while
+another usable endpoint exists. The entry/egress overlay is a proposal, not an implemented feature.
+Use this as a small trusted-group tool, not as anonymity infrastructure.
+
+## Clients and requirements
+
+| Component | Current package version | Requirements / guide |
+|---|---|---|
+| Node core and exit | 0.11.1 | Node.js 20.19+; commands below |
+| Windows desktop | 0.3.3 | Windows x64; Node.js 22.12+ for building; [desktop guide](app/README.md) |
+| Android | 0.1.0 | Android 8.0+ (API 26); `arm64-v8a` phones or `x86_64` emulator; [Android guide](app-android/README.md) |
+
+These package versions are independent. The current native protocol and sealed envelopes use wire
+v4; offer JSON uses schema v3. Changes on `main` are described under Unreleased in the changelog;
+a version label does not imply a published installer or an app-store release.
+
+Android has **Home / Rules / Settings**, a visible **RU / EN** switch, website and application
+rules, country preference and connection diagnostics. Language changes preserve the VPN and drafts.
+The Windows interface is currently Russian; its guide describes its own controls and save behavior.
 
 ## How it works
 
@@ -39,8 +55,9 @@ Rendezvous — how the client learns the exit + its current endpoints — over T
    the exit publishes one signed+encrypted offer (a list of data-plane endpoints) to both
 ```
 
-All keys are derived deterministically from the PSK (`mgt-sig:` / `mgt-salt:` / `mgt-box:` /
-`mgt-nostr:`), so no domains, certificates, trackers or brokers are required. The offer is sealed
+Discovery keys are derived deterministically from the PSK (`mgt-sig:` / `mgt-salt:` / `mgt-box:` /
+`mgt-nostr:`), so the group does not need its own discovery domain, tracker or broker.
+Transport-specific TLS material is separate. The offer is sealed
 with a secretbox under the PSK (only PSK holders can read or forge it). magnetgate's **native**
 channel adds a forward-secret handshake (ephemeral X25519 authenticated under the PSK, replay-
 protected), so a later PSK compromise does not decrypt past recorded native traffic; Reality and
@@ -53,13 +70,14 @@ fails over on error:
 
 | Plane | Transport | Role | Notes |
 |---|---|---|---|
-| **Reality** | VLESS+Reality over TLS 1.3 (TCP/443) | primary | borrows a real site's TLS handshake (SNI); best against SNI/DPI |
-| **hysteria2** | QUIC (UDP/443) + salamander obfs | alternative | great on lossy/mobile links; server cert pinned via the Nostr offer |
-| **native `mgt`** | AEAD-framed mux over TCP (or reliable-UDP) on :49001 | fallback | forward-secret, no third-party binary, always available |
+| **Reality** | VLESS+Reality over TLS 1.3 (TCP/443) | primary | borrows a real site's TLS handshake (SNI); TLS camouflage; effectiveness depends on the network |
+| **hysteria2** | QUIC (UDP/443) + salamander obfs | alternative | QUIC alternative; server cert pinned via the Nostr offer |
+| **native `mgt`** | AEAD-framed mux over TCP (or reliable-UDP) on :49001 | fallback | forward-secret fallback; can also be blocked |
 
-Reality and hysteria2 are run by a **bundled sing-box** on the client (`scripts/get-singbox.ps1`,
-pinned SHA-256); magnetgate templates its config from the offer, supervises the process and routes
-proxied connections through it. `MAGNETGATE_DATA_PLANE=mgt` forces the native channel only.
+On Windows, Reality and hysteria2 run in **sing-box** fetched by `scripts/get-singbox.ps1`
+with pinned SHA-256 checksums; magnetgate generates its configuration and supervises the process.
+Android embeds the core and engine in one AAR managed by its VPN service.
+`MAGNETGATE_DATA_PLANE=mgt` forces the Node client to use the native channel only.
 
 ## Quick start
 
@@ -67,56 +85,70 @@ proxied connections through it. `MAGNETGATE_DATA_PLANE=mgt` forces the native ch
 ```bash
 # 1) magnetgate rendezvous + native channel (unprivileged, systemd units in systemd/)
 npm ci
-MAGNETGATE_PSK='<psk>' MAGNETGATE_PORT=49001 MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> \
-MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq \
+mkdir -p "$HOME/.local/state/magnetgate"
+MAGNETGATE_PSK='<psk>' MAGNETGATE_PORT=49001 MAGNETGATE_PUBLIC_HOST='<PUBLIC_IP>' \
+MAGNETGATE_SEQ_FILE="$HOME/.local/state/magnetgate/seq" MAGNETGATE_DHT_PORT=20002 \
 DHT_BOOTSTRAP=127.0.0.1:20001,router.bittorrent.com:6881 node src/exit.js
 
-# 2) Reality + hysteria2 data planes (sing-box) — one-time setup, then daily credential rotation
-MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
+# 2) On a provisioned Linux server, as root; see DEPLOYMENT.md first
+MAGNETGATE_PUBLIC_HOST='<PUBLIC_IP>' bash scripts/setup-singbox.sh
 ```
 
 **Client (local machine):**
 ```powershell
 npm ci
 powershell -ExecutionPolicy Bypass -File scripts\get-singbox.ps1   # fetch the sing-box data-plane engine
-node src/client.js .\magnetgate.config.json                        # or: node src/client.js "<psk>" 1080
+Copy-Item magnetgate.config.example.json magnetgate.config.json   # first run only
+# Edit magnetgate.config.json: add your PSK to exits[] and set discovery options.
+node src/client.js .\magnetgate.config.json
 ```
 
 **Verify:**
 ```powershell
-curl.exe --socks5-hostname 127.0.0.1:1080 http://checkip.amazonaws.com/   # → exit IP
+curl.exe --socks5-hostname 127.0.0.1:1080 https://api.ipify.org   # → exit IP
 curl.exe --socks5-hostname 127.0.0.1:1080 https://www.youtube.com/robots.txt
 ```
 
-Browser: SwitchyOmega / FoxyProxy → SOCKS5 `127.0.0.1:1080`. DNS is resolved at the exit (SOCKS5
-hostnames), so local resolver poisoning is excluded.
+Configure an application to use SOCKS5 `127.0.0.1:1080` with remote hostname resolution.
+Proxied hostnames are resolved at the exit; direct exceptions use the direct path. A SOCKS client
+does not automatically capture all device traffic. Use the desktop or Android app for system VPN.
 
-**Desktop app (optional):** [`app/`](app/) is an Electron GUI that runs the client, toggles the
-system-wide VPN, shows status (route + egress IP), and manages the PSK/exits — build a portable `.exe`
-with `cd app && npm install && npm run dist`. See [app/README.md](app/README.md).
+For a persistent exit with Reality/hysteria2, firewall ports and systemd, follow
+[DEPLOYMENT.md](DEPLOYMENT.md). The short foreground example above assumes a reachable bootstrap
+and an open fixed UDP DHT port; a local bootstrap must be started separately.
 
 ## Rendezvous (two channels)
 
 The exit publishes a sealed offer to both channels — the same generation and `ts`, but not byte
 identical: the DHT view is compact (it drops the hysteria2 endpoint, whose pinned certificate would
 not fit the ~1000 B BEP 44 limit) while the Nostr view carries it. Clients merge the two by data-plane
-type. Discovery therefore survives either channel being blocked or shaped:
+type. Discovery can continue through the remaining reachable channel; a DHT-only client does not
+receive the hysteria2 certificate:
 
 - **Mainline DHT (BEP 44)** — a mutable item keyed by a PSK-derived ed25519 key; republished every
   60 s. Lead `DHT_BOOTSTRAP` with an IPv4 node (some public bootstraps are IPv6-only and
-  bittorrent-dht is udp4); a self-hosted bootstrap on the exit (`:20001`) is the most reliable.
+  bittorrent-dht is udp4); a self-hosted bootstrap (`:20001`) is useful, but keep another reachable
+  bootstrap if that host moves.
 - **Nostr relays** — a parameterized-replaceable event (kind 30078) under a PSK-derived secp256k1
   key, delivered push + instantly to new subscribers. Override the pool with `MAGNETGATE_NOSTR_RELAYS`,
   disable with `MAGNETGATE_NOSTR=off`.
 
-## Split tunneling
+## Routing rules
 
-`MAGNETGATE_RULES=path/to/rules.json` (or `rules` in the client config):
+The Node SOCKS client reads `rules` from its JSON configuration:
+
 ```json
-{ "direct": ["ru", "*.local"], "proxy": [] }
+{ "rules": { "direct": ["ru", "local"], "proxy": [] } }
 ```
-If `direct` is non-empty, everything that does not match goes through the tunnel; if a non-empty
-`proxy` is given instead, only listed domains go through the tunnel and the rest goes direct.
+
+Direct matches take priority. If `proxy` is non-empty, only its matching domains use the tunnel;
+otherwise every non-direct destination uses it. Domain entries also match subdomains.
+`MAGNETGATE_RULES` is not read by the current client; use the JSON field.
+
+The desktop and Android VPN apps expose Full and Split modes. Full tunnels traffic except explicit
+direct rules and system/private-network bypasses. Split uses the packaged rule sets plus the user
+tunnel list. Application exclusions are separate from website rules. See the client guides for
+save/apply behavior and the desktop-only optional firewall guard.
 
 ## Environment variables
 
@@ -125,7 +157,7 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_PSK` | exit PSK, read from the env so it never lands on the argv/`ps` line (argv is a fallback) |
 | `MAGNETGATE_PORT` / `MAGNETGATE_PUBLIC_HOST` | exit native-channel port and the public host advertised in the offer |
 | `MAGNETGATE_NODE_SLOT` / `MAGNETGATE_NODE_NAME` | exit: which rendezvous slot this node occupies (default `0` = the single-node layout) and the name it advertises; two nodes share one PSK by taking different slots |
-| `MAGNETGATE_NODE_COUNTRY` | exit: optional two-letter country code (e.g. `NL`, `FI`) advertised in the offer. The client shows the codes it can see in a selector and can restrict itself to one country — an address is never shown. Unset means the node just does not appear in that list |
+| `MAGNETGATE_NODE_COUNTRY` | exit: optional two-letter country code (e.g. `NL`, `FI`) advertised in the offer. The desktop and Android show discovered countries as a preference, with fallback when none match. This is not a geographic guarantee. Nodes without a code are absent from the country list |
 | `MAGNETGATE_SLOTS` | client: comma-separated slots to look for, e.g. `0,1` — one PSK then finds every node in the set (same as `slots` in the config file) |
 | `MAGNETGATE_PEER_SLOTS` | exit: slots this node watches and advertises in `peers`, e.g. `0,1`; unset means no scanning, and a client that knows one slot can then learn the rest by itself |
 | `MAGNETGATE_EXPECT_PEERS` | exit: log an `[alert]` when fewer than N peer slots answer (unset = never) |
@@ -136,18 +168,19 @@ If `direct` is non-empty, everything that does not match goes through the tunnel
 | `MAGNETGATE_SEQ_FILE` | durable sequence reservation before publication; one publisher per file (systemd holds `flock`). Offer nonces are independently random. |
 | `MAGNETGATE_NOSTR` / `MAGNETGATE_NOSTR_RELAYS` | disable the Nostr rendezvous channel / override its relay pool |
 | `MAGNETGATE_DATA_PLANE` | client: `auto` (default — prefer Reality/hysteria2, else native) or `mgt` (native only) |
-| `MAGNETGATE_RULES` | split-tunnel rules file (client) |
+| `MAGNETGATE_CONFIG` | Node client JSON file when no positional config/PSK argument is given |
+| `MAGNETGATE_RULESETS_FILE` | exit: rule-set manifest advertised to Android (default `/etc/magnetgate-rulesets.json`) |
 | `MAGNETGATE_SOCKS_HOST` | client SOCKS5 bind address (default `127.0.0.1`; do not expose it to the LAN) |
 | `MAGNETGATE_ALLOW_PRIVATE` | exit: `1` allows CONNECT to loopback/link-local/RFC1918 (blocked by default — SSRF guard) |
 | `MAGNETGATE_MAX_SESSIONS` / `MAGNETGATE_MAX_STREAMS` | exit resource caps (default 512 / 256 per session) |
 | `MAGNETGATE_UDP_IDLE_MS` | exit: drop a reliable-UDP stream after this much silence (default 600000); a vanishing peer otherwise holds a slot forever |
 | `MAGNETGATE_HEALTH_FILE` | exit: write publication health (last put, node count, consecutive failures) to this file |
 | `MAGNETGATE_ALERT_AFTER` | exit: warn after N consecutive publications that reached no DHT node (default 5) |
-| `MAGNETGATE_DHT_PORT` | exit: UDP port for its DHT node. **Set this in production.** Left unset (`0`) the node takes an ephemeral port, which no firewall can open: it still publishes, because replies to its own queries come back through conntrack, but nothing outside can query it, so its routing table never grows and the offer is stored on peers no client walks to |
-| `MAGNETGATE_MIN_DHT_NODES` | healthcheck: routing tables smaller than this mean the node is unreachable from outside (default 100) |
-| `MAGNETGATE_ALERT_WEBHOOK` | exit: POST `{"text": ...}` to this endpoint when the publication health check fails, and once when it recovers |
-| `MAGNETGATE_ALERT_TG_TOKEN` / `MAGNETGATE_ALERT_TG_CHAT` | exit: send those notifications to Telegram instead (or as well) |
-| `MAGNETGATE_ALERT_COOLDOWN_MIN` | exit: how often a still-broken exit may repeat its alert (default 30) |
+| `MAGNETGATE_DHT_PORT` | exit: fixed UDP port for its DHT node; open it in the firewall. Unset (`0`) chooses an ephemeral port that does not suit a fixed-port firewall rule. Outgoing publication alone does not prove incoming reachability |
+| `MAGNETGATE_MIN_DHT_NODES` | healthcheck: flag a smaller DHT table after warmup and investigate reachability (default 100 nodes; warmup 30 minutes) |
+| `MAGNETGATE_ALERT_WEBHOOK` | healthcheck: POST `{"text": ...}` to this endpoint when the publication health check fails, and once when it recovers |
+| `MAGNETGATE_ALERT_TG_TOKEN` / `MAGNETGATE_ALERT_TG_CHAT` | healthcheck: send those notifications to Telegram instead (or as well) |
+| `MAGNETGATE_ALERT_COOLDOWN_MIN` | healthcheck: how often a still-broken exit may repeat its alert (default 30) |
 | `MAGNETGATE_TRANSPORT` | native channel: `tcp` (default) or `udp` (experimental reliable-UDP) |
 | `MAGNETGATE_REALITY_SNI` | exit: the site whose TLS Reality borrows (default `www.microsoft.com`) |
 | `MAGNETGATE_STATS` | client: log per-exit traffic counters every N seconds |
@@ -168,14 +201,17 @@ Client config (`magnetgate.config.json`, see `magnetgate.config.example.json`):
   ]
 }
 ```
-Multiple exits: the client discovers every exit's offer, spreads streams round-robin, and fails over
-to a healthy exit automatically (dead exits get a 30 s cooldown).
+Multiple exits: the client discovers their offers, distributes new streams and fails over on errors.
+Health is tracked per node and transport, with increasing cooldowns. A new connection may choose a
+different exit; established streams are not transparently migrated. For one shared PSK, set numeric
+`"slots": [0, 1]`; each publisher must use a distinct slot in the range 0–15.
 
 Windows autostart (scheduled task at logon):
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install-client-windows.ps1 -ConfigPath .\magnetgate.config.json
 ```
-Linux autostart: `scripts/magnetgate-client.service` (systemd unit template).
+Linux autostart: adapt `scripts/magnetgate-client.service` as `magnetgate-client@.service`
+and enable an instance for the intended user; verify its working directory and config permissions.
 
 ## Credential rotation
 
@@ -183,85 +219,62 @@ Linux autostart: `scripts/magnetgate-client.service` (systemd unit template).
 shortId+uuid and the hysteria2 password, keeping the previous generation valid for one interval
 (**grace window**) while preserving the stable Reality keypair / hy2 obfs / cert (so a client's
 pinned key stays valid). The exit watches the dp file and republishes within ~1 s, so clients pick
-up new credentials in seconds; the client switches sing-box to the new params cleanly and falls back
-to the native channel during any gap. Trigger manually: `systemctl start magnetgate-rotate.service`.
+up new credentials as discovery delivers them. Rotation restarts sing-box and interrupts existing
+engine connections; applications must reconnect. Native fallback depends on reachability.
+Trigger manually: `systemctl start magnetgate-rotate.service`.
 
 ## System-wide VPN mode (Windows)
 
-The SOCKS5 client is the data plane; to route **all system traffic** through it,
-[tun2proxy](https://github.com/tun2proxy/tun2proxy) creates a TUN adapter and feeds everything into
-`127.0.0.1:1080` (DNS resolved at the exit). The exit IP is auto-bypassed so the client's own uplink
-is not captured:
+Use the [desktop app](app/README.md), which owns the sing-box TUN and native fallback. It requires
+Administrator privileges. The optional strict Full firewall guard is off by default; it persists
+after engine/app termination until explicit Disconnect, and still needs elevated failure/recovery
+validation. Routing while an engine runs is not protection after it exits.
 
-```powershell
-# from an elevated PowerShell
-powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1        # connect (downloads tun2proxy, pinned)
-powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off   # disconnect
-```
-> The desktop app manages sing-box TUN directly and retains native fallback. Full mode supports
-> direct exceptions; Split routes only selected resources. The optional strict Full guard disables
-> exceptions and persists after engine/app termination until explicit Disconnect. The legacy
-> PowerShell launchers do not provide a persistent firewall guard. See [app/README.md](app/README.md).
+`scripts/vpn-windows.ps1` (tun2proxy) and `scripts/vpn-singbox-windows.ps1` are deprecated reference
+launchers. They do not enable the persistent guard. Do not run them alongside the desktop VPN.
 
-## Deployment (pull-based autodeploy)
+## Deployment
 
-The VPS pulls `main` from GitHub by itself (no GitHub Actions, no open webhook port):
-```bash
-# one-time bootstrap on the VPS (repo root == /opt/magnetgate)
-git init && git remote add origin https://github.com/danifest751/magnetgate.git
-git fetch origin && git checkout -f -B main origin/main
-
-# unprivileged service user + state dir + secrets/config file (never in git)
-useradd --system --no-create-home --shell /usr/sbin/nologin magnetgate
-install -d -o magnetgate -g magnetgate -m 750 /var/lib/magnetgate
-umask 077 && cat > /etc/magnetgate.env <<'ENV'
-PSK=<your-128-bit-psk>
-MAGNETGATE_PORT=49001
-MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP>
-DHT_BOOTSTRAP=127.0.0.1:20001,router.bittorrent.com:6881
-ENV
-chown root:magnetgate /etc/magnetgate.env && chmod 640 /etc/magnetgate.env
-
-cp systemd/*.service systemd/*.timer /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-health.timer magnetgate-deploy.timer
-
-# data planes (Reality + hysteria2 + daily rotation):
-MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
-```
-
-`magnetgate-deploy.timer` runs `scripts/deploy.sh` every 3 minutes: fetch → hard reset to
-`origin/main` → `npm ci` (only when the lockfile changed) → copy changed units → restart services.
-The exit, DHT and sing-box run as unprivileged users under systemd sandboxes (`NoNewPrivileges`,
-`ProtectSystem=strict`, dropped capabilities). Create `/opt/magnetgate/.deploy-verify` to require a
-signed commit (`git verify-commit`) before running new code as root. (Deploy restarts only the
-magnetgate exit/DHT; sing-box is untouched, so Reality/hysteria2 sessions survive updates.)
+[DEPLOYMENT.md](DEPLOYMENT.md) covers Linux provisioning, required ports, multi-node settings,
+rotation, backups and pull-based updates. `magnetgate-deploy.timer` checks `origin/main` every
+three minutes. The updater validates a staged candidate with `npm ci --ignore-scripts` and
+`npm test` as `magnetgate-build`, then activates it and attempts rollback if activation fails.
+It refuses tracked local changes and restarts only the exit/DHT services enabled or active on that
+host. The optional `.deploy-verify` file enables signature verification; it requires trusted signed
+commits. This is separate from the runtime service sandboxes.
 
 ## Documentation
 
-Design notes, the implementation spec, the testing methodology and the research survey (with the
-2026 build plan) live in the internal `docs/` directory, kept out of the public repository.
-Field test reports are kept internal, outside the repository. Unit tests: `npm test` (node:test).
-Commit conventions: [CONTRIBUTING.md](CONTRIBUTING.md) (Conventional Commits, English-only,
-enforced by a `commit-msg` hook).
+- [Android guide](app-android/README.md) · [Русская инструкция Android](app-android/README.ru.md)
+- [Windows desktop guide](app/README.md)
+- [Linux deployment](DEPLOYMENT.md)
+- [Development and validation](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md)
+
+Public instructions live in the tracked files above. Internal design notes and device evidence in
+`docs/` are deliberately ignored; they are not required to follow the public guides.
 
 ## Status
 
-Implemented and tested in production:
+Implemented; validation scope differs by component (see the client guides):
 
 - **Rendezvous** over two independent channels — Mainline DHT (BEP 44) + Nostr — with automatic
   merge/fail-over; offers signed + encrypted under the PSK.
 - **Data planes** — Reality (primary) and hysteria2 (alternative) via a bundled sing-box, with the
-  native forward-secret multiplexed channel as the always-available fallback; per-connection
+  native forward-secret multiplexed channel as a fallback; per-connection
   selection and fail-over.
-- **Credential rotation** with a grace window and ~1 s propagation.
+- **Credential rotation** with a grace window and prompt offer republication.
+- **Multi-node discovery** with peer-slot advertisements and per-plane health.
+- **Android UI** with RU/EN, application/site rules and fresh-check status; verified on an
+  Android 16 arm64 device, not a full device-compatibility matrix.
 - **Hardening** — exit/DHT/sing-box run unprivileged under systemd sandboxes; the PSK never appears
   on the process command line; the exit blocks egress to loopback/link-local/RFC1918 (SSRF guard)
   and caps concurrent sessions/streams; the SOCKS listener is loopback-only; downloaded binaries are
-  pinned by SHA-256; `npm ci` for reproducible installs. Every downloaded or bundled third-party
-artifact (sing-box, wintun, tun2proxy, the routing rule-sets) is pinned in `scripts/pins.json`,
-which the fetch scripts read — so a changed upstream file stops the fetch instead of silently
-retuning routes. `scripts/check-hygiene.mjs` (wired into a pre-commit hook) refuses to commit
-private keys, tokens, field reports or real host addresses.
+  pinned by SHA-256; `npm ci` for reproducible installs. Client binary and fetched rule-set checksums
+  are recorded in `scripts/pins.json`; the Linux installer keeps its own pinned archive checksum.
+  Supplied local assets are separate; review their checksums before packaging. Android verifies
+  downloaded rule sets against an authenticated manifest. `scripts/check-hygiene.mjs` (wired into
+  a pre-commit hook) refuses to commit private keys, tokens, field reports or real host addresses.
 
 Known limitations: obfuscation of the native channel is at PoC level, and the DHT platform sees put/get
 participants' IPs like any BitTorrent node. The rendezvous target is derived from the PSK, so anyone
@@ -269,25 +282,11 @@ who holds — or brute-forces a weak — PSK can locate the exit: **use a ≥128
 
 ## Roadmap
 
-> Full detail, including the **exit-overlay (entry/egress split)** design, is in [ROADMAP.md](ROADMAP.md).
-
-**Phase 3:**
-- ✅ **hy2 cert-pinning** — the server cert now ships via the size-unbounded Nostr offer (DHT offer
-  compact, both sealed under disjoint nonces), dropping the `insecure` fallback for hysteria2.
-- **sing-box TUN desktop** is implemented; persistent firewall failure/recovery testing remains.
-
-**After Phase 3:**
-- **WebRTC DataChannel data plane** (coturn on the exit; DTLS looks like a video call; built-in NAT
-  traversal) as another `dp` type — direct P2P without a fixed data port.
-- **A third rendezvous channel** — a DoH / ENS dead-drop as a tertiary discovery path, so Layer 1
-  has ≥3 independent mechanisms.
-- **Multi-exit fan-out** — several exits, each rotating Reality/hysteria2; the client load-balances
-  and fails over across them.
-- **Multipath aggregation** — carry one session across several data planes at once (MPTCP-style), so
-  blocking one degrades throughput instead of dropping the session.
-- **Cold-fallback tier** — email/IMAP store-and-forward for total-shutdown scenarios.
-- **Cross-platform clients** — Linux/macOS/Android (sing-box is cross-platform) packaged as a
-  service, plus automated exit provisioning and health/metrics.
+[ROADMAP.md](ROADMAP.md) separates completed work from remaining plans. Android, multi-node
+discovery, per-plane health and the desktop TUN are implemented. Remaining work includes broader
+device coverage, controlled desktop firewall failure/recovery tests, release distribution,
+commit-signing operations and automatic slot allocation. Entry/egress overlay, a third discovery
+channel, WebRTC, multipath and store-and-forward remain proposals.
 
 ## Disclaimer
 

@@ -32,7 +32,7 @@ app/dist/
 app/seed-config.json
 
 # Android build artifacts: everything in libs/ is built from source
-# (scripts/android/build-core-aar.ps1) or fetched with a pin in scripts/pins.json - never committed
+# (scripts/android/build-aar.ps1) or fetched with a pin in scripts/pins.json - never committed
 app-android/libs/
 app-android/local.properties
 app-android/app/build/

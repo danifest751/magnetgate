@@ -7,8 +7,8 @@
 одного `strict_route` недостаточно после завершения движка.
 
 > Устойчивый к цензуре туннель **без брокера и с рандеву без фиксированного адреса**: клиент сам
-> находит exit по двум независимым каналам и подключается через камуфляж-дата-плоскость. Сам exit —
-> по-прежнему один адрес и один порт, см. ниже.
+> находит exit по двум независимым каналам и подключается через камуфляж-дата-плоскость. У каждой exit-ноды
+> остаются доступные по сети адреса транспортов, см. ниже.
 
 **EN:** [README.md](README.md)
 
@@ -18,12 +18,27 @@ Exit-нода публикует подписанный и зашифрован�
 брокера нет: рандеву идёт через BitTorrent Mainline DHT **и** пул Nostr-релеев, а дата-плоскость
 выглядит как обычный TLS / QUIC к реальному сайту.
 
-**Что это значит и чего не значит.** В *рандеву* нет фиксированного адреса, который цензор мог бы
-просто заблокировать, и посредника между сторонами тоже нет. Но *exit* — это по-прежнему один
-`host:port`: ротация кредов делает его «новым» на проводе, но адрес не меняет, поэтому блокировка по
-адресу останавливает работу до появления exit-overlay (entry/egress split, `ROADMAP.md` §4). Это
-инструмент для небольшой доверенной группы, а не инфраструктура анонимности — см. «Известные
-ограничения» ниже.
+**Границы возможностей.** В discovery нет единого центрального брокера, но bootstrap-ноды DHT,
+Nostr-реле и адреса exit всё равно могут блокироваться. Несколько exit могут использовать один PSK
+через разные слоты рандеву. Ротация ключей не меняет их IP; резервирование помогает, пока остаётся
+доступный путь. Overlay с разделением entry/egress пока только проектируется.
+Это инструмент для небольшой доверенной группы, а не инфраструктура анонимности.
+
+## Клиенты и требования
+
+| Компонент | Версия пакета | Требования / инструкция |
+|---|---|---|
+| Node-ядро и exit | 0.11.1 | Node.js 20.19+; команды ниже |
+| Windows desktop | 0.3.3 | Windows x64; Node.js 22.12+ для сборки; [инструкция](app/README.md) |
+| Android | 0.1.0 | Android 8.0+ (API 26); телефоны `arm64-v8a` или эмулятор `x86_64`; [инструкция](app-android/README.ru.md) |
+
+Версии пакетов независимы. Нативный протокол и зашифрованные конверты используют wire v4,
+JSON offer — schema v3. Изменения ветки `main` перечислены в Unreleased журнала изменений;
+номер версии сам по себе не означает опубликованный установщик или релиз в магазине.
+
+В Android есть вкладки **Связь / Правила / Настройки**, видимый переключатель **RU / EN**,
+правила сайтов и приложений, предпочтение страны и диагностика. Смена языка сохраняет VPN
+и черновики. Windows-интерфейс пока русскоязычный; его настройки описаны отдельно.
 
 ## Как это работает
 
@@ -40,8 +55,9 @@ Exit-нода публикует подписанный и зашифрован�
    exit публикует один подписанный+зашифрованный offer (список дата-плоскостей) в оба
 ```
 
-Все ключи детерминированно выводятся из PSK (`mgt-sig:` / `mgt-salt:` / `mgt-box:` / `mgt-nostr:`),
-поэтому не нужны домены, сертификаты, трекеры и брокеры. Offer запечатан secretbox под PSK (прочитать
+Ключи discovery детерминированно выводятся из PSK (`mgt-sig:` / `mgt-salt:` / `mgt-box:` / `mgt-nostr:`),
+поэтому группе не нужен собственный домен discovery, трекер или брокер. TLS-материалы транспортов
+настраиваются отдельно. Offer запечатан secretbox под PSK (прочитать
 или подделать может только держатель PSK). **Нативный** канал добавляет forward-secret хендшейк
 (эфемерный X25519, аутентифицированный под PSK, с защитой от replay), так что последующая утечка PSK
 не расшифровывает записанный ранее нативный трафик; Reality и hysteria2 приносят свой изученный
@@ -53,13 +69,14 @@ Offer объявляет список (`dp`) дата-плоскостей. Кл
 
 | Плоскость | Транспорт | Роль | Примечания |
 |---|---|---|---|
-| **Reality** | VLESS+Reality поверх TLS 1.3 (TCP/443) | основная | заимствует TLS-хендшейк реального сайта (SNI); лучшая против SNI/DPI |
-| **hysteria2** | QUIC (UDP/443) + salamander obfs | альтернатива | хороша на потерях/мобиле; серверный cert пиннится через Nostr-offer |
-| **native `mgt`** | AEAD-мультиплекс поверх TCP (или reliable-UDP) на :49001 | fallback | forward-secret, без сторонних бинарей, всегда доступна |
+| **Reality** | VLESS+Reality поверх TLS 1.3 (TCP/443) | основная | заимствует TLS-хендшейк реального сайта (SNI); TLS-камуфляж; результат зависит от сети |
+| **hysteria2** | QUIC (UDP/443) + salamander obfs | альтернатива | альтернатива на QUIC; серверный cert пиннится через Nostr-offer |
+| **native `mgt`** | AEAD-мультиплекс поверх TCP (или reliable-UDP) на :49001 | fallback | forward-secret fallback; тоже может блокироваться |
 
-Reality и hysteria2 запускает **встроенный sing-box** на клиенте (`scripts/get-singbox.ps1`, с
-пиннингом SHA-256); magnetgate генерит его конфиг из offer'а, супервизит процесс и маршрутит прокси-
-соединения через него. `MAGNETGATE_DATA_PLANE=mgt` форсит только нативный канал.
+В Windows Reality и hysteria2 запускает **sing-box**, загружаемый через `scripts/get-singbox.ps1`
+с проверкой SHA-256; magnetgate формирует конфигурацию и управляет процессом.
+В Android ядро и движок встроены в один AAR под управлением VPN-сервиса.
+`MAGNETGATE_DATA_PLANE=mgt` включает в Node-клиенте только нативный канал.
 
 ## Быстрый старт
 
@@ -67,52 +84,68 @@ Reality и hysteria2 запускает **встроенный sing-box** на �
 ```bash
 # 1) рандеву + нативный канал magnetgate (непривилегированно, systemd-юниты в systemd/)
 npm ci
-MAGNETGATE_PSK='<psk>' MAGNETGATE_PORT=49001 MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> \
-MAGNETGATE_SEQ_FILE=/var/lib/magnetgate/seq \
+mkdir -p "$HOME/.local/state/magnetgate"
+MAGNETGATE_PSK='<psk>' MAGNETGATE_PORT=49001 MAGNETGATE_PUBLIC_HOST='<PUBLIC_IP>' \
+MAGNETGATE_SEQ_FILE="$HOME/.local/state/magnetgate/seq" MAGNETGATE_DHT_PORT=20002 \
 DHT_BOOTSTRAP=127.0.0.1:20001,router.bittorrent.com:6881 node src/exit.js
 
-# 2) дата-плоскости Reality + hysteria2 (sing-box) — разовая настройка, далее ежедневная ротация
-MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
+# 2) На подготовленном Linux-сервере, от root; сначала см. DEPLOYMENT.md
+MAGNETGATE_PUBLIC_HOST='<PUBLIC_IP>' bash scripts/setup-singbox.sh
 ```
 
 **Клиент (локальная машина):**
 ```powershell
 npm ci
 powershell -ExecutionPolicy Bypass -File scripts\get-singbox.ps1   # движок дата-плоскости
-node src/client.js .\magnetgate.config.json                        # или: node src/client.js "<psk>" 1080
+Copy-Item magnetgate.config.example.json magnetgate.config.json   # только при первом запуске
+# Укажите свой PSK в exits[] и параметры discovery в magnetgate.config.json.
+node src/client.js .\magnetgate.config.json
 ```
 
 **Проверка:**
 ```powershell
-curl.exe --socks5-hostname 127.0.0.1:1080 http://checkip.amazonaws.com/   # → IP exit'а
+curl.exe --socks5-hostname 127.0.0.1:1080 https://api.ipify.org   # → IP exit'а
 curl.exe --socks5-hostname 127.0.0.1:1080 https://www.youtube.com/robots.txt
 ```
 
-Браузер: SwitchyOmega / FoxyProxy → SOCKS5 `127.0.0.1:1080`. DNS резолвится на exit'е
-(SOCKS5-домены), локальное отравление резолвера исключено.
+Настройте приложение на SOCKS5 `127.0.0.1:1080` с удалённым разрешением имён.
+Проксируемые домены разрешаются на exit, direct-исключения используют прямой путь.
+SOCKS-клиент не перехватывает весь трафик устройства: для этого служат desktop и Android VPN.
+
+Постоянная установка exit, Reality/hysteria2, сетевые порты и systemd описаны в
+[DEPLOYMENT.md](DEPLOYMENT.md). Короткий пример выше предполагает доступный bootstrap
+и открытый фиксированный UDP-порт DHT; локальный bootstrap запускается отдельно.
 
 ## Рандеву (два канала)
 
 Exit публикует sealed-offer в оба канала — одно поколение и один `ts`, но не байт-в-байт: вид для DHT
 компактный (без hysteria2-эндпоинта, чей пришпиленный сертификат не влезает в лимит BEP 44 ~1000 Б), а
-вид для Nostr его содержит. Клиент сливает их по типу дата-плоскости. Поэтому discovery переживает
-блокировку или шейпинг любого из каналов:
+вид для Nostr его содержит. Клиент сливает их по типу дата-плоскости. Discovery может продолжаться
+через оставшийся доступный канал; при одном DHT клиент не получит сертификат hysteria2:
 
 - **Mainline DHT (BEP 44)** — mutable-запись по ключу ed25519 из PSK; republish каждые 60 с. Ставьте
   в `DHT_BOOTSTRAP` первой IPv4-ноду (часть публичных bootstrap'ов только IPv6, а bittorrent-dht —
-  udp4); свой bootstrap на exit'е (`:20001`) — самый надёжный.
+  udp4); свой bootstrap (`:20001`) полезен, но на случай переноса хоста нужен ещё один доступный bootstrap.
 - **Nostr-релеи** — parameterized-replaceable событие (kind 30078) под ключом secp256k1 из PSK,
   доставляется push и мгновенно новым подписчикам. Пул задаётся `MAGNETGATE_NOSTR_RELAYS`, отключение
   — `MAGNETGATE_NOSTR=off`.
 
-## Split-tunneling
+## Правила маршрутизации
 
-`MAGNETGATE_RULES=path/to/rules.json` (или `rules` в конфиге клиента):
+Node SOCKS-клиент читает поле `rules` из JSON-конфигурации:
+
 ```json
-{ "direct": ["ru", "*.local"], "proxy": [] }
+{ "rules": { "direct": ["ru", "local"], "proxy": [] } }
 ```
-При непустом `direct` всё несовпавшее идёт через туннель; при заданном непустом `proxy` — наоборот,
-только перечисленное через туннель, остальное напрямую.
+
+Совпадения `direct` имеют приоритет. Если `proxy` непустой, только совпавшие с ним домены идут
+через туннель; иначе через туннель идёт всё, кроме direct. Запись домена охватывает и поддомены.
+Текущий клиент не читает `MAGNETGATE_RULES`; используйте поле JSON.
+
+Desktop и Android предоставляют режимы Full и Split. Full направляет трафик через VPN, кроме
+явных direct-правил и системных/локальных обходов. Split использует встроенные списки и список
+сайтов пользователя. Исключения приложений настраиваются отдельно от сайтов. Сохранение,
+применение правил и дополнительная firewall-опция Windows описаны в инструкциях клиентов.
 
 ## Переменные окружения
 
@@ -121,7 +154,7 @@ Exit публикует sealed-offer в оба канала — одно пок�
 | `MAGNETGATE_PSK` | PSK exit'а из окружения, чтобы не попадать в argv/`ps` (argv — запасной вариант) |
 | `MAGNETGATE_PORT` / `MAGNETGATE_PUBLIC_HOST` | порт нативного канала и публичный хост в offer'е |
 | `MAGNETGATE_NODE_SLOT` / `MAGNETGATE_NODE_NAME` | exit: какой слот рандеву занимает нода (по умолчанию `0` — одиночная схема) и её имя в offer'е; две ноды делят один PSK, занимая разные слоты |
-| `MAGNETGATE_NODE_COUNTRY` | exit: необязательный двухбуквенный код страны (например `NL`, `FI`) в offer'е. Клиент показывает видимые коды в селекторе и может ограничиться одной страной — адрес при этом не показывается. Если не задан, нода просто не попадает в этот список |
+| `MAGNETGATE_NODE_COUNTRY` | exit: необязательный двухбуквенный код страны (например `NL`, `FI`) в offer'е. Desktop и Android показывают найденные страны как предпочтение с резервным выбором, если совпадений нет. Это не гарантия географии. Нода без кода не попадает в список стран |
 | `MAGNETGATE_SLOTS` | клиент: слоты через запятую, например `0,1` — тогда один PSK находит все ноды набора (то же, что `slots` в файле конфигурации) |
 | `MAGNETGATE_PEER_SLOTS` | exit: какие слоты нода проверяет и анонсирует в `peers`, например `0,1`; если не задано — сканирования нет, а клиент, знающий один слот, сам узнаёт остальные |
 | `MAGNETGATE_EXPECT_PEERS` | exit: писать `[alert]`, если ответило меньше N слотов-соседей (не задано — никогда) |
@@ -129,19 +162,22 @@ Exit публикует sealed-offer в оба канала — одно пок�
 | `MAGNETGATE_SLOT_DISCOVERY` | клиент: `0` — не добавлять слоты из списка `peers` (добавление всегда пишется в лог) |
 | `MAGNETGATE_PUBLISH_MS` | exit: период публикации (по умолчанию 60000); уменьшать только для тестов |
 | `DHT_BOOTSTRAP` | CSV bootstrap-нод; **первой IPv4-ноду**, свой `:20001` рекомендуется |
-| `MAGNETGATE_SEQ_FILE` | персистентность `seq` (обязательно на exit: рестарты инкрементируют, иначе нонс offer может повториться) |
+| `MAGNETGATE_SEQ_FILE` | устойчивое сохранение номера публикации до отправки; один publisher на файл (`flock` в systemd). Нонсы offer генерируются независимо случайным образом |
 | `MAGNETGATE_NOSTR` / `MAGNETGATE_NOSTR_RELAYS` | отключить Nostr-канал / переопределить пул релеев |
 | `MAGNETGATE_DATA_PLANE` | клиент: `auto` (по умолчанию — Reality/hysteria2, иначе native) или `mgt` (только native) |
-| `MAGNETGATE_RULES` | файл правил split-tunnel (клиент) |
+| `MAGNETGATE_CONFIG` | JSON-файл Node-клиента, если аргумент конфигурации/PSK не указан |
+| `MAGNETGATE_RULESETS_FILE` | exit: манифест списков для Android, по умолчанию `/etc/magnetgate-rulesets.json` |
 | `MAGNETGATE_SOCKS_HOST` | адрес bind SOCKS5-клиента (по умолчанию `127.0.0.1`; не открывать в LAN) |
 | `MAGNETGATE_ALLOW_PRIVATE` | exit: `1` разрешает CONNECT к loopback/link-local/RFC1918 (по умолчанию заблокировано — защита от SSRF) |
 | `MAGNETGATE_MAX_SESSIONS` / `MAGNETGATE_MAX_STREAMS` | лимиты exit'а (по умолчанию 512 / 256 на сессию) |
 | `MAGNETGATE_UDP_IDLE_MS` | exit: закрыть reliable-UDP-стрим после стольких мс молчания (по умолчанию 600000); иначе исчезнувший пир навсегда занимает слот |
 | `MAGNETGATE_HEALTH_FILE` | exit: писать в этот файл состояние публикации (последний put, число нод, счётчик неудач) |
 | `MAGNETGATE_ALERT_AFTER` | exit: предупреждать после N публикаций подряд, не достигших ни одной DHT-ноды (по умолчанию 5) |
-| `MAGNETGATE_ALERT_WEBHOOK` | exit: POST `{"text": ...}` на этот адрес, если health-проверка публикации не прошла, и один раз при восстановлении |
-| `MAGNETGATE_ALERT_TG_TOKEN` / `MAGNETGATE_ALERT_TG_CHAT` | exit: слать эти уведомления в Telegram (вместо вебхука или вместе с ним) |
-| `MAGNETGATE_ALERT_COOLDOWN_MIN` | exit: как часто всё ещё сломанная нода может повторять алерт (по умолчанию 30) |
+| `MAGNETGATE_DHT_PORT` | exit: фиксированный UDP-порт DHT; откройте его в firewall. Значение `0` выбирает случайный порт и не подходит для правила с фиксированным портом. Исходящая публикация не доказывает входящую доступность |
+| `MAGNETGATE_MIN_DHT_NODES` | healthcheck: меньшая таблица DHT после прогрева вызывает ошибку и требует проверки доступности (по умолчанию 100 нод, прогрев 30 минут) |
+| `MAGNETGATE_ALERT_WEBHOOK` | healthcheck: POST `{"text": ...}` на этот адрес, если health-проверка публикации не прошла, и один раз при восстановлении |
+| `MAGNETGATE_ALERT_TG_TOKEN` / `MAGNETGATE_ALERT_TG_CHAT` | healthcheck: слать эти уведомления в Telegram (вместо вебхука или вместе с ним) |
+| `MAGNETGATE_ALERT_COOLDOWN_MIN` | healthcheck: как часто всё ещё сломанная нода может повторять алерт (по умолчанию 30) |
 | `MAGNETGATE_TRANSPORT` | нативный канал: `tcp` (по умолчанию) или `udp` (экспериментальный reliable-UDP) |
 | `MAGNETGATE_REALITY_SNI` | exit: сайт, чей TLS заимствует Reality (по умолчанию `www.microsoft.com`) |
 | `MAGNETGATE_STATS` | клиент: логировать счётчики трафика по exit'ам каждые N секунд |
@@ -162,99 +198,79 @@ Exit публикует sealed-offer в оба канала — одно пок�
   ]
 }
 ```
-Несколько exit'ов: клиент находит offer'ы всех, раскладывает стримы round-robin'ом и автоматически
-фейловерится на здоровый (мёртвый уходит в cooldown на 30 с).
+Клиент находит offer нескольких exit, распределяет новые соединения и переключается при ошибках.
+Здоровье учитывается отдельно для каждой пары нода/транспорт с растущими паузами повторных попыток.
+Открытые соединения не переносятся прозрачно. Для одного PSK задайте числовой список
+`"slots": [0, 1]`; каждому publisher нужен свой слот в диапазоне 0–15.
 
 Автостарт в Windows (планировщик при логоне):
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\install-client-windows.ps1 -ConfigPath .\magnetgate.config.json
 ```
-Linux-автостарт: `scripts/magnetgate-client.service` (шаблон systemd-юнита).
+Linux-автостарт: установите `scripts/magnetgate-client.service` как `magnetgate-client@.service`
+и включите экземпляр для нужного пользователя; проверьте рабочий каталог и права на конфиг.
 
 ## Ротация кредов
 
 `scripts/rotate-dp.mjs` (ежедневный systemd-таймер, ставится `setup-singbox.sh`) ротирует Reality
 shortId+uuid и пароль hysteria2, сохраняя предыдущее поколение валидным один интервал (**grace-окно**)
 и сохраняя стабильную identity (reality-keypair / hy2-obfs / cert — чтобы пиннинг клиента не ломался).
-Exit watch'ит dp-файл и republish'ит за ~1 с, так что клиенты получают новые креды за секунды; клиент
-чисто переключает sing-box на новые параметры и на любом разрыве падает на нативный канал. Вручную:
+Exit отслеживает dp-файл и публикует новое объявление за ~1 с; клиенты получают параметры через
+discovery. Ротация перезапускает sing-box и прерывает его открытые соединения: приложения должны
+переподключиться. Native fallback зависит от доступности канала. Вручную:
 `systemctl start magnetgate-rotate.service`.
 
 ## Режим системного VPN (Windows)
 
-SOCKS5-клиент — это дата-плоскость; чтобы завернуть **весь системный трафик**,
-[tun2proxy](https://github.com/tun2proxy/tun2proxy) создаёт TUN-адаптер и подаёт всё в
-`127.0.0.1:1080` (DNS резолвится на exit'е). IP exit'а авто-байпасится, чтобы собственный аплинк
-клиента не перехватывался:
+Используйте [desktop-приложение](app/README.md): оно управляет TUN sing-box и native fallback,
+требует прав администратора. Строгая firewall-опция Full по умолчанию выключена; при включении
+сохраняет политику после остановки движка/приложения до явного Disconnect. Полевые тесты отказов
+и восстановления этой опции ещё нужны. Маршрутизация при работающем движке не защищает после его выхода.
 
-```powershell
-# из PowerShell с правами администратора:
-powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1        # подключить (скачает tun2proxy, pinned)
-powershell -ExecutionPolicy Bypass -File scripts\vpn-windows.ps1 -Off   # отключить
-```
-> Desktop управляет TUN sing-box и сохраняет native fallback. Full допускает direct-исключения,
-> Split направляет в туннель выбранные ресурсы. Строгая firewall-опция Full отключает исключения
-> и сохраняется после закрытия приложения до явного Disconnect. Старые PowerShell-лаунчеры
-> постоянной firewall-защиты не дают. Подробности — [app/README.md](app/README.md).
+`scripts/vpn-windows.ps1` (tun2proxy) и `scripts/vpn-singbox-windows.ps1` — устаревшие справочные
+лаунчеры. Постоянной firewall-защиты они не включают. Не запускайте их одновременно с desktop VPN.
 
-## Деплой (pull-based автодеплой)
+## Деплой
 
-Сервер сам подтягивает `main` с GitHub (без GitHub Actions и открытых портов):
-```bash
-# корень репозитория == /opt/magnetgate
-git init && git remote add origin https://github.com/danifest751/magnetgate.git
-git fetch origin && git checkout -f -B main origin/main
-
-# непривилегированный сервисный пользователь + каталог состояния + файл секретов (не в git)
-useradd --system --no-create-home --shell /usr/sbin/nologin magnetgate
-install -d -o magnetgate -g magnetgate -m 750 /var/lib/magnetgate
-umask 077 && cat > /etc/magnetgate.env <<'ENV'
-PSK=<ваш-128-битный-psk>
-MAGNETGATE_PORT=49001
-MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP>
-DHT_BOOTSTRAP=127.0.0.1:20001,router.bittorrent.com:6881
-ENV
-chown root:magnetgate /etc/magnetgate.env && chmod 640 /etc/magnetgate.env
-
-cp systemd/*.service systemd/*.timer /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now magnetgate-exit magnetgate-dht magnetgate-health.timer magnetgate-deploy.timer
-
-# дата-плоскости (Reality + hysteria2 + ежедневная ротация):
-MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
-```
-
-`magnetgate-deploy.timer` каждые 3 минуты запускает `scripts/deploy.sh`: fetch → hard reset на
-`origin/main` → `npm ci` (только если менялся lockfile) → копирование изменённых юнитов → рестарт
-сервисов. Exit, DHT и sing-box работают под непривилегированными пользователями в песочницах systemd
-(`NoNewPrivileges`, `ProtectSystem=strict`, сброшенные capabilities). Файл `/opt/magnetgate/.deploy-verify`
-заставит деплой требовать подписанный коммит (`git verify-commit`) перед запуском кода от root. (Деплой
-рестартит только exit/DHT magnetgate; sing-box не трогается, поэтому Reality/hysteria2-сессии переживают
-обновления.)
+[DEPLOYMENT.md](DEPLOYMENT.md) описывает подготовку Linux, порты, несколько нод, ротацию,
+резервные копии и обновления. `magnetgate-deploy.timer` проверяет `origin/main` каждые три минуты.
+Обновлятор выполняет `npm ci --ignore-scripts` и `npm test` для отдельного кандидата от пользователя
+`magnetgate-build`, затем активирует его и пытается откатить при ошибке активации.
+Он отказывается затирать отслеживаемые локальные изменения и перезапускает только включённые
+или активные exit/DHT-сервисы этого хоста. `.deploy-verify` включает проверку подписи и требует
+доверенных подписанных коммитов. Это отдельная мера от песочниц рабочих сервисов.
 
 ## Документация
 
-Дизайн-заметки, ТЗ, методика испытаний и ресёрч (с планом на 2026) лежат во внутренней папке `docs/`,
-намеренно не публикуемой в репозитории. Отчёты об испытаниях хранятся внутри и в репозиторий не попадают.
-Юнит-тесты: `npm test` (node:test). Правила коммитов: [CONTRIBUTING.md](CONTRIBUTING.md)
-(Conventional Commits, только английский, проверяется хуком `commit-msg`).
+- [Android на русском](app-android/README.ru.md) · [Android in English](app-android/README.md)
+- [Windows desktop](app/README.md)
+- [Установка Linux-сервера](DEPLOYMENT.md)
+- [Разработка и проверки](CONTRIBUTING.md)
+- [История изменений](CHANGELOG.md) · [Планы](ROADMAP.md)
+
+Публичные инструкции находятся в перечисленных отслеживаемых файлах. Внутренние заметки
+и материалы испытаний в `docs/` намеренно исключены из Git и не нужны для выполнения инструкций.
 
 ## Статус
 
-Реализовано и проверено в проде:
+Реализовано; объём проверок различается по компонентам и описан в инструкциях клиентов:
 
 - **Рандеву** по двум независимым каналам — Mainline DHT (BEP 44) + Nostr — с авто-слиянием/фейловером;
   offer'ы подписаны и зашифрованы под PSK.
 - **Дата-плоскости** — Reality (основная) и hysteria2 (альтернатива) через встроенный sing-box, плюс
-  нативный forward-secret мультиплекс как всегда доступный fallback; выбор и фейловер на каждое соединение.
-- **Ротация кредов** с grace-окном и распространением за ~1 с.
+  нативный forward-secret мультиплекс как fallback; выбор и фейловер на каждое соединение.
+- **Ротация кредов** с grace-окном и быстрой повторной публикацией offer.
+- **Несколько нод** с анонсами соседних слотов и здоровьем по транспортам.
+- **Android** с RU/EN, правилами приложений/сайтов и статусом свежей проверки; проверен на устройстве
+  Android 16 arm64, но не на всех моделях.
 - **Харденинг** — exit/DHT/sing-box работают непривилегированно в песочницах systemd; PSK не попадает
   в командную строку; exit блокирует egress на loopback/link-local/RFC1918 (защита от SSRF) и
   ограничивает число сессий/стримов; SOCKS слушает только loopback; скачанные бинарники пиннятся по
-  SHA-256; `npm ci` для воспроизводимых установок. Все скачиваемые и встраиваемые сторонние артефакты
-(sing-box, wintun, tun2proxy, rule-set'ы маршрутизации) запинены в `scripts/pins.json`, который читают
-скрипты загрузки — изменённый upstream-файл останавливает загрузку, а не тихо переписывает маршруты.
-`scripts/check-hygiene.mjs` (подключён к pre-commit-хуку) не даёт закоммитить приватные ключи,
-токены, полевые отчёты и реальные адреса хостов.
+  SHA-256; `npm ci` для воспроизводимых установок. Контрольные суммы клиентских бинарников и
+  загружаемых списков указаны в `scripts/pins.json`; Linux-установщик хранит свою контрольную сумму
+  архива. Поставляемые отдельно локальные файлы проверяйте перед сборкой. Android сверяет загруженные
+  списки с аутентифицированным манифестом. `scripts/check-hygiene.mjs` (подключён к pre-commit-хуку)
+  не даёт закоммитить приватные ключи, токены, полевые отчёты и реальные адреса хостов.
 
 Известные ограничения: обфускация нативного
 канала на PoC-уровне, а DHT видит IP участников put/get как у обычной BT-ноды. Target рандеву выводится
@@ -262,25 +278,11 @@ MAGNETGATE_PUBLIC_HOST=<PUBLIC_IP> bash scripts/setup-singbox.sh
 
 ## Роадмап
 
-> Подробно, включая дизайн **overlay-сети (entry/egress split)**, — в [ROADMAP.md](ROADMAP.md).
-
-**Фаза 3:**
-- ✅ **Пиннинг cert для hy2** — серверный cert теперь доставляется через Nostr-offer (DHT-offer
-  компактный, оба запечатаны разными нонсами), `insecure` для hysteria2 убран.
-- **Desktop с TUN sing-box** реализован; полевой тест отказов и восстановления firewall остаётся.
-
-**После Фазы 3:**
-- **Дата-плоскость на WebRTC DataChannel** (coturn на exit'е; DTLS выглядит как видеозвонок; встроенный
-  NAT-traversal) как ещё один тип `dp` — прямой P2P без фиксированного порта данных.
-- **Третий канал рандеву** — dead-drop через DoH / ENS как третичный путь discovery, чтобы в слое 1
-  было ≥3 независимых механизма.
-- **Мульти-exit** — несколько exit'ов, каждый ротирует Reality/hysteria2; клиент балансирует и
-  фейловерит между ними.
-- **Мультипат-агрегация** — нести одну сессию сразу по нескольким дата-плоскостям (в духе MPTCP), чтобы
-  блокировка одной снижала скорость, а не рвала сессию.
-- **Холодный fallback** — email/IMAP store-and-forward для сценариев полного шатдауна.
-- **Кроссплатформенные клиенты** — Linux/macOS/Android (sing-box кроссплатформенный) как сервис, плюс
-  автопровижининг exit'ов и health/метрики.
+[ROADMAP.md](ROADMAP.md) отделяет готовые функции от планов. Android, несколько нод,
+здоровье по транспортам и desktop TUN уже реализованы. Остаются расширение проверки устройств,
+контролируемые тесты отказов firewall Windows, распространение релизов, процесс подписания
+коммитов и автоматическое выделение слотов. Overlay entry/egress, третий discovery-канал,
+WebRTC, multipath и store-and-forward пока относятся к предложениям.
 
 ## Дисклеймер
 

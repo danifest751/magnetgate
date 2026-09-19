@@ -1,4 +1,4 @@
-# magnetgate desktop 0.3
+# magnetgate desktop 0.3.3
 
 The elevated Electron app manages a sing-box TUN process and a discovery/native SOCKS client.
 Reality and pinned hysteria2 run directly in sing-box; native is a fallback through the Node client.
@@ -11,7 +11,9 @@ Use Node.js 22.12 or later for desktop tooling; the core requires 20.19 or later
 ```powershell
 # repository root
 npm ci
-# sing-box.exe and wintun.dll must exist in tools/sing-box
+powershell -ExecutionPolicy Bypass -File scripts/get-singbox.ps1
+# Provide wintun.dll in tools/sing-box and verify it against scripts/pins.json.
+# get-singbox.ps1 fetches sing-box and public rule sets, not wintun.dll.
 cd app
 npm ci
 npm run install:electron
@@ -20,13 +22,20 @@ npm start
 npm run dist
 ```
 
-The portable artifact is `app/dist/magnetgate-0.3.2.exe`. The app requests Administrator at launch
+The portable artifact is `app/dist/magnetgate-0.3.3.exe`. The app requests Administrator at launch
 for TUN/firewall operations. Child processes are hidden and only owned processes are stopped.
 
 Builds use the valid empty example config by default. Add PSKs under Настройки → Серверы и ключи доступа.
 `MAGNETGATE_PERSONAL_BUILD=1` deliberately embeds the local `magnetgate.config.json`; such an artifact
 contains credentials and is for private use. The resource allowlist excludes local sing-box JSON
 configs and logs. Store user settings in Electron userData; use Open config folder to find it.
+
+## Related clients and versions
+
+This is the Windows x64 Electron client. It is separate from the native
+[Android client](../app-android/README.md), whose UI has a RU/EN switch. Desktop currently uses
+Russian labels. The root core version and Android package version are independent of desktop 0.3.3.
+`npm run dist` builds a local portable executable; it does not publish a GitHub release.
 
 ## Interface
 
@@ -35,7 +44,8 @@ The Russian UI has four screens: Подключение, Сайты, Настр�
 are displayed separately while a change is pending. Light/dark appearance follows Windows.
 
 Direct exceptions and tunnel domains are separate lists; editing either does not switch modes.
-Rule changes save automatically. Server keys and advanced settings use explicit Save buttons;
+Rule changes save automatically (unlike Android, where Save rules is explicit).
+Server keys and advanced settings use explicit Save buttons;
 unsaved drafts do not leak into unrelated saves. Existing userData configuration remains in use.
 Diagnostics shows live status, egress and the bounded log; Refresh reads the current status.
 
@@ -85,8 +95,17 @@ Startup waits up to 30 seconds for authenticated control and SOCKS endpoints bef
 Disconnect cancels that wait. If Windows delays termination, the app retains the owned process,
 offers Disconnect again and keeps the window open on failed shutdown.
 
+## Country and application rules
+
+The country selector is built from discovered offers. It is a preference with fallback when no
+endpoint matches, not a promise that every connection exits in that country. Diagnostics summarizes
+discovered nodes and their transports. Traffic counters describe observed activity, not link capacity.
+Desktop application bypass uses executable names; Android selects installed application packages.
+
 ## Protocol migration
 
 Core 0.11 uses native wire v4 and v4 sealed rendezvous envelopes. Clients and exit must be updated
 together. Offer JSON remains schema v3; desktop endpoint snapshots are schema v4. The legacy native
 helper names `frame2`/`makeCodecV2` do not imply old-wire compatibility.
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for the validation commands and [README.md](../README.md) for discovery and exit configuration.

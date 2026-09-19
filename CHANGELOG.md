@@ -1,6 +1,47 @@
 # Changelog
 
+Entries under Unreleased describe development on `main`, not published installers. Root core,
+Windows desktop and Android package versions are independent; the current values are listed in
+[README.md](README.md#clients-and-requirements). Historical version headings describe their
+development milestone and do not override the package manifests.
+
 ## Unreleased
+
+### Android: redesigned interface and RU/EN (2026-09-19)
+
+- Reorganized the client into Home, Rules and Settings with the new app icon, light/dark appearance,
+  explicit save/apply states and separate diagnostics. Rules combine website routing with application
+  selection; saved changes apply on reconnect. Country preference affects new connections and may
+  fall back when no discovered node matches.
+- Added English alongside Russian and a visible, persistent RU/EN switch. Switching languages keeps
+  the VPN running and preserves rule drafts. Both resource sets are bundled for offline use;
+  diagnostics formats numbers, countries and user-facing errors in the selected language.
+- Connection status now distinguishes interface startup, discovery, a fresh successful tunnel
+  check, stale results and failures. Diagnostics separates latency from full HTTPS time, shows the
+  service's last measured exit and reports observed sent/received traffic.
+- Replaced the unsupported bounded-read API in the health probe with an API-26-compatible read
+  loop. Android still requires API 26+ and a supported 64-bit ABI; this does not establish coverage
+  of every Android version or manufacturer.
+- Validated the UI and language changes on an Android 16 ARM64 phone, including system themes and
+  enlarged text; Android build, JVM tests, lint and cross-component consistency checks passed.
+
+### Android: service health and network recovery (2026-09-18–19)
+
+- Made the VPN service the owner of the core, avoiding competing activity/service starts, and
+  synchronized connection/reconnection with service shutdown. Checks reject obsolete results.
+- Passed network changes and the actual interface list/types into the engine so it can recover
+  after Wi-Fi/mobile handover. Added device and network-switch acceptance scripts with private
+  reports; these deliberately interrupt connectivity and are documented in the Android guide.
+- Added service restart handling, measurement history, application selection, country preference
+  and traffic visibility. Transport health also considers first-byte behavior rather than treating
+  an opened stream as sufficient evidence of a responsive path.
+
+### Documentation alignment (2026-09-19)
+
+- Synchronized English/Russian project overviews, current versions, routing behavior, compatibility
+  and validation limits. Added paired Android guides and a Linux deployment/rollback guide.
+- Updated desktop build paths and contributor checks. Separated implemented multi-node/Android
+  features from pending work and overlay proposals in the roadmap.
 
 ### Android: DNS through the tunnel, resolved to IPv4 only (2026-09-17)
 
@@ -25,9 +66,10 @@
 - **The egress was measured before the tunnel existed**, using the core's own native plane, which this
   mobile carrier blocks: the screen showed a failure for a tunnel that then worked through reality. It
   is measured once the tunnel is up, and the screen re-checks when the service starts.
-- **The core's SOCKS port was cached across a restart.** The core is started twice on every ordinary
-  connect - once by the screen, once by the service - and the second start hands out a new port, so the
-  kept one refused connections. The port is read from the live status at the moment of use.
+- **The core's SOCKS port was cached across a restart.** At that revision the core was started twice
+  on an ordinary connect - once by the screen, once by the service - and the second start handed out
+  a new port, so the kept one refused connections. Reading the live port fixed that stale reference;
+  later changes above made the service the sole owner.
 - The tun MTU is 1400, the value the desktop uses; 1500 left no room for what reality wraps around it.
 - First run on real hardware (Xiaomi, Android 16, arm64): the tunnel carries ordinary application
   traffic over reality on mobile data and on Wi-Fi and survives switching between them, and DHT
