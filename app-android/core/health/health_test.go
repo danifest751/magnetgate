@@ -155,3 +155,47 @@ func TestPlanesAndNodesAreIndependent(t *testing.T) {
 		t.Errorf("a success must reset the escalation, got fails=%d", got.Fails)
 	}
 }
+
+// The verdict table must stay in step with judgeFirstByte in src/health.mjs, where the policy lives
+// first. Every line here has a twin in tests/health.test.mjs.
+func TestJudgeFirstByte(t *testing.T) {
+	cases := []struct {
+		name            string
+		elapsedMs       int64
+		deadlineMs      int64
+		gotByte         bool
+		closedWithError bool
+		want            Verdict
+	}{
+		{"a prompt answer is healthy", 200, 0, true, false, VerdictOk},
+		{"an answer that took seconds loses its turn", FirstByteSlowMs, 0, true, false, VerdictSlow},
+		{"a young silent stream is not judged", 500, 0, false, false, VerdictWait},
+		{"silence past the deadline demotes", FirstByteDeadlineMs, 0, false, false, VerdictSlow},
+		{"a stream that died having carried nothing is the failure the open could not report",
+			15_000, 0, false, true, VerdictFail},
+		{"data first, then a broken stream, says nothing against the path", 100, 0, true, true, VerdictOk},
+		{"the caller's own deadline decides when silence counts", 25, 20, false, false, VerdictSlow},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := JudgeFirstByte(c.elapsedMs, c.deadlineMs, c.gotByte, c.closedWithError)
+			if got != c.want {
+				t.Fatalf("got %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// The thresholds have to sit between a healthy phone and a broken exit, both measured on the owner's
+// device on 2026-09-19: 643 ms at p90 for a whole round trip, 12-16 s for the failures worth acting on.
+func TestFirstByteThresholdsSitBetweenHealthyAndBroken(t *testing.T) {
+	if FirstByteSlowMs <= 643 {
+		t.Fatalf("a healthy phone would demote itself: %d ms", FirstByteSlowMs)
+	}
+	if FirstByteSlowMs >= 12_000 {
+		t.Fatalf("a dead exit must be demoted long before it times out: %d ms", FirstByteSlowMs)
+	}
+	if FirstByteDeadlineMs <= FirstByteSlowMs || FirstByteDeadlineMs >= BackoffMs[0] {
+		t.Fatalf("silence is judged after a slow answer and before a pause would end: %d ms", FirstByteDeadlineMs)
+	}
+}

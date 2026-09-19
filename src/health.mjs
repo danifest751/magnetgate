@@ -27,6 +27,48 @@ export const SLOW_MS = 1_500
 // to move somewhere else, short enough that a path which recovers is tried again on its own.
 export const DEMOTE_MS = 60_000
 
+// The open is not always evidence. On the phone the client does not dial the exit itself: it opens a
+// loopback SOCKS connection to the engine, and the engine answers "connected" while it is still
+// sniffing, before it has dialled anything (sing/protocol/socks/lazy.go: LazyConn.Read writes the
+// success reply on the first read). Measured 530 times on 2026-09-19: that reply arrives in a median
+// of 5 ms while the path behind it costs 378 ms - and arrives just the same when the path is dead, so
+// a failure 15 s later is reported to nobody. Every judgement built on the open was therefore blind on
+// that client, which is why a phone kept sending half its traffic into an exit that carried nothing.
+//
+// What cannot lie is the first byte that comes back over the connection the user is actually using.
+// It costs no extra traffic, it measures the whole chain, and a path that never produces one is dead
+// whatever its handshake said.
+//
+// The threshold sits well above a healthy phone (p90 of the whole round trip was 643 ms on Wi-Fi and
+// 358 ms of that was the round trip itself) and well below the failures worth acting on (12-16 s).
+export const FIRST_BYTE_SLOW_MS = 2_000
+
+// A connection that has produced nothing by now is treated as a slow path rather than a dead one: the
+// caller may simply be waiting for a server that has nothing to say yet, and demotion is reversible
+// while a pause is not. A real failure still arrives through [closedWithError].
+export const FIRST_BYTE_DEADLINE_MS = 8_000
+
+// What one connection's first byte says about the plane that carried it. Pure, so the decision can be
+// tested without a network and shared between the clients.
+//
+// 'wait' means "no verdict yet" - the connection is young and silent, which is normal.
+export function judgeFirstByte({
+  elapsedMs = 0,
+  gotByte = false,
+  closedWithError = false,
+  // The deadline is an argument rather than a constant read from inside, because the thing that decides
+  // a connection has been silent long enough is a timer somewhere, and a timer that fires on one
+  // schedule while the verdict is judged against another simply returns 'wait' for ever. That is not
+  // hypothetical: it was the first version of this, and the test below is the one that caught it.
+  deadlineMs = FIRST_BYTE_DEADLINE_MS,
+} = {}) {
+  const elapsed = Number(elapsedMs) || 0
+  if (gotByte) return elapsed >= FIRST_BYTE_SLOW_MS ? 'slow' : 'ok'
+  if (closedWithError) return 'fail'
+  const deadline = Number(deadlineMs) > 0 ? Number(deadlineMs) : FIRST_BYTE_DEADLINE_MS
+  return elapsed >= deadline ? 'slow' : 'wait'
+}
+
 export function nextBackoff(fails) {
   const count = Math.max(1, Number(fails) || 1)
   return BACKOFF_MS[Math.min(count, BACKOFF_MS.length) - 1]

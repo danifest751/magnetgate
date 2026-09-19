@@ -1,6 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { BACKOFF_MS, DEMOTE_MS, SLOW_MS, createPlaneHealth, nextBackoff } from '../src/health.mjs'
+import {
+  BACKOFF_MS,
+  DEMOTE_MS,
+  FIRST_BYTE_DEADLINE_MS,
+  FIRST_BYTE_SLOW_MS,
+  SLOW_MS,
+  createPlaneHealth,
+  judgeFirstByte,
+  nextBackoff,
+} from '../src/health.mjs'
 
 test('backoff grows with consecutive failures and stops growing', () => {
   assert.equal(nextBackoff(1), BACKOFF_MS[0])
@@ -125,4 +134,51 @@ test('cooling() distinguishes a paused plane from a demoted one', () => {
 test('the slow threshold is what an open costs when the path is unwell, not when it is busy', () => {
   assert.ok(SLOW_MS >= 1_000, 'a normal open is milliseconds; anything under a second would be noise')
   assert.ok(SLOW_MS <= BACKOFF_MS[0] / 10, 'and it has to fire long before a pause would')
+})
+
+test('the first byte judges the plane, because the open does not always dial', () => {
+  assert.equal(judgeFirstByte({ gotByte: true, elapsedMs: 200 }), 'ok')
+  assert.equal(
+    judgeFirstByte({ gotByte: true, elapsedMs: FIRST_BYTE_SLOW_MS }),
+    'slow',
+    'a path that answers, but takes seconds about it, must lose its turn'
+  )
+  assert.equal(
+    judgeFirstByte({ gotByte: false, elapsedMs: 500 }),
+    'wait',
+    'a young silent connection is normal and must not be judged at all'
+  )
+  assert.equal(
+    judgeFirstByte({ gotByte: false, elapsedMs: FIRST_BYTE_DEADLINE_MS }),
+    'slow',
+    'nothing at all by the deadline demotes the plane - it does not pause it, the caller may be waiting'
+  )
+  assert.equal(
+    judgeFirstByte({ gotByte: false, closedWithError: true, elapsedMs: 15_000 }),
+    'fail',
+    'a connection that died without ever answering is the failure the open could not report'
+  )
+  assert.equal(
+    judgeFirstByte({ gotByte: true, closedWithError: true, elapsedMs: 100 }),
+    'ok',
+    'a stream that carried data and then broke says nothing bad about the path that carried it'
+  )
+  assert.equal(judgeFirstByte(), 'wait', 'no evidence is not a verdict')
+  assert.equal(
+    judgeFirstByte({ gotByte: false, elapsedMs: 25, deadlineMs: 20 }),
+    'slow',
+    'whoever holds the timer decides when silence has lasted long enough, or nothing is ever judged'
+  )
+})
+
+test('the first-byte thresholds sit between a healthy phone and a broken exit', () => {
+  // Measured on the owner's phone on 2026-09-19: the whole round trip was 643 ms at p90 on Wi-Fi, and
+  // the failures worth acting on were 12-16 s.
+  assert.ok(FIRST_BYTE_SLOW_MS > 643, 'a healthy phone must not demote itself')
+  assert.ok(FIRST_BYTE_SLOW_MS < 12_000, 'and a dead exit must be demoted long before it times out')
+  assert.ok(
+    FIRST_BYTE_DEADLINE_MS > FIRST_BYTE_SLOW_MS,
+    'silence is judged later than a slow answer, not sooner'
+  )
+  assert.ok(FIRST_BYTE_DEADLINE_MS < BACKOFF_MS[0], 'and it must say something before a pause would end')
 })

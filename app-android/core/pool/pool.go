@@ -90,9 +90,12 @@ type Config struct {
 	// holds the caller for as long as it likes - measured at 15 to 18 seconds on a phone - while the
 	// application on top gives up after three and reports a reset connection. Zero means the default.
 	OpenTimeout time.Duration
-	Fresh       time.Duration
-	Now         func() time.Time
-	Logf        func(format string, args ...any)
+	// FirstByteDeadline is how long a stream may stay silent before its plane is demoted for it. Zero
+	// means health.FirstByteDeadlineMs; tests shorten it so that silence can be observed in milliseconds.
+	FirstByteDeadline time.Duration
+	Fresh             time.Duration
+	Now               func() time.Time
+	Logf              func(format string, args ...any)
 }
 
 // Pool is the data plane.
@@ -264,7 +267,27 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 					p.rr = (start + i + 1) % len(candidates)
 					p.mu.Unlock()
 					p.logf("stream to %s:%d via %s slot %d", host, port, plane, node.Slot)
-					return conn, nil
+					// The open above is worth what it measured, which on this client is a loopback reply
+					// from the engine written before it dialled anything. What the stream does next is
+					// worth more, so the verdict is revisited when the first byte comes back - or fails
+					// to (see watchFirstByte).
+					id, slot := idOf(node.Slot), node.Slot
+					return watchFirstByte(conn, p.cfg.FirstByteDeadline, func(verdict health.Verdict, after time.Duration) {
+						switch verdict {
+						case health.VerdictOk:
+							p.cfg.Health.Ok(id, plane)
+						case health.VerdictSlow:
+							demotion := p.cfg.Health.Slow(id, plane)
+							p.logf("slow plane: %s slot %d answered after %s, others go first for %s",
+								plane, slot, after.Round(time.Millisecond),
+								time.Duration(demotion.DemoteMs)*time.Millisecond)
+						case health.VerdictFail:
+							record := p.cfg.Health.Fail(id, plane)
+							p.logf("dead plane: %s slot %d carried nothing in %s, paused for %s",
+								plane, slot, after.Round(time.Millisecond),
+								time.Duration(record.BackoffMs)*time.Millisecond)
+						}
+					}), nil
 				}
 				lastErr = err
 				// A plane the engine has not been told about yet is this client reconfiguring itself, not

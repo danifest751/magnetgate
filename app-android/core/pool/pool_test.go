@@ -585,3 +585,112 @@ func TestOneAttemptIsBounded(t *testing.T) {
 		t.Fatalf("a plane that could not answer in time is paused, not demoted: %+v", cooling)
 	}
 }
+
+// scriptedConn is a stream that answers - or never answers - on command, which is the difference the
+// open cannot see on this client.
+type scriptedConn struct {
+	after time.Duration // how long before the first byte arrives
+	fail  error         // or the error the stream dies with, with nothing read
+	mu    sync.Mutex
+	done  bool
+}
+
+func (c *scriptedConn) Read(p []byte) (int, error) {
+	c.mu.Lock()
+	if c.done {
+		c.mu.Unlock()
+		return 0, io.EOF
+	}
+	c.done = true
+	c.mu.Unlock()
+	if c.fail != nil {
+		return 0, c.fail
+	}
+	time.Sleep(c.after)
+	p[0] = 'x'
+	return 1, nil
+}
+func (c *scriptedConn) Write(p []byte) (int, error) { return len(p), nil }
+func (c *scriptedConn) CloseWrite() error           { return nil }
+func (c *scriptedConn) Close() error                { return nil }
+
+func scripted(plane string, conn Conn) Connector {
+	return ConnectorFunc(func(context.Context, Node, json.RawMessage, Target) (Conn, error) { return conn, nil })
+}
+
+// The open on this client is a loopback reply the engine writes before it dials, so it is always fast
+// and says nothing. Everything below is about what the stream does afterwards.
+func TestAPlaneThatOpensFastAndThenCarriesNothingIsPaused(t *testing.T) {
+	dead := &scriptedConn{fail: errors.New("context deadline exceeded")}
+	p := New(Config{
+		Preference: []string{"reality"},
+		Connectors: map[string]Connector{"reality": scripted("reality", dead)},
+	})
+	p.Update(node(t, 0, "reality"))
+
+	stream, err := p.Dial(context.Background(), "target.test", 80)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	if cooling := p.Cooling(0); len(cooling) != 0 {
+		t.Fatalf("nothing is known against the plane until the stream says so: %+v", cooling)
+	}
+
+	buf := make([]byte, 1)
+	if _, err := stream.Read(buf); err == nil {
+		t.Fatal("this stream is supposed to die")
+	}
+	cooling := p.Cooling(0)
+	if len(cooling) != 1 || cooling[0].Plane != "reality" || cooling[0].Slow {
+		t.Fatalf("a stream that carried nothing must pause its plane, not demote it: %+v", cooling)
+	}
+	if cooling[0].Fails != 1 {
+		t.Fatalf("expected one failure recorded, got %+v", cooling[0])
+	}
+}
+
+func TestAPlaneWhoseFirstByteIsLateIsDemoted(t *testing.T) {
+	late := &scriptedConn{after: 60 * time.Millisecond}
+	p := New(Config{
+		Preference: []string{"reality"},
+		Connectors: map[string]Connector{"reality": scripted("reality", late)},
+		// the policy's own threshold is two seconds; the test moves it, not the verdict
+		FirstByteDeadline: time.Hour,
+	})
+	p.Update(node(t, 0, "reality"))
+	stream, err := p.Dial(context.Background(), "target.test", 80)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	buf := make([]byte, 1)
+	if _, err := stream.Read(buf); err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	// 60 ms is well inside the threshold, so this one stays healthy: the test exists to prove the
+	// watcher does not demote everything it touches
+	if cooling := p.Cooling(0); len(cooling) != 0 {
+		t.Fatalf("a prompt answer must leave the plane alone: %+v", cooling)
+	}
+}
+
+func TestSilenceDemotesThePlaneWithoutWaitingForTheCaller(t *testing.T) {
+	mute := &scriptedConn{after: time.Hour}
+	p := New(Config{
+		Preference:        []string{"reality"},
+		Connectors:        map[string]Connector{"reality": scripted("reality", mute)},
+		FirstByteDeadline: 20 * time.Millisecond,
+	})
+	p.Update(node(t, 0, "reality"))
+	if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	// nobody reads, nobody closes - exactly the connection whose Read never returns
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cooling := p.Cooling(0); len(cooling) == 1 && cooling[0].Slow {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("a stream silent past the deadline must demote its plane: %+v", p.Cooling(0))
+}
