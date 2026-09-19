@@ -117,6 +117,16 @@ class MgVpnService : VpnService() {
   private var engineLogLevel = "info"
 
   /**
+   * The slot whose exits are pointed at a black hole for this tunnel, or -1.
+   *
+   * An acceptance run asks for it with `-e breakslot <n>`, and only a debuggable build listens: it makes
+   * one node's path dead on demand, which is the only way to check that the client leaves such a path
+   * without stopping a service that other people are using. Like every hook here, it dies with the
+   * tunnel.
+   */
+  private var brokenSlot = -1
+
+  /**
    * The routing policy as it was when the tunnel came up. It is captured once rather than re-read on
    * every engine reload: a reload happens because the set of nodes changed, and it must not quietly
    * adopt a mode the user picked afterwards - that would move traffic without them reconnecting.
@@ -150,6 +160,12 @@ class MgVpnService : VpnService() {
     tun = null
     super.onDestroy()
   }
+
+  /**
+   * Whether this build may be driven from a shell; the same gate the launch hooks in the activity use.
+   */
+  private fun debuggable(): Boolean =
+    (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
   /**
    * The VPN was taken away: the user revoked it, or gave it to another app.
@@ -192,6 +208,8 @@ class MgVpnService : VpnService() {
       "trace", "debug", "info", "warn", "error" -> intent.getStringExtra("enginelog")!!.lowercase()
       else -> "info"
     }
+    brokenSlot = intent?.getStringExtra("breakslot")?.toIntOrNull()?.takeIf { debuggable() } ?: -1
+    if (brokenSlot >= 0) Log.w(TAG, "acceptance hook: slot $brokenSlot is pointed at a black hole")
     try {
       startTunnel(bootstrap, relays, coreless, modeExtra)
     } catch (error: Throwable) {
@@ -302,6 +320,7 @@ class MgVpnService : VpnService() {
         val built = SingBoxConfig.build(
           port, coreless, nodes, excludedPackages,
           policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
+          brokenSlot,
         )
 
         Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
@@ -362,6 +381,7 @@ class MgVpnService : VpnService() {
       val built = SingBoxConfig.build(
         corePort, false, discoveredNodes(), excludedPackages,
         policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
+        brokenSlot,
       )
       Mgbox.forgetPlaneSocksPorts()
       Mgbox.reloadEngine(built.json)

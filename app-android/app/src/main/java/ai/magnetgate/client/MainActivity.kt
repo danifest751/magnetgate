@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
             modeExtra = extras?.getStringExtra("mode").orEmpty(),
             engineLogExtra = extras?.getStringExtra("enginelog").orEmpty(),
             screenExtra = extras?.getStringExtra("screen").orEmpty(),
+            breakSlotExtra = extras?.getStringExtra("breakslot").orEmpty(),
           )
         }
       }

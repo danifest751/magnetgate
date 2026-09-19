@@ -59,6 +59,14 @@ object SingBoxConfig {
     // way to see where a connection waits before the core is dialled. Debug is for a hunt, not for every
     // day: it is several times the volume, and it names the domains this phone visits.
     logLevel: String = "info",
+    // An acceptance hook, and only ever set by one: the slot whose exits are pointed at an address that
+    // answers nothing, so that a dead path can be produced on demand without touching a live node.
+    //
+    // It exists because the failure that matters here cannot be simulated at any smaller scale. A plane
+    // whose open succeeds and whose stream then carries nothing is invisible to everything except the
+    // stream itself (health.JudgeFirstByte), so proving that the client leaves such a path needs the
+    // real chain - core, engine, reality - with one real exit replaced by a black hole. -1 is off.
+    brokenSlot: Int = -1,
   ): Built {
     val outbounds = JSONArray()
     val planeInbounds = JSONArray()
@@ -84,6 +92,9 @@ object SingBoxConfig {
         if (type != "reality" && type != "hy2") continue // the core speaks the rest itself
         val outbound = transportOutbound(plane) ?: continue
         val tag = "exit-${node.slot}-$type"
+        // TEST-NET-3 (RFC 5737): routed nowhere, so every dial through this plane opens, waits and dies -
+        // which is exactly what a node whose reality endpoint has stopped answering looks like from here.
+        if (node.slot == brokenSlot) outbound.put("server", "203.0.113.1")
         outbound.put("tag", tag)
         outbounds.put(outbound)
 
