@@ -228,8 +228,36 @@ func TestEveryPlaneCoolingIsItsOwnError(t *testing.T) {
 	if !errors.Is(err, ErrAllCooling) {
 		t.Fatalf("expected ErrAllCooling, got %v", err)
 	}
-	if mgt.count() != 1 {
-		t.Fatalf("a cooling plane must not be retried, got %d attempt(s)", mgt.count())
+	// The pause exists to stop a client hammering a path that just failed. It was never meant to mean
+	// "this phone has no internet", and with nothing else left the pool tries the paused pair once
+	// rather than refusing - measured on the owner's phone on 19.09, where refusing meant ten minutes
+	// of every connection and every DNS query answered with a rejection.
+	if mgt.count() != 2 {
+		t.Fatalf("with nothing else to offer, the paused plane must be tried once, got %d attempt(s)", mgt.count())
+	}
+}
+
+// The rule the test above used to state, where it still holds: a paused plane is skipped for as long as
+// something else can carry the stream.
+func TestACoolingPlaneIsSkippedWhileAnotherWorks(t *testing.T) {
+	broken := &fakePlane{plane: "reality", err: errors.New("connection refused")}
+	working := &fakePlane{plane: "hy2"}
+	p := newTestPool(t, map[string]Connector{"reality": broken, "hy2": working}, "reality", "hy2")
+	p.Update(node(t, 0, "reality", "hy2"))
+
+	if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+		t.Fatalf("the first stream must fall through to hy2: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := p.Dial(context.Background(), "target.test", 80); err != nil {
+			t.Fatalf("stream %d: %v", i, err)
+		}
+	}
+	if broken.count() != 1 {
+		t.Fatalf("the paused plane must not be retried while hy2 carries everything, got %d", broken.count())
+	}
+	if working.count() != 4 {
+		t.Fatalf("expected hy2 to carry all four streams, got %d", working.count())
 	}
 }
 

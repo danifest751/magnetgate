@@ -69,6 +69,16 @@ export function judgeFirstByte({
   return elapsed >= deadline ? 'slow' : 'wait'
 }
 
+// One network event kills every live stream at once, and each of them arrives here as its own failure.
+// Counted separately they walk a pair up the backoff ladder in a second - 30 s, then two minutes, then
+// ten - and when every pair has been walked up, the client has nothing left to offer and refuses
+// everything, DNS included. Measured on the owner's phone on 2026-09-19: two bursts of refusals exactly
+// ten minutes apart, which is BACKOFF_MS[2], with the phone unusable in between.
+//
+// So a burst is one failure. Inside this window a pair keeps the cooldown it already has: the path has
+// not failed twice, it has failed once and taken fifty connections down with it.
+export const FAIL_WINDOW_MS = 5_000
+
 export function nextBackoff(fails) {
   const count = Math.max(1, Number(fails) || 1)
   return BACKOFF_MS[Math.min(count, BACKOFF_MS.length) - 1]
@@ -82,11 +92,15 @@ export function createPlaneHealth({ now = () => Date.now() } = {}) {
     // record a transport failure for one plane of one node, and return the cooldown applied
     fail(exitId, type) {
       const key = keyOf(exitId, type)
-      const previous = state.get(key) ?? { fails: 0, until: 0, demotedUntil: 0 }
+      const previous = state.get(key) ?? { fails: 0, until: 0, demotedUntil: 0, failedAt: 0 }
+      // a second failure inside the window is the same event as the first; see FAIL_WINDOW_MS
+      if (previous.failedAt && now() - previous.failedAt < FAIL_WINDOW_MS) {
+        return { fails: previous.fails, until: previous.until, backoffMs: nextBackoff(previous.fails), repeat: true }
+      }
       const fails = previous.fails + 1
       const until = now() + nextBackoff(fails)
-      state.set(key, { fails, until, demotedUntil: previous.demotedUntil })
-      return { fails, until, backoffMs: nextBackoff(fails) }
+      state.set(key, { fails, until, demotedUntil: previous.demotedUntil, failedAt: now() })
+      return { fails, until, backoffMs: nextBackoff(fails), repeat: false }
     },
     // a plane that worked quickly is immediately healthy again, demotion and all
     ok(exitId, type) {

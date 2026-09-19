@@ -199,3 +199,37 @@ func TestFirstByteThresholdsSitBetweenHealthyAndBroken(t *testing.T) {
 		t.Fatalf("silence is judged after a slow answer and before a pause would end: %d ms", FirstByteDeadlineMs)
 	}
 }
+
+// One network event kills every live stream at once, and each arrives here as its own failure. Counted
+// separately they walk a pair up the ladder in a second, and once every pair has been walked up the
+// pool has nothing to offer and refuses everything, DNS included. Measured on the owner's phone on
+// 2026-09-19: two bursts of refusals exactly ten minutes apart, which is BackoffMs[2].
+func TestABurstOfFailuresIsOneFailure(t *testing.T) {
+	clock := time.UnixMilli(1000)
+	h := New(func() time.Time { return clock })
+
+	first := h.Fail("0", "reality")
+	if first.Fails != 1 || first.BackoffMs != BackoffMs[0] {
+		t.Fatalf("the first failure is the first step of the ladder: %+v", first)
+	}
+	for i := 0; i < 49; i++ {
+		clock = clock.Add(10 * time.Millisecond)
+		repeat := h.Fail("0", "reality")
+		if !repeat.Repeat {
+			t.Fatalf("failure %d inside the window must be folded into the first: %+v", i, repeat)
+		}
+		if repeat.Until != first.Until {
+			t.Fatalf("a folded failure must not extend the pause: %+v against %+v", repeat, first)
+		}
+	}
+	if cooling := h.Cooling("0"); len(cooling) != 1 || cooling[0].Fails != 1 {
+		t.Fatalf("fifty dead streams from one event are one failure: %+v", cooling)
+	}
+
+	// A genuinely separate failure, later, still escalates: that is what the ladder is for.
+	clock = clock.Add(time.Duration(FailWindowMs+1) * time.Millisecond)
+	second := h.Fail("0", "reality")
+	if second.Repeat || second.Fails != 2 || second.BackoffMs != BackoffMs[1] {
+		t.Fatalf("a later failure is a second failure: %+v", second)
+	}
+}

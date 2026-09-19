@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   BACKOFF_MS,
   DEMOTE_MS,
+  FAIL_WINDOW_MS,
   FIRST_BYTE_DEADLINE_MS,
   FIRST_BYTE_SLOW_MS,
   SLOW_MS,
@@ -181,4 +182,30 @@ test('the first-byte thresholds sit between a healthy phone and a broken exit', 
     'silence is judged later than a slow answer, not sooner'
   )
   assert.ok(FIRST_BYTE_DEADLINE_MS < BACKOFF_MS[0], 'and it must say something before a pause would end')
+})
+
+test('a burst of failures from one network event is one failure, not fifty', () => {
+  let clock = 1000
+  const health = createPlaneHealth({ now: () => clock })
+
+  // one event, fifty dead streams: this is what a Wi-Fi handover looks like from inside
+  const first = health.fail(0, 'reality')
+  for (let i = 0; i < 49; i++) {
+    clock += 10
+    const repeat = health.fail(0, 'reality')
+    assert.equal(repeat.repeat, true, 'a failure inside the window must not escalate anything')
+    assert.equal(repeat.until, first.until, 'and must not extend the pause it already has')
+  }
+  assert.equal(health.cooling(0)[0].fails, 1, 'one event is one failure')
+  assert.equal(
+    health.cooling(0)[0].until,
+    1000 + BACKOFF_MS[0],
+    'a phone must not be paused for ten minutes because one handover killed fifty streams'
+  )
+
+  // a genuinely separate failure, later, still escalates - that is what the ladder is for
+  clock += FAIL_WINDOW_MS + 1
+  const second = health.fail(0, 'reality')
+  assert.equal(second.fails, 2)
+  assert.equal(second.backoffMs, BACKOFF_MS[1])
 })

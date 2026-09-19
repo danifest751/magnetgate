@@ -352,13 +352,71 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 			}
 		}
 	}
-	if attempts == 0 {
-		if cooling > 0 {
-			return nil, ErrAllCooling
+	if attempts == 0 && cooling > 0 {
+		// Every pair is paused, and refusing here is worse than trying. The pause exists to stop a client
+		// hammering a path that just failed; it was never meant to mean "this phone has no internet".
+		// Measured on the owner's phone on 19.09: one network event paused every pair at once, and for
+		// ten minutes the core answered every connection - and every DNS query - with a refusal, which is
+		// what "it hung" looked like from the outside.
+		//
+		// So the last resort is the pair whose pause ends soonest: the one the policy dislikes least.
+		if node, plane, ok := p.leastCooling(candidates); ok {
+			p.logf("every plane is paused; trying %s slot %d anyway rather than refusing", plane, node.Slot)
+			openCtx, cancel := context.WithTimeout(ctx, p.cfg.OpenTimeout)
+			conn, err := p.cfg.Connectors[plane].Open(openCtx, node, node.Offer.Pick([]string{plane}), target)
+			cancel()
+			if err == nil {
+				p.logf("stream to %s:%d via %s slot %d (last resort)", host, port, plane, node.Slot)
+				id, slot := idOf(node.Slot), node.Slot
+				entry := &liveEntry{row: Live{
+					Host: host, Port: port, Plane: plane, Slot: slot, OpenedAt: p.now().UnixMilli(),
+				}}
+				p.live.add(entry)
+				return watchFirstByte(conn, p.cfg.FirstByteDeadline, func(verdict health.Verdict, after time.Duration) {
+					if verdict == health.VerdictOk {
+						p.cfg.Health.Ok(id, plane)
+					}
+					// a last-resort attempt that fails again says nothing new: the pair is already paused
+				}, func(sent, received int64) {
+					entry.count(sent, received)
+					p.countBytes(sent, received)
+				}, func() { entry.close(p.now().UnixMilli()) }), nil
+			}
+			lastErr = err
 		}
+		return nil, ErrAllCooling
+	}
+	if attempts == 0 {
 		return nil, ErrNoPlane
 	}
 	return nil, lastErr
+}
+
+// leastCooling is the pair to try when the policy has paused them all: the one whose pause ends first,
+// which is the one it dislikes least. Only pairs this client can actually speak and this node actually
+// offers are considered.
+func (p *Pool) leastCooling(candidates []Node) (Node, string, bool) {
+	var best Node
+	var bestPlane string
+	var bestUntil int64
+	found := false
+	for _, node := range candidates {
+		for _, plane := range p.cfg.Preference {
+			if p.cfg.Connectors[plane] == nil || node.Offer == nil || node.Offer.Pick([]string{plane}) == nil {
+				continue
+			}
+			until := int64(0)
+			for _, cooling := range p.cfg.Health.Cooling(idOf(node.Slot)) {
+				if cooling.Plane == plane {
+					until = cooling.Until
+				}
+			}
+			if !found || until < bestUntil {
+				best, bestPlane, bestUntil, found = node, plane, until, true
+			}
+		}
+	}
+	return best, bestPlane, found
 }
 
 // lastErrIsRetryable keeps the second round from running when the caller has already given up: a

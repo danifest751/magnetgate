@@ -90,6 +90,16 @@ func JudgeFirstByte(elapsedMs, deadlineMs int64, gotByte, closedWithError bool) 
 	return VerdictWait
 }
 
+// FailWindowMs makes a burst count as one failure, mirroring FAIL_WINDOW_MS in src/health.mjs.
+//
+// One network event kills every live stream at once and each arrives here separately. Counted one by
+// one they walk a pair up the ladder in a second - 30 s, two minutes, ten - and once every pair has
+// been walked up the pool has nothing to offer and refuses everything, DNS included. Measured on the
+// owner's phone on 2026-09-19: two bursts of refusals exactly ten minutes apart, which is BackoffMs[2],
+// with the phone unusable in between. The path did not fail fifty times; it failed once and took fifty
+// connections with it.
+const FailWindowMs int64 = 5_000
+
 // NextBackoff is the pause for `fails` consecutive failures (1-based, never grows past the last step).
 func NextBackoff(fails int) int64 {
 	count := fails
@@ -107,6 +117,8 @@ type Record struct {
 	Fails     int   `json:"fails"`
 	Until     int64 `json:"until"` // milliseconds since the epoch
 	BackoffMs int64 `json:"backoffMs"`
+	// Repeat says this failure was folded into the one before it: the same event, not a second one.
+	Repeat bool `json:"repeat,omitempty"`
 }
 
 // Demotion is what a slow success produced.
@@ -128,6 +140,8 @@ type entry struct {
 	fails        int
 	until        int64
 	demotedUntil int64
+	// failedAt is when this pair last failed, so that a burst from one event is not counted many times.
+	failedAt int64
 }
 
 // Health tracks the planes of every node.
@@ -160,10 +174,15 @@ func (h *Health) Fail(exitID, plane string) Record {
 	defer h.mu.Unlock()
 	key := keyOf(exitID, plane)
 	previous := h.state[key]
+	now := h.millis()
+	// a second failure inside the window is the same event as the first; see FailWindowMs
+	if previous.failedAt != 0 && now-previous.failedAt < FailWindowMs {
+		return Record{Fails: previous.fails, Until: previous.until, BackoffMs: NextBackoff(previous.fails), Repeat: true}
+	}
 	fails := previous.fails + 1
 	backoff := NextBackoff(fails)
-	until := h.millis() + backoff
-	h.state[key] = entry{fails: fails, until: until, demotedUntil: previous.demotedUntil}
+	until := now + backoff
+	h.state[key] = entry{fails: fails, until: until, demotedUntil: previous.demotedUntil, failedAt: now}
 	return Record{Fails: fails, Until: until, BackoffMs: backoff}
 }
 
