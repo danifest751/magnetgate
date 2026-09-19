@@ -179,23 +179,41 @@ if ($Url -notmatch "/$([regex]::Escape($file))$") { throw "-Url ends in somethin
 Say "url $Url"
 
 # ---------------------------------------------------------------- 3. the package arrives whole
-Copy-Up $PackageNode $apk "$PackageDir/$file"
-if (-not $DryRun) {
-  $remote = (Remote $PackageNode "sha256sum $PackageDir/$file").Split(' ')[0]
-  if ($remote -ne $sha) { throw "the package on the node hashes to $remote, not ${sha}: the copy is not the file that was built" }
-  Say "  PASS  the node holds the same bytes ($sha)"
+# 88 MB over a link that is not always good: if the node already holds these exact bytes (a first run
+# that got this far and failed later), sending them again proves nothing the hash has not proved.
+$held = ''
+if (-not $DryRun) { $held = (Remote $PackageNode "sha256sum $PackageDir/$file 2>/dev/null | cut -c1-64").Trim() }
+if ($held -eq $sha) {
+  Say "  PASS  the node already holds these bytes ($sha)"
+} else {
+  Copy-Up $PackageNode $apk "$PackageDir/$file"
+  if (-not $DryRun) {
+    $remote = (Remote $PackageNode "sha256sum $PackageDir/$file").Split(' ')[0]
+    if ($remote -ne $sha) { throw "the package on the node hashes to $remote, not ${sha}: the copy is not the file that was built" }
+    Say "  PASS  the node holds the same bytes ($sha)"
+  }
 }
 
 # ---------------------------------------------------------------- 4. the distributor serves it
 # The unit names one file and answers 404 for everything else, which is the point of it; so the name in
 # the unit is swapped rather than added, and the old package is left on disk (a phone halfway through a
 # download of it keeps its Range requests answered until the service restarts, and disk is cheap).
+#
+# No double quotes reach ssh, and no shell variable crosses a command boundary: PowerShell 5.1 re-quotes
+# the arguments it hands a native program and eats them, which turned `sed -i "s|$old|$new|g"` into three
+# pipes and a sed that never ran (the Range check below is what caught it - the service was active and
+# serving the previous package).
 $unitPath = "/etc/systemd/system/$Unit.service"
-$swap = "old=`$(grep -o 'magnetgate-[0-9]*\.apk' $unitPath | head -1); " +
-        "if [ -z `"`$old`" ]; then echo 'no package name in the unit'; exit 1; fi; " +
-        "sed -i `"s|`$old|$file|g`" $unitPath; systemctl daemon-reload; systemctl restart $Unit; " +
-        "sleep 1; systemctl is-active $Unit"
-$active = Remote $PackageNode $swap
+$old = (Remote $PackageNode "grep -o 'magnetgate-[0-9]*\.apk' $unitPath | head -1").Trim()
+if (-not $DryRun) {
+  if (-not $old) { throw "no package name in $unitPath on ${PackageNode}: nothing to swap" }
+  if ($old -ne $file) {
+    Remote $PackageNode "sed -i s@$old@$file@g $unitPath" | Out-Null
+    $named = (Remote $PackageNode "grep -c $file $unitPath").Trim()
+    if ([int]$named -lt 1) { throw "$unitPath still does not name $file after the swap" }
+  }
+}
+$active = Remote $PackageNode "systemctl daemon-reload; systemctl restart $Unit; sleep 1; systemctl is-active $Unit"
 if (-not $DryRun) {
   if ($active -ne 'active') { throw "$Unit is '$active' after the restart" }
   # Not "the service is up": the URL the manifest is about to carry has to answer, with the size of the
