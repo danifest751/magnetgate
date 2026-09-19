@@ -252,8 +252,8 @@ fun AppRoot(
   // An acceptance run cannot tap the update card, and the whole point of the card is what happens after
   // the tap: the download through the tunnel, the digest, the installer. So a run that injected a
   // manifest takes it as soon as the tunnel is up.
-  if (autotest && Updates.injected != null) {
-    LaunchedEffect(vpnUp) {
+  if (autotest && (Updates.injected != null || status.update != null)) {
+    LaunchedEffect(vpnUp, status.update?.versionCode) {
       if (vpnUp && status.socksPort != 0) {
         takeUpdate()
         recordAutotest(context, "update requested")

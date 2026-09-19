@@ -15,12 +15,20 @@
 //   - publish a version code that is not higher than the one already published. Android refuses a
 //     downgrade anyway, so a manifest offering one is a manifest that does nothing but confuse;
 //   - publish a digest it did not compute itself. The APK is read here, in full, and hashed here;
-//   - publish an unsigned or debuggable package. An update that Android would refuse to install over
-//     the existing app is worse than no update: it looks like a broken client rather than a bad
-//     release.
+//   - publish a debuggable package, unless asked in as many words with --allow-debuggable.
+//
+// That last one has a legitimate use and it is worth spelling out, because the flag looks like a way
+// around a safety check and is not. Android only accepts an update signed with the same key as the
+// installed app. A phone running builds signed with the debug key can therefore be updated by debug
+// builds and by nothing else - and while a client is being developed on a real phone, that is exactly
+// what is wanted: every change reaches the device the way a user would get it, and the diagnostics the
+// work depends on (`run-as`, the engine's log, the acceptance script) keep working, which they do not
+// on a release. What it costs is real and belongs to whoever types the flag: a debuggable build lets
+// anything on that phone stop the tunnel, kill the process, or hand this application an update
+// manifest of its own. That last one is still bounded by the signature check, but it is not nothing.
 //
 // Usage:
-//   node scripts/publish-update.mjs --apk <path> --url <http[s]://...> [--out /etc/magnetgate-update.json]
+//   node scripts/publish-update.mjs --apk <path> --url <http[s]://...> [--out ...] [--allow-debuggable]
 //   node scripts/publish-update.mjs --show [--out ...]
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -89,7 +97,13 @@ const bytes = fs.statSync(apk).size
 if (bytes <= 0 || bytes > MAX_BYTES) die(`${bytes} B is not a plausible package size`)
 
 const { code, name, debuggable } = badging(apk)
-if (debuggable) die('this is a debuggable build; a release is what clients should be offered')
+if (debuggable && !has('allow-debuggable')) {
+  die('this is a debuggable build; pass --allow-debuggable if the phones it reaches are your own')
+}
+if (debuggable) {
+  console.warn('publish-update: publishing a DEBUGGABLE build. Anything on those phones can stop the')
+  console.warn('publish-update: tunnel, kill the process, or inject an update manifest. Development only.')
+}
 
 const current = readCurrent(out)
 if (current && Number(current.vc) >= code) {
