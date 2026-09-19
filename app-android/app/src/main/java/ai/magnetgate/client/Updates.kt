@@ -37,6 +37,40 @@ import java.security.MessageDigest
 object Updates {
   private const val TAG = "magnetgate"
 
+  /**
+   * A manifest handed to this build from a shell, for an acceptance run, and only in a debuggable one.
+   *
+   * The live path needs a node to advertise an update and a package published where an exit can reach
+   * it; neither belongs in a test of the client's own half - the download through the tunnel, the
+   * digest, and what the installer does with the result. So a run can supply the manifest directly and
+   * exercise all of that against a file whose digest is known.
+   *
+   * It is a launch extra like the others here (`-e update '<json>'`), it dies with the process, and a
+   * release build ignores it entirely: this is the one field in this application that decides what code
+   * gets installed, and a release must take it from the sealed offer and nowhere else.
+   */
+  @Volatile
+  var injected: UpdateRow? = null
+    private set
+
+  fun inject(json: String, debuggable: Boolean) {
+    if (!debuggable) {
+      Log.w(TAG, "the update hook only exists in debuggable builds")
+      return
+    }
+    injected = runCatching {
+      val entry = org.json.JSONObject(json)
+      UpdateRow(
+        versionCode = entry.getLong("vc"),
+        versionName = entry.getString("vn"),
+        url = entry.getString("url"),
+        sha256 = entry.getString("sha256"),
+        bytes = entry.getLong("bytes"),
+      )
+    }.onFailure { Log.w(TAG, "the injected manifest is not one: ${it.message}") }.getOrNull()
+    injected?.let { Log.w(TAG, "acceptance hook: pretending build ${it.versionCode} is advertised") }
+  }
+
   /** Where the package is kept while it is being checked. One at a time; replaced on every attempt. */
   private const val FILE = "update.apk"
 
@@ -51,6 +85,7 @@ object Updates {
    * not an update: it is a downgrade the system would refuse anyway.
    */
   fun offered(context: Context, advertised: UpdateRow?): UpdateRow? {
+    val advertised = injected ?: advertised
     if (advertised == null) return null
     val installed = installedCode(context)
     return if (advertised.versionCode > installed) advertised else null

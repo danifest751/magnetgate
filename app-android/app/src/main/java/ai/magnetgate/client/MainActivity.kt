@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
       if (debuggable()) killProcess() else Log.w(TAG, "the kill hook only exists in debuggable builds")
       return
     }
+    extras?.getStringExtra("update")?.takeIf { it.isNotBlank() }?.let { Updates.inject(it, debuggable()) }
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
     Log.i(TAG, "app started, core ${Mgbox.coreVersion()}, autotest=$autotest")

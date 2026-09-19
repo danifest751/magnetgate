@@ -143,15 +143,23 @@ fun AppRoot(
    * signature and asks the person.
    */
   fun takeUpdate() {
-    val offered = Updates.offered(context, status.update) ?: return
+    val offered = Updates.offered(context, status.update)
+    if (offered == null) {
+      // Every refusal says why. A screen that does nothing when tapped, and a log with nothing in it,
+      // is how this project has lost hours before: absence of an error is not absence of a problem.
+      Log.i(TAG, "update: nothing worth offering (installed ${Updates.installedCode(context)})")
+      return
+    }
     if (!Updates.mayInstall(context)) {
       updateState = ui.text(R.string.update_needs_permission)
+      Log.w(TAG, "update: this phone has not allowed this app to install packages; asking")
       runCatching { context.startActivity(Updates.permissionIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
       return
     }
     val port = status.socksPort
     if (!vpnUp || port == 0) {
       updateState = ui.text(R.string.update_needs_tunnel)
+      Log.w(TAG, "update: no tunnel to fetch it through (vpnUp=$vpnUp, core port $port)")
       return
     }
     busy = true
@@ -238,6 +246,18 @@ fun AppRoot(
         notice = if (vpnUp) R.string.access_saved_reconnect else R.string.access_saved_connect
       } else notice = R.string.access_save_failed
       busy = false
+    }
+  }
+
+  // An acceptance run cannot tap the update card, and the whole point of the card is what happens after
+  // the tap: the download through the tunnel, the digest, the installer. So a run that injected a
+  // manifest takes it as soon as the tunnel is up.
+  if (autotest && Updates.injected != null) {
+    LaunchedEffect(vpnUp) {
+      if (vpnUp && status.socksPort != 0) {
+        takeUpdate()
+        recordAutotest(context, "update requested")
+      }
     }
   }
 
