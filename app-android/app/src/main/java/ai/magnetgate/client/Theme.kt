@@ -80,7 +80,7 @@ private val DarkState = StateColors(
 // The neutrals carry a slight blue bias rather than being pure grey: it is the colour of the instrument
 // this app pretends to be, and it keeps the amber accent from reading as dirt on the screen.
 private val LightScheme = lightColorScheme(
-  primary = Color(0xFFB4700F),
+  primary = Color(0xFF98600E),
   onPrimary = Color(0xFFFFFFFF),
   primaryContainer = Color(0xFFF7E7CC),
   onPrimaryContainer = Color(0xFF3A2405),

@@ -34,6 +34,33 @@ object Settings {
   private const val KEY_TUNNEL_DOMAINS = "tunnelDomains"
   private const val KEY_COUNTRY = "country"
   private const val KEY_APPS = "apps"
+  private const val KEY_REVISION = "settingsRevision"
+
+  fun revision(context: Context): Long = get(context, KEY_REVISION).toLongOrNull() ?: 0L
+
+  /** Настройки и их версия записываются вместе; ошибка записи не считается сохранением. */
+  fun saveRouting(context: Context, draft: RoutingDraft): Boolean {
+    val store = open(context) ?: return false
+    return store.edit()
+      .putString(KEY_MODE, draft.mode.stored)
+      .putString(KEY_APPS, draft.apps.stored)
+      .putStringSet(KEY_EXCLUDED, draft.packages.toSet())
+      .putString(KEY_DIRECT_DOMAINS, draft.direct.joinToString(SEPARATOR))
+      .putString(KEY_TUNNEL_DOMAINS, draft.tunnel.joinToString(SEPARATOR))
+      .putString(KEY_REVISION, (revision(context) + 1).toString())
+      .commit()
+  }
+
+  fun saveAccess(context: Context, psk: String, bootstrap: String, relays: String, slots: String): Boolean {
+    val store = open(context) ?: return false
+    return store.edit()
+      .putString(KEY_PSK, psk.trim())
+      .putString(KEY_BOOTSTRAP, bootstrap.trim())
+      .putString(KEY_RELAYS, relays.trim())
+      .putString(KEY_SLOTS, parseSlots(slots).joinToString(","))
+      .putString(KEY_REVISION, (revision(context) + 1).toString())
+      .commit()
+  }
 
   @Volatile
   private var cached: SharedPreferences? = null

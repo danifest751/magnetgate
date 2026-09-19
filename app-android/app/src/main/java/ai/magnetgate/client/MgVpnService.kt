@@ -61,6 +61,18 @@ class MgVpnService : VpnService() {
     /** Whether a tunnel is up, for the screen. */
     fun isRunning(): Boolean = current?.running == true
 
+    fun isStarting(): Boolean = current?.let { it.starting && !it.running } == true
+    fun hasInstance(): Boolean = current != null
+    fun appliedSettingsRevision(): Long = current?.appliedRevision ?: -1L
+    fun appliedRouting(): RoutingDraft? = current?.activeRouting
+
+    /** Проверка выполняется тем же наблюдателем и через тот же DNS-путь, что и фоновая. */
+    fun requestCheck(): Boolean {
+      val service = current?.takeIf { it.running } ?: return false
+      service.checkRequested = true
+      return true
+    }
+
     /**
      * Whether the service owns the core - already, or in a moment.
      *
@@ -72,8 +84,11 @@ class MgVpnService : VpnService() {
     fun ownsCore(): Boolean = current?.let { it.running || it.starting } == true
   }
 
-  internal var running = false
-  internal var starting = false
+  @Volatile internal var running = false
+  @Volatile internal var starting = false
+  @Volatile private var appliedRevision = -1L
+  @Volatile private var activeRouting: RoutingDraft? = null
+  @Volatile private var checkRequested = false
   private var watching = false
 
   /** The manifest already acted on to a settled end, so it is not worked through again every tick. */
@@ -301,6 +316,7 @@ class MgVpnService : VpnService() {
    */
   private fun startTunnel(bootstrap: String, relays: String, coreless: Boolean, modeExtra: String) {
     if (running || starting) return
+    val revision = Settings.revision(this)
     starting = true
     // a new tunnel must not be judged by the previous one's measurements
     Health.reset()
@@ -334,6 +350,8 @@ class MgVpnService : VpnService() {
         // stream prefers, not how anything is built, so it never needs a reconnect.
         runCatching { Mgbox.setCountry(Settings.country(this)) }
           .onFailure { Log.w(TAG, "the country preference did not reach the core: ${it.message}") }
+        activeRouting = RoutingDraft(policy.mode, appsMode, excludedPackages.toSet(), policy.directDomains, policy.tunnelDomains)
+        appliedRevision = revision
         running = true
         corePort = port
         watchNetwork()
@@ -440,7 +458,8 @@ class MgVpnService : VpnService() {
       // through the engine when there is one: that path resolves the name with the engine's own resolver,
       // which is the half a check through the core's SOCKS never touches
       val through = if (checkPort != 0) checkPort else corePort
-      if (System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS && through != 0) {
+      if ((checkRequested || System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS) && through != 0) {
+        checkRequested = false
         checkedAt = System.currentTimeMillis()
         recordCheck(Health.check(through, CHECK_URL))
         trimEngineLog()

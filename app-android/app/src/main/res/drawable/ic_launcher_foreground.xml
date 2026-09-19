@@ -1,39 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  The launcher mark: a gate that opens for one path.
-
-  The name is the brief. A horseshoe magnet stands with its poles down, and the way through is laid
-  across them: the magnet and the gate are the same object, and the bar is the part that opens. Nothing
-  reaches wider than the magnet itself, which is what keeps the mark from reading as a piece of furniture
-  - the first version did, and at 48px that was all anyone would have seen.
-
-  Geometry is shared with the mark drawn in the app's header (AppUi.ProductMark): one drawing, two
-  places. The strokes are heavy for their canvas on purpose - at 48px in a launcher, or 30dp beside a
-  title, a thin arch turns to mush and the cut that carries the meaning disappears first.
-
-  Drawn to the adaptive-icon safe zone: everything sits inside the central 66 of 108, so no launcher mask
-  - circle, squircle, teardrop - can clip any of it. Two colours only: the gate in the app's off-white,
-  the path in the accent it spends on the control you came to press, so the icon and the screen behind it
-  are plainly the same product.
--->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-
-  <!-- the magnet, standing as a gate -->
-  <path
-      android:pathData="M30,80 L30,52 A24,24 0 0 1 78,52 L78,80"
-      android:strokeColor="#E7EEF3"
-      android:strokeWidth="11"
-      android:strokeLineCap="round"
-      android:strokeLineJoin="round" />
-
-  <!-- the way through, laid across its poles and never wider than they are -->
-  <path
-      android:pathData="M30,66 L78,66"
-      android:strokeColor="#E8A64F"
-      android:strokeWidth="9"
-      android:strokeLineCap="round" />
+<!-- Lucide, ISC; см. THIRD_PARTY_ICONS.txt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+  <group android:scaleX="2.4" android:scaleY="2.4" android:translateX="25.2" android:translateY="25.2">
+    <path android:pathData="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15" android:strokeColor="#E7EEF3" android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="@android:color/transparent" />
+    <path android:pathData="m5 8 4 4" android:strokeColor="#E7EEF3" android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="@android:color/transparent" />
+    <path android:pathData="m12 15 4 4" android:strokeColor="#E7EEF3" android:strokeWidth="2" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="@android:color/transparent" />
+  </group>
 </vector>

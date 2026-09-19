@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
@@ -31,6 +32,8 @@ private const val KILL_DELAY_MS = 3_000L
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    // Цвет системных значков следует за темой; отступы учитывает AppRoot.
+    enableEdgeToEdge()
     val extras = intent
     if (extras?.getStringExtra("dump") == "true") {
       dumpStatus()
@@ -83,23 +86,25 @@ class MainActivity : ComponentActivity() {
       Log.i(TAG, "settings saved from extras: bootstrap/relays/slots/mode/country/apps")
     }
     setContent {
-      MagnetGateTheme {
-        Surface(
-          modifier = Modifier.fillMaxSize(),
-          color = MaterialTheme.colorScheme.background,
-        ) {
-          AppRoot(
-            autotest = autotest,
-            vpn = extras?.getStringExtra("vpn") == "true",
-            coreless = extras?.getStringExtra("coreless") == "true",
-            bootstrapExtra = extras?.getStringExtra("bootstrap").orEmpty(),
-            relaysExtra = extras?.getStringExtra("relays").orEmpty(),
-            checkUrlExtra = extras?.getStringExtra("checkurl").orEmpty(),
-            modeExtra = extras?.getStringExtra("mode").orEmpty(),
-            engineLogExtra = extras?.getStringExtra("enginelog").orEmpty(),
-            screenExtra = extras?.getStringExtra("screen").orEmpty(),
-            breakSlotExtra = extras?.getStringExtra("breakslot").orEmpty(),
-          )
+      UiLanguageProvider {
+        MagnetGateTheme {
+          Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+          ) {
+            AppRoot(
+              autotest = autotest,
+              vpn = extras?.getStringExtra("vpn") == "true",
+              coreless = extras?.getStringExtra("coreless") == "true",
+              bootstrapExtra = extras?.getStringExtra("bootstrap").orEmpty(),
+              relaysExtra = extras?.getStringExtra("relays").orEmpty(),
+              checkUrlExtra = extras?.getStringExtra("checkurl").orEmpty(),
+              modeExtra = extras?.getStringExtra("mode").orEmpty(),
+              engineLogExtra = extras?.getStringExtra("enginelog").orEmpty(),
+              screenExtra = extras?.getStringExtra("screen").orEmpty(),
+              breakSlotExtra = extras?.getStringExtra("breakslot").orEmpty(),
+            )
+          }
         }
       }
     }

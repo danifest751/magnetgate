@@ -79,6 +79,8 @@ object Health {
   var lastCheck: Check? = null
     private set
 
+  private var generation = 0L
+
   /**
    * The last thing the engine refused to do. Engine failures used to go to logcat and nowhere else, so
    * a phone that could not build or reload its tunnel said nothing at all to the person holding it.
@@ -96,7 +98,9 @@ object Health {
   }
 
   /** Forgets everything: a new tunnel must not be judged by the previous one's measurements. */
+  @Synchronized
   fun reset() {
+    generation++
     lastCheck = null
     engineError = ""
   }
@@ -109,6 +113,7 @@ object Health {
    * socket opened" would call it healthy (see the relay channel in core/nostr).
    */
   fun check(socksPort: Int, url: String): Check {
+    val session = synchronized(this) { generation }
     val started = System.currentTimeMillis()
     val result = runCatching { fetch(socksPort, url) }
     val took = System.currentTimeMillis() - started
@@ -118,7 +123,8 @@ object Health {
         Check(System.currentTimeMillis(), ok = false, tookMs = took, detail = it.message ?: it.javaClass.simpleName)
       },
     )
-    lastCheck = check
+    // Завершившийся запрос старого туннеля не должен окрашивать новый в зелёный.
+    synchronized(this) { if (generation == session) lastCheck = check }
     // The legs go to the log and not into summary(): the screen takes the last word of that line as the
     // measurement, and a reading with three more numbers after it would quietly become "278ms".
     if (!check.ok || check.slow) {
