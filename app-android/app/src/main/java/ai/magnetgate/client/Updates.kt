@@ -58,7 +58,7 @@ object Updates {
 
   fun inject(json: String, debuggable: Boolean) {
     if (!debuggable) {
-      Log.w(TAG, "the update hook only exists in debuggable builds")
+      Log.w(TAG, "the update hook is for adb on a debuggable build, and this launch is neither")
       return
     }
     injected = runCatching {

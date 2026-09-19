@@ -40,14 +40,14 @@ class MainActivity : ComponentActivity() {
       return
     }
     if (extras?.getStringExtra("stop") == "true") {
-      if (debuggable()) stopTunnel() else Log.w(TAG, "the stop hook only exists in debuggable builds")
+      if (fromShell()) stopTunnel() else Log.w(TAG, "the stop hook is for adb on a debuggable build, and this launch is neither")
       return
     }
     if (extras?.getStringExtra("kill") == "true") {
-      if (debuggable()) killProcess() else Log.w(TAG, "the kill hook only exists in debuggable builds")
+      if (fromShell()) killProcess() else Log.w(TAG, "the kill hook is for adb on a debuggable build, and this launch is neither")
       return
     }
-    extras?.getStringExtra("update")?.takeIf { it.isNotBlank() }?.let { Updates.inject(it, debuggable()) }
+    extras?.getStringExtra("update")?.takeIf { it.isNotBlank() }?.let { Updates.inject(it, fromShell()) }
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
     Log.i(TAG, "app started, core ${Mgbox.coreVersion()}, autotest=$autotest")
@@ -116,20 +116,47 @@ class MainActivity : ComponentActivity() {
     // the app is usually already running when someone wants its state, so the dump hook has to work here
     // and not only in onCreate
     if (intent.getStringExtra("dump") == "true") dumpStatus()
-    if (intent.getStringExtra("stop") == "true" && debuggable()) stopTunnel()
-    if (intent.getStringExtra("kill") == "true" && debuggable()) killProcess()
+    if (intent.getStringExtra("stop") == "true" && fromShell()) stopTunnel()
+    if (intent.getStringExtra("kill") == "true" && fromShell()) killProcess()
   }
 
   /**
-   * Whether this build may be driven from a shell.
+   * Whether this launch may drive the tunnel: a debuggable build, started from a shell.
    *
-   * The launcher activity is exported, so an extra that takes the tunnel down - or kills the process
-   * carrying it - is reachable by anything on the phone that can send an intent. In a release build that
-   * would be a way for another app to switch someone's VPN off, which is the opposite of what a tunnel
-   * with a lockdown is for. These hooks therefore exist only where a debugger could attach anyway.
+   * The build being debuggable was the whole test until this application was about to be handed to
+   * other people. The launcher activity is exported, so `stop`, `kill` and the acceptance hooks were
+   * reachable by anything on the phone that can send an intent - which on a stranger's phone means any
+   * application could switch their VPN off. The package cannot simply stop being debuggable, because
+   * an update only installs over a build signed with the same key, and everyone in this group has to
+   * stay on one key for updates to work at all; the diagnostics the work depends on need it too.
+   *
+   * So the second half of the gate is who sent the intent. `adb` starts activities as the shell, and
+   * nothing else on a phone runs as that uid. Below API 34 the caller cannot be identified and the
+   * hooks stay where they were, behind the debuggable flag alone - an older phone in this group is a
+   * phone whose owner is trusted with an acceptance build anyway.
    */
-  private fun debuggable(): Boolean =
-    (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+  private fun fromShell(): Boolean {
+    if ((applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) == 0) return false
+    // `launchedFromUid` is the answer this wants and it is not available here: it returns -1 on this
+    // ROM, and `launchedFromPackage` returns null with it. What the system does fill in is the
+    // referrer, and for `am start` that is `android-app://com.android.shell`.
+    //
+    // A referrer can be claimed rather than earned: an application may put EXTRA_REFERRER in the
+    // intent it sends, and getReferrer() prefers it over the caller the system knows. So a launch that
+    // carries one is not trusted at all - adb does not set it, and an application that wants to look
+    // like adb has to.
+    val claimed = intent?.hasExtra(Intent.EXTRA_REFERRER) == true ||
+      intent?.hasExtra(Intent.EXTRA_REFERRER_NAME) == true
+    val shell = runCatching { referrer }.getOrNull()?.host == "com.android.shell"
+    val allowed = shell && !claimed
+    // Named in the log either way: a hook that silently does nothing is the failure this project keeps
+    // meeting, and one that silently works for the wrong caller is worse.
+    Log.i(TAG, "launch hook: referrer=${runCatching { referrer }.getOrNull()} claimed=$claimed -> " +
+      if (allowed) "accepted" else "refused")
+    return allowed
+  }
+
+
 
   /**
    * Ends this process the way the system would, without an application crash.
