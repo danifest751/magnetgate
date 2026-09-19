@@ -47,6 +47,18 @@ class MainActivity : ComponentActivity() {
       if (fromShell()) killProcess() else Log.w(TAG, "the kill hook is for adb on a debuggable build, and this launch is neither")
       return
     }
+    // `-e report true` writes one synthetic report, so a run can prove both halves of the switch: that
+    // a report is written and sent when it is on, and that nothing reaches the disk when it is off. A
+    // real crash cannot be used for that here - `am crash` is filed by MIUI and raises its own dialog.
+    if (extras?.getStringExtra("report") == "true") {
+      if (fromShell()) {
+        Reports.write(this, IllegalStateException("synthetic report requested over adb"), "hook")
+        Log.i(TAG, "report hook: enabled=${Reports.enabled(this)} waiting=${Reports.pending(this).size}")
+      } else {
+        Log.w(TAG, "the report hook is for adb on a debuggable build, and this launch is neither")
+      }
+      return
+    }
     extras?.getStringExtra("update")?.takeIf { it.isNotBlank() }?.let { Updates.inject(it, fromShell()) }
     val autotest =
       extras?.getStringExtra("autotest") == "true" || extras?.getBooleanExtra("autotest", false) == true
@@ -118,6 +130,10 @@ class MainActivity : ComponentActivity() {
     if (intent.getStringExtra("dump") == "true") dumpStatus()
     if (intent.getStringExtra("stop") == "true" && fromShell()) stopTunnel()
     if (intent.getStringExtra("kill") == "true" && fromShell()) killProcess()
+    if (intent.getStringExtra("report") == "true" && fromShell()) {
+      Reports.write(this, IllegalStateException("synthetic report requested over adb"), "hook")
+      Log.i(TAG, "report hook: enabled=${Reports.enabled(this)} waiting=${Reports.pending(this).size}")
+    }
   }
 
   /**

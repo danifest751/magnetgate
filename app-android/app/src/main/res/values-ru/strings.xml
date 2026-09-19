@@ -52,6 +52,13 @@
   <string name="add_shared_key">Добавить общий ключ</string>
   <string name="server_discovery">Поиск серверов</string>
   <string name="discovery_summary">DHT, Nostr и слоты</string>
+  <string name="privacy_section">Конфиденциальность</string>
+  <string name="reports_title">Отправлять отчёты о сбоях</string>
+  <string name="reports_detail">Сборка, модель телефона и текст ошибки — через туннель</string>
+  <string name="reports_note">Никогда: сайты, которые вы открываете, адреса, к которым подключаетесь, и ключ.</string>
+  <string name="reports_on_hint">Сейчас отправлять нечего.</string>
+  <string name="reports_off_hint">Выключено. Отчёты, которые ждали отправки, удалены.</string>
+  <string name="reports_waiting">Ждут туннеля: %1$d.</string>
   <string name="system_theme_hint">Светлая или тёмная тема — как в системе.</string>
   <string name="settings_reconnect_hint">Изменения сохранены. Для применения нужно переподключить VPN.</string>
   <string name="group_key_title">Ключ вашей группы</string>

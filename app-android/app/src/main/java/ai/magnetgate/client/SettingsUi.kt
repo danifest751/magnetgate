@@ -11,7 +11,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun SettingsScreen(keySet: Boolean, pending: Boolean, notice: String, busy: Boolean, onOpen: (Screen) -> Unit, onReconnect: () -> Unit) {
+fun SettingsScreen(keySet: Boolean, pending: Boolean, notice: String, busy: Boolean, reports: Boolean,
+  reportsWaiting: Int, onOpen: (Screen) -> Unit, onReports: (Boolean) -> Unit, onReconnect: () -> Unit,
+) {
   val ui = LocalUiStrings.current
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
     Text(ui.text(R.string.nav_settings), style = MaterialTheme.typography.headlineSmall)
@@ -22,6 +24,22 @@ fun SettingsScreen(keySet: Boolean, pending: Boolean, notice: String, busy: Bool
       ActionRow(ui.text(R.string.server_discovery), ui.text(R.string.discovery_summary)) { onOpen(Screen.ACCESS) }
       HorizontalDivider()
       ActionRow(ui.text(R.string.diagnostics_action), icon = R.drawable.ic_activity) { onOpen(Screen.DIAGNOSTICS) }
+    }
+    Column {
+      SectionLabel(ui.text(R.string.privacy_section))
+      // Отправка включена по умолчанию, поэтому строка обязана сказать, что именно уходит, до того
+      // как человек до неё дотронется: молча включённая отправка - это не согласие.
+      SwitchRow(ui.text(R.string.reports_title), ui.text(R.string.reports_detail), reports, onReports)
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(ui.text(R.string.reports_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+          if (!reports) ui.text(R.string.reports_off_hint)
+          else if (reportsWaiting > 0) ui.text(R.string.reports_waiting, reportsWaiting)
+          else ui.text(R.string.reports_on_hint),
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
     }
     Text(ui.text(R.string.system_theme_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     if (pending) {

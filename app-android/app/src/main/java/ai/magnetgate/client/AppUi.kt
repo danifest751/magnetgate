@@ -88,10 +88,18 @@ fun AppRoot(
   var now by remember { mutableStateOf(System.currentTimeMillis()) }
   var checkingSince by remember { mutableStateOf(0L) }
   var parentScreen by rememberSaveable { mutableStateOf(Screen.CONNECT) }
+  // Отчёты о сбоях: состояние переключателя и сколько отчётов ждёт туннеля. Читается при открытии
+  // настроек, а не раз за жизнь экрана, - отчёт мог быть записан или отправлен уже после запуска.
+  var reports by remember { mutableStateOf(Reports.enabled(context)) }
+  var reportsWaiting by remember { mutableIntStateOf(Reports.pending(context).size) }
   val pending = vpnUp && revision != appliedRevision
 
   fun open(next: Screen) {
     if (next in listOf(Screen.DIAGNOSTICS, Screen.ACCESS, Screen.COUNTRIES)) parentScreen = screen
+    if (next == Screen.SETTINGS) {
+      reports = Reports.enabled(context)
+      reportsWaiting = Reports.pending(context).size
+    }
     screen = next
     notice = 0
   }
@@ -359,7 +367,14 @@ fun AppRoot(
           onUpdate = { takeUpdate() })
         Screen.RULES -> RulesScreen(rules, savedRules, pending, vpnUp, busy || starting, ui.optional(notice),
           onChange = { rules = it; notice = 0 }, onSave = { saveRules() }, onReconnect = { reconnect() })
-        Screen.SETTINGS -> SettingsScreen(keySet, pending, ui.optional(notice), busy || starting, onOpen = { open(it) }, onReconnect = { reconnect() })
+        Screen.SETTINGS -> SettingsScreen(keySet, pending, ui.optional(notice), busy || starting, reports, reportsWaiting,
+          onOpen = { open(it) },
+          onReports = { value ->
+            Reports.setEnabled(context, value)
+            reports = Reports.enabled(context)
+            reportsWaiting = Reports.pending(context).size
+          },
+          onReconnect = { reconnect() })
         Screen.ACCESS -> AccessScreen(psk, bootstrap, relays, slots, busy || starting, ui.optional(notice), Settings.failureText(context),
           onPsk = { psk = it }, onBootstrap = { bootstrap = it }, onRelays = { relays = it }, onSlots = { slots = it }, onSave = { saveAccess() })
         Screen.COUNTRIES -> CountriesScreen(status, country, ui.optional(notice), onSelect = { code ->

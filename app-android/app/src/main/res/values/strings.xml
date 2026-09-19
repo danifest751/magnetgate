@@ -53,6 +53,13 @@
   <string name="add_shared_key">Add a shared key</string>
   <string name="server_discovery">Server discovery</string>
   <string name="discovery_summary">DHT, Nostr and slots</string>
+  <string name="privacy_section">Privacy</string>
+  <string name="reports_title">Send crash reports</string>
+  <string name="reports_detail">The build, the phone model and the text of the error, through the tunnel</string>
+  <string name="reports_note">Never the sites you open, the addresses you connect to, or your key.</string>
+  <string name="reports_on_hint">Nothing is waiting to be sent.</string>
+  <string name="reports_off_hint">Off. Reports that were waiting have been deleted.</string>
+  <string name="reports_waiting">Waiting for a tunnel: %1$d.</string>
   <string name="system_theme_hint">Light or dark theme follows your system settings.</string>
   <string name="settings_reconnect_hint">Changes saved. Reconnect the VPN to apply them.</string>
   <string name="group_key_title">Your group key</string>

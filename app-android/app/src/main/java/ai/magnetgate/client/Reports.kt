@@ -67,9 +67,20 @@ object Reports {
   fun enabled(context: Context): Boolean =
     context.getSharedPreferences("magnetgate-reports", Context.MODE_PRIVATE).getBoolean("enabled", true)
 
+  /**
+   * Switching this off also throws away what is already queued.
+   *
+   * A report waits on disk for a tunnel, so "off" that only stopped the next send would leave a person
+   * with a folder of reports they have just said they do not want sent - and the first time they
+   * switched it back on, every one of them would go. Off means there is nothing to send.
+   */
   fun setEnabled(context: Context, value: Boolean) {
     context.getSharedPreferences("magnetgate-reports", Context.MODE_PRIVATE)
       .edit().putBoolean("enabled", value).apply()
+    if (!value) {
+      val dropped = pending(context).count { runCatching { it.delete() }.getOrDefault(false) }
+      if (dropped > 0) Log.i(TAG, "reports off: dropped $dropped waiting report(s)")
+    }
   }
 
   /**
@@ -88,8 +99,14 @@ object Reports {
     }
   }
 
-  /** Writes one report. Also called for failures the application catches but cannot recover from. */
+  /**
+   * Writes one report. Also called for failures the application catches but cannot recover from.
+   *
+   * Nothing is written while the switch is off. Collecting quietly and sending later is the same
+   * promise broken one step further along, so off means the crash is not written down either.
+   */
   fun write(context: Context, error: Throwable, where: String) {
+    if (!enabled(context)) return
     runCatching {
       val dir = File(context.filesDir, DIR).apply { mkdirs() }
       val existing = dir.listFiles()?.sortedBy { it.name }.orEmpty()
