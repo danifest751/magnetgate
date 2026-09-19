@@ -133,6 +133,9 @@ type Offer struct {
 	RuleSets *RuleSets `json:"rs,omitempty"`
 	// Update is the build this exit says clients should be running; see Update.
 	Update *Update `json:"up,omitempty"`
+	// Reports is where a client may send a report when it breaks, or empty. One string and nothing
+	// else: what may go into a report is decided by the client, not by whoever publishes this.
+	Reports string `json:"rep,omitempty"`
 }
 
 // Valid mirrors the validation mergeOffer() performs: a usable v3 offer carrying a timestamp and a
@@ -232,6 +235,14 @@ func Merge(prev, incoming *Offer) *Offer {
 		merged.RuleSets = prev.RuleSets
 	} else {
 		merged.RuleSets = nil
+	}
+	// The report sink travels the same way and needs the same rule.
+	if incoming.Reports != "" {
+		merged.Reports = incoming.Reports
+	} else if prev.Reports != "" {
+		merged.Reports = prev.Reports
+	} else {
+		merged.Reports = ""
 	}
 	// And the update manifest, for exactly the same reason and by exactly the same rule. It was added
 	// without this and the phone saw no update at all: the DHT view of a generation arrives first, the

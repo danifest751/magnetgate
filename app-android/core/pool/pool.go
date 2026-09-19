@@ -234,6 +234,19 @@ func (p *Pool) AdvertisedUpdate() *offer.Update {
 	return best
 }
 
+// AdvertisedReports is where a node says a client may send a report when it breaks, or empty.
+//
+// The first node that names one wins: unlike an update, there is nothing to compare - a sink is a sink,
+// and a client that has one has somewhere to send.
+func (p *Pool) AdvertisedReports() string {
+	for _, node := range p.Nodes() {
+		if node.Offer != nil && node.Offer.Reports != "" {
+			return node.Offer.Reports
+		}
+	}
+	return ""
+}
+
 // Cooling lists the planes of one node that are paused, for the diagnostics table.
 func (p *Pool) Cooling(slot int) []health.Cooling { return p.cfg.Health.Cooling(idOf(slot)) }
 

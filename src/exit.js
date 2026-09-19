@@ -156,6 +156,24 @@ function readExtraDp() {
 // other field. A client still verifies the digest after download, and Android still refuses a package
 // signed with a different key, and a person still taps "install". This field is only the first of
 // those four gates, never the only one.
+// Where clients should send a report when they break, or nothing.
+//
+// It is one string, and deliberately only that: an address. A client decides on its own what may go
+// into a report (Reports.kt in the app - build, model, exception, nothing that names a destination),
+// and no node can widen that by publishing something here. Sealed like every other field, so only the
+// holder of the group key can point clients anywhere.
+const REPORTS_FILE = process.env.MAGNETGATE_REPORTS_FILE ?? '/etc/magnetgate-reports.json'
+function readReportSink() {
+  try {
+    if (!fs.existsSync(REPORTS_FILE)) return null
+    const doc = JSON.parse(fs.readFileSync(REPORTS_FILE, 'utf8').replace(/^\uFEFF/, ''))
+    const url = String(doc?.url ?? '')
+    return /^https?:\/\//.test(url) && url.length <= 200 ? url : null
+  } catch {
+    return null
+  }
+}
+
 // The release is some 85 MB; a manifest claiming much more is not describing this application.
 const MAX_UPDATE_BYTES = 256 * 1024 * 1024
 const UPDATE_FILE = process.env.MAGNETGATE_UPDATE_FILE ?? '/etc/magnetgate-update.json'
@@ -311,11 +329,12 @@ async function publishOnce() {
     // does: it does not fit the ~1000 B BEP44 record, and squeezing it in would cost the endpoints.
     const rs = readRuleSets()
     const up = readUpdate()
+    const rep = readReportSink()
     const nostrDp = [...extra, mgt]
     const nseq = 'n' + seq
     const sealedNostr = seal(
       boxKey,
-      Buffer.from(JSON.stringify({ ...base, dp: nostrDp, ...(rs ? { rs } : {}), ...(up ? { up } : {}) })),
+      Buffer.from(JSON.stringify({ ...base, dp: nostrDp, ...(rs ? { rs } : {}), ...(up ? { up } : {}), ...(rep ? { rep } : {}) })),
       nseq
     )
     nostr.publish(sealedNostr, nseq)

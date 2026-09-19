@@ -115,6 +115,8 @@ data class CoreStatus(
   val live: List<LiveRow> = emptyList(),
   /** The newest build any node advertises, before it is compared with what is installed. */
   val update: UpdateRow? = null,
+  /** Where a report may be sent when this client breaks, or empty. */
+  val reports: String = "",
 ) {
   /** Relays configured but none of them serving us: the push channel is configured and useless. */
   val relaysConfiguredButSilent: Boolean get() = relays.isNotEmpty() && relays.none { it.answering }
@@ -231,6 +233,7 @@ data class CoreStatus(
         received = root.optLong("received"),
         live = live,
         update = advertised,
+        reports = root.optString("reports"),
       )
     }
 

@@ -72,10 +72,13 @@ type State struct {
 	Live []pool.Live `json:"live,omitempty"`
 	// Update is the newest build any node advertises. The client still compares it with what is
 	// installed, verifies the package it downloads, and leaves the installing to a person.
-	Update  *offer.Update `json:"update,omitempty"`
-	Logs    []string      `json:"logs"`
-	Error   string        `json:"error,omitempty"`
-	Version string        `json:"version"`
+	Update *offer.Update `json:"update,omitempty"`
+	// Reports is where this client may send a report when it breaks; what goes into one is decided by
+	// the client alone (see Reports.kt in the app).
+	Reports string   `json:"reports,omitempty"`
+	Logs    []string `json:"logs"`
+	Error   string   `json:"error,omitempty"`
+	Version string   `json:"version"`
 }
 
 // running is the process-wide core: gomobile bindings are plain functions, so the app talks to one core
@@ -366,6 +369,7 @@ func (inst *instance) status() State {
 		out.Sent, out.Received = inst.planes.Traffic()
 		out.Live = inst.planes.Live()
 		out.Update = inst.planes.AdvertisedUpdate()
+		out.Reports = inst.planes.AdvertisedReports()
 	}
 	if inst.rendez != nil {
 		out.Slots = inst.rendez.Slots()

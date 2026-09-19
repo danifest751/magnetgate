@@ -463,6 +463,12 @@ class MgVpnService : VpnService() {
         checkedAt = System.currentTimeMillis()
         recordCheck(Health.check(through, CHECK_URL))
         trimEngineLog()
+        // Reports wait for a tunnel and go through it; see Reports.send. This is the moment there is
+        // one, and the send does nothing at all when there is nothing waiting.
+        runCatching {
+          val sink = CoreStatus.parse(Mgbox.coreStatus()).reports
+          if (sink.isNotEmpty()) Reports.send(this, sink, corePort)
+        }.onFailure { Log.w(TAG, "sending reports: ${it.message}") }
       }
       val next = nodeSignature()
       if (next == signature) continue
