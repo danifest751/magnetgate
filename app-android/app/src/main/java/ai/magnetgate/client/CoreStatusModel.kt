@@ -76,6 +76,21 @@ data class LiveRow(
   val where: String get() = if (port == 0) host else "$host:$port"
 }
 
+/**
+ * The build an exit says this client should be running.
+ *
+ * Carried inside the sealed offer, so only the holder of the group key can claim an update exists.
+ * Everything else about it is checked by [Updates]: the digest after download, Android's signature
+ * check at install, and a person tapping the system dialog.
+ */
+data class UpdateRow(
+  val versionCode: Long,
+  val versionName: String,
+  val url: String,
+  val sha256: String,
+  val bytes: Long,
+)
+
 /** One country the client can send traffic through, with how many nodes stand behind it. */
 data class CountryRow(val code: String, val nodes: Int) {
   val flag: String get() = flagOf(code)
@@ -98,6 +113,8 @@ data class CoreStatus(
   val received: Long = 0,
   /** What the client is carrying, newest first; bounded by the core. */
   val live: List<LiveRow> = emptyList(),
+  /** The newest build any node advertises, before it is compared with what is installed. */
+  val update: UpdateRow? = null,
 ) {
   /** Relays configured but none of them serving us: the push channel is configured and useless. */
   val relaysConfiguredButSilent: Boolean get() = relays.isNotEmpty() && relays.none { it.answering }
@@ -190,6 +207,15 @@ data class CoreStatus(
           closedAt = entry.optLong("closed"),
         )
       }
+      val advertised = root.optJSONObject("update")?.let { entry ->
+        UpdateRow(
+          versionCode = entry.optLong("vc"),
+          versionName = entry.optString("vn"),
+          url = entry.optString("url"),
+          sha256 = entry.optString("sha256"),
+          bytes = entry.optLong("bytes"),
+        )
+      }
       return CoreStatus(
         running = root.optBoolean("running"),
         socksPort = root.optInt("socksPort"),
@@ -204,6 +230,7 @@ data class CoreStatus(
         sent = root.optLong("sent"),
         received = root.optLong("received"),
         live = live,
+        update = advertised,
       )
     }
 

@@ -242,12 +242,12 @@ func TestMergeKeepsTheRuleSetManifestFromEitherView(t *testing.T) {
 func TestRuleSetManifestRejectsWhatCannotBeTrusted(t *testing.T) {
 	ok := RuleSetItem{Tag: "t", URL: "https://example.test/x.srs", SHA256: strings.Repeat("a", 64), Bytes: 10}
 	for name, broken := range map[string]RuleSetItem{
-		"plain http":    {Tag: "t", URL: "http://example.test/x.srs", SHA256: ok.SHA256, Bytes: 10},
-		"short digest":  {Tag: "t", URL: ok.URL, SHA256: strings.Repeat("a", 63), Bytes: 10},
-		"not hex":       {Tag: "t", URL: ok.URL, SHA256: strings.Repeat("z", 64), Bytes: 10},
-		"no size":       {Tag: "t", URL: ok.URL, SHA256: ok.SHA256, Bytes: 0},
-		"absurd size":   {Tag: "t", URL: ok.URL, SHA256: ok.SHA256, Bytes: MaxRuleSetBytes + 1},
-		"no tag":        {Tag: "", URL: ok.URL, SHA256: ok.SHA256, Bytes: 10},
+		"plain http":   {Tag: "t", URL: "http://example.test/x.srs", SHA256: ok.SHA256, Bytes: 10},
+		"short digest": {Tag: "t", URL: ok.URL, SHA256: strings.Repeat("a", 63), Bytes: 10},
+		"not hex":      {Tag: "t", URL: ok.URL, SHA256: strings.Repeat("z", 64), Bytes: 10},
+		"no size":      {Tag: "t", URL: ok.URL, SHA256: ok.SHA256, Bytes: 0},
+		"absurd size":  {Tag: "t", URL: ok.URL, SHA256: ok.SHA256, Bytes: MaxRuleSetBytes + 1},
+		"no tag":       {Tag: "", URL: ok.URL, SHA256: ok.SHA256, Bytes: 10},
 	} {
 		if (&RuleSets{V: 1, Sets: []RuleSetItem{broken}}).Valid() {
 			t.Errorf("%s was accepted", name)
@@ -261,5 +261,46 @@ func TestRuleSetManifestRejectsWhatCannotBeTrusted(t *testing.T) {
 	}
 	if !(&RuleSets{V: 1, Sets: []RuleSetItem{ok}}).Valid() {
 		t.Error("a good manifest was rejected")
+	}
+}
+
+// The update manifest is the only field acting on which means installing code, so what counts as a
+// valid one is spelled out rather than assumed. Validity here says nothing about whether the update
+// should be installed - that needs the installed version - only that the manifest describes a release
+// at all.
+func TestUpdateManifestValidity(t *testing.T) {
+	good := Update{
+		V: 1, VersionCode: 198, VersionName: "0.1.0+abc1234",
+		URL:    "https://example.test/magnetgate.apk",
+		SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Bytes:  85 << 20,
+	}
+	if !good.Valid() {
+		t.Fatal("a complete manifest must be valid")
+	}
+
+	var missing *Update
+	if missing.Valid() {
+		t.Fatal("no manifest is not a valid one")
+	}
+
+	cases := map[string]func(u *Update){
+		"no version code is not a release":       func(u *Update) { u.VersionCode = 0 },
+		"no version name is not a release":       func(u *Update) { u.VersionName = "" },
+		"http is not good enough for a package":  func(u *Update) { u.URL = "http://example.test/a.apk" },
+		"a relative url is not a source":         func(u *Update) { u.URL = "/a.apk" },
+		"a short digest is not a digest":         func(u *Update) { u.SHA256 = "abc" },
+		"a digest must be hex":                   func(u *Update) { u.SHA256 = "zz23456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+		"an upper-case digest is not the form":   func(u *Update) { u.SHA256 = "0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef" },
+		"a package of no size is not a package":  func(u *Update) { u.Bytes = 0 },
+		"nor is one larger than the cap":         func(u *Update) { u.Bytes = MaxUpdateBytes + 1 },
+		"a manifest without a schema is not one": func(u *Update) { u.V = 0 },
+	}
+	for why, break_ := range cases {
+		candidate := good
+		break_(&candidate)
+		if candidate.Valid() {
+			t.Fatalf("%s: %+v", why, candidate)
+		}
 	}
 }

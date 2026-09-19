@@ -37,6 +37,54 @@ type RuleSetItem struct {
 	Bytes  int    `json:"bytes"`
 }
 
+// Update is the build an exit says a client should be running: a version, where the package lives and
+// what it must hash to.
+//
+// It is the most dangerous field in this record, because acting on it means installing code. Four
+// things have to hold before anything is installed, and the manifest is only the first:
+//
+//  1. this manifest travelled inside the sealed offer, so only the holder of the group key wrote it;
+//  2. the package is verified against SHA256 after download - the URL is untrusted, exactly as it is
+//     for a rule-set, and a mirror serving something else fails here;
+//  3. Android refuses a package whose signing key differs from the installed one, which no attacker
+//     without the release key can satisfy;
+//  4. the person taps "install" in the system dialog, because nothing here installs silently.
+//
+// VersionCode is what decides whether an update exists at all: it is Android's own monotonic counter,
+// and a manifest offering a code at or below the installed one is not an update but a downgrade.
+type Update struct {
+	V           int    `json:"v"`
+	VersionCode int    `json:"vc"`
+	VersionName string `json:"vn"`
+	URL         string `json:"url"`
+	SHA256      string `json:"sha256"`
+	Bytes       int    `json:"bytes"`
+}
+
+// MaxUpdateBytes caps what a device may be asked to download for an update. The release is some 85 MB;
+// a manifest claiming much more than that is not describing this application.
+const MaxUpdateBytes = 256 << 20
+
+// Valid reports whether an update manifest is usable at all. It does not say the update should be
+// installed - that needs the installed version, which only the client knows.
+func (u *Update) Valid() bool {
+	if u == nil || u.V < 1 || u.VersionCode < 1 || u.VersionName == "" {
+		return false
+	}
+	if !strings.HasPrefix(u.URL, "https://") || u.Bytes <= 0 || u.Bytes > MaxUpdateBytes {
+		return false
+	}
+	if len(u.SHA256) != 64 {
+		return false
+	}
+	for _, c := range u.SHA256 {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // MaxRuleSetBytes caps what a device may be asked to download. A rule-set is a compact binary; anything
 // larger is not one, whatever the manifest claims.
 const MaxRuleSetBytes = 8 << 20
@@ -75,6 +123,8 @@ type Offer struct {
 	// the Nostr view only, like the pinned hysteria2 certificate, because it does not fit a BEP44
 	// record. Nothing here is a list - only the operator's signed decision about which ones are current.
 	RuleSets *RuleSets `json:"rs,omitempty"`
+	// Update is the build this exit says clients should be running; see Update.
+	Update *Update `json:"up,omitempty"`
 }
 
 // Valid mirrors the validation mergeOffer() performs: a usable v3 offer carrying a timestamp and a

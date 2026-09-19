@@ -128,6 +128,14 @@
   <string name="connected_no_responses">Соединение есть, ответов нет</string>
   <string name="not_connected">Нет соединения</string>
   <string name="core_measurements">Ядро и измерения</string>
+    <string name="update_available">Доступно обновление</string>
+  <string name="update_from_build">Установлена: сборка %1$d</string>
+  <string name="update_downloading">Загрузка %1$d%%</string>
+  <string name="update_verified">Проверено — открываю установщик</string>
+  <string name="update_failed">Обновление не удалось: %1$s</string>
+  <string name="update_needs_permission">Разрешите приложению установку пакетов и нажмите ещё раз</string>
+  <string name="update_needs_tunnel">Сначала подключитесь: обновление идёт через туннель</string>
+  <string name="app_build">Сборка приложения</string>
   <string name="core_version">Версия ядра</string>
   <string name="unknown">Неизвестна</string>
   <string name="not_running">Не запущен</string>

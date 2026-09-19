@@ -77,6 +77,8 @@ fun AppRoot(
   var relays by remember { mutableStateOf(Settings.relays(context)) }
   var slots by remember { mutableStateOf(Settings.slots(context).joinToString(",")) }
   var country by remember { mutableStateOf(Settings.country(context)) }
+  // What the update card is saying right now: empty while nothing is happening, which is almost always.
+  var updateState by remember { mutableStateOf("") }
   var savedRules by remember { mutableStateOf(RoutingDraft.read(context)) }
   var rules by rememberSaveable(stateSaver = RoutingSaver) { mutableStateOf(savedRules) }
   var starting by remember { mutableStateOf(MgVpnService.isStarting()) }
@@ -130,6 +132,43 @@ fun AppRoot(
     egress = runCatching { "egress ${fetchThroughCore(port, url)}" }
       .getOrElse { "egress check failed: ${it.message}" }
     busy = false
+  }
+
+  /**
+   * Fetch the offered build and hand it to the system installer.
+   *
+   * It goes through the core's own listener, so it needs the tunnel: on the network this client exists
+   * for, the place a release is published is usually what is unreachable. Nothing is installed here -
+   * the package is verified against the sealed manifest and then given to Android, which checks the
+   * signature and asks the person.
+   */
+  fun takeUpdate() {
+    val offered = Updates.offered(context, status.update) ?: return
+    if (!Updates.mayInstall(context)) {
+      updateState = ui.text(R.string.update_needs_permission)
+      runCatching { context.startActivity(Updates.permissionIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+      return
+    }
+    val port = status.socksPort
+    if (!vpnUp || port == 0) {
+      updateState = ui.text(R.string.update_needs_tunnel)
+      return
+    }
+    busy = true
+    scope.launch {
+      val apk = withContext(Dispatchers.IO) {
+        Updates.download(context, offered, port) { progress ->
+          updateState = when (progress) {
+            is Updates.Progress.Downloading ->
+              ui.text(R.string.update_downloading, (progress.bytes * 100 / progress.total.coerceAtLeast(1)).toInt())
+            is Updates.Progress.Failed -> ui.text(R.string.update_failed, progress.why)
+            Updates.Progress.Verified -> ui.text(R.string.update_verified)
+          }
+        }
+      }
+      busy = false
+      if (apk != null) withContext(Dispatchers.IO) { Updates.install(context, apk) }
+    }
   }
 
   fun connect() {
@@ -278,7 +317,11 @@ fun AppRoot(
         Screen.CONNECT -> ConnectScreen(status, vpnUp, starting, busy, keySet, check, presentation, country,
           if (vpnUp) activeRules ?: savedRules else savedRules, pending, ui.optional(notice),
           onConnect = { connect() }, onDisconnect = { stopVpn(context); notice = 0 },
-          onOpen = { open(it) }, onReconnect = { reconnect() })
+          onOpen = { open(it) }, onReconnect = { reconnect() },
+          update = Updates.offered(context, status.update),
+          installedBuild = Updates.installedCode(context),
+          updateState = updateState,
+          onUpdate = { takeUpdate() })
         Screen.RULES -> RulesScreen(rules, savedRules, pending, vpnUp, busy || starting, ui.optional(notice),
           onChange = { rules = it; notice = 0 }, onSave = { saveRules() }, onReconnect = { reconnect() })
         Screen.SETTINGS -> SettingsScreen(keySet, pending, ui.optional(notice), busy || starting, onOpen = { open(it) }, onReconnect = { reconnect() })

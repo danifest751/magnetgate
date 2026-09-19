@@ -129,6 +129,14 @@
   <string name="connected_no_responses">Connected, no responses</string>
   <string name="not_connected">Not connected</string>
   <string name="core_measurements">Core &amp; measurements</string>
+    <string name="update_available">Update available</string>
+  <string name="update_from_build">Installed: build %1$d</string>
+  <string name="update_downloading">Downloading %1$d%%</string>
+  <string name="update_verified">Verified — opening the installer</string>
+  <string name="update_failed">Update failed: %1$s</string>
+  <string name="update_needs_permission">Allow this app to install packages, then tap again</string>
+  <string name="update_needs_tunnel">Connect first: the update travels through the tunnel</string>
+  <string name="app_build">App build</string>
   <string name="core_version">Core version</string>
   <string name="unknown">Unknown</string>
   <string name="not_running">Not running</string>

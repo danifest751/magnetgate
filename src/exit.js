@@ -149,6 +149,37 @@ function readExtraDp() {
 // hash to (scripts/update-rulesets.mjs writes this). No list contents travel here - only the decision
 // about which ones are current, sealed with the key derived from the PSK like every other field, so a
 // mirror that serves something else cannot retune anyone's routing.
+// The build clients should be running: a version, where the package lives and what it must hash to
+// (scripts/publish-update.mjs writes this). It is the most dangerous thing this record can carry,
+// because acting on it means installing code, so it is deliberately the smallest possible statement -
+// no changelog, no flags, nothing a client could be made to interpret - and it is sealed like every
+// other field. A client still verifies the digest after download, and Android still refuses a package
+// signed with a different key, and a person still taps "install". This field is only the first of
+// those four gates, never the only one.
+// The release is some 85 MB; a manifest claiming much more is not describing this application.
+const MAX_UPDATE_BYTES = 256 * 1024 * 1024
+const UPDATE_FILE = process.env.MAGNETGATE_UPDATE_FILE ?? '/etc/magnetgate-update.json'
+function readUpdate() {
+  try {
+    if (!fs.existsSync(UPDATE_FILE)) return null
+    const doc = JSON.parse(fs.readFileSync(UPDATE_FILE, 'utf8').replace(/^\uFEFF/, ''))
+    const v = Number(doc?.v)
+    const vc = Number(doc?.vc)
+    if (!Number.isInteger(v) || v < 1) return null
+    // versionCode is Android's own monotonic counter and the only thing that decides whether an update
+    // exists; a manifest without a sane one is not describing a release.
+    if (!Number.isInteger(vc) || vc < 1) return null
+    if (typeof doc?.vn !== 'string' || !doc.vn || doc.vn.length > 64) return null
+    if (!/^https:\/\//.test(doc?.url ?? '')) return null
+    if (!/^[0-9a-f]{64}$/.test(doc?.sha256 ?? '')) return null
+    if (!Number.isInteger(doc?.bytes) || doc.bytes <= 0 || doc.bytes > MAX_UPDATE_BYTES) return null
+    return { v, vc, vn: doc.vn, url: doc.url, sha256: doc.sha256, bytes: doc.bytes }
+  } catch {
+    return null
+  }
+}
+
+
 const RULESETS_FILE = process.env.MAGNETGATE_RULESETS_FILE ?? '/etc/magnetgate-rulesets.json'
 function readRuleSets() {
   try {
@@ -276,9 +307,14 @@ async function publishOnce() {
     // The rule-set manifest rides the Nostr view only, for the same reason the pinned hy2 certificate
     // does: it does not fit the ~1000 B BEP44 record, and squeezing it in would cost the endpoints.
     const rs = readRuleSets()
+    const up = readUpdate()
     const nostrDp = [...extra, mgt]
     const nseq = 'n' + seq
-    const sealedNostr = seal(boxKey, Buffer.from(JSON.stringify({ ...base, dp: nostrDp, ...(rs ? { rs } : {}) })), nseq)
+    const sealedNostr = seal(
+      boxKey,
+      Buffer.from(JSON.stringify({ ...base, dp: nostrDp, ...(rs ? { rs } : {}), ...(up ? { up } : {}) })),
+      nseq
+    )
     nostr.publish(sealedNostr, nseq)
   }
   writeHealth({ peers: peers.length, peersSeen: peerList })

@@ -215,6 +215,25 @@ func (p *Pool) Traffic() (sent, received int64) {
 	return p.sent, p.received
 }
 
+// AdvertisedUpdate is the newest build any node advertises, or nil. (Named apart from Update, which
+// records a node: one is what the rendezvous found, the other is what it says about this client.)
+//
+// The newest wins rather than whichever node was discovered first: nodes are deployed one at a time,
+// so for a while they disagree, and taking the first would make a phone's offer depend on the order
+// discovery happened to finish in - the same trap the rule-set manifest fell into.
+func (p *Pool) AdvertisedUpdate() *offer.Update {
+	var best *offer.Update
+	for _, node := range p.Nodes() {
+		if node.Offer == nil || !node.Offer.Update.Valid() {
+			continue
+		}
+		if best == nil || node.Offer.Update.VersionCode > best.VersionCode {
+			best = node.Offer.Update
+		}
+	}
+	return best
+}
+
 // Cooling lists the planes of one node that are paused, for the diagnostics table.
 func (p *Pool) Cooling(slot int) []health.Cooling { return p.cfg.Health.Cooling(idOf(slot)) }
 
@@ -444,6 +463,8 @@ type SnapshotRow struct {
 	Cooling []health.Cooling  `json:"cooling"`
 	// The routing lists this node says a client should be using. Only nodes reached over Nostr carry it.
 	RuleSets *offer.RuleSets `json:"rs,omitempty"`
+	// The build this node says clients should be running; see offer.Update for what it is and is not.
+	Update *offer.Update `json:"up,omitempty"`
 }
 
 // Snapshot builds the diagnostics view.
@@ -462,6 +483,9 @@ func (p *Pool) Snapshot() Snapshot {
 		}
 		if node.Offer.RuleSets.Valid() {
 			row.RuleSets = node.Offer.RuleSets
+		}
+		if node.Offer.Update.Valid() {
+			row.Update = node.Offer.Update
 		}
 		if row.Cooling == nil {
 			row.Cooling = []health.Cooling{}

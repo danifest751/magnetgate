@@ -167,12 +167,16 @@ fun ConnectScreen(
   check: Health.Check?, presentation: ConnectionPresentation, country: String, routing: RoutingDraft,
   pending: Boolean, notice: String, onConnect: () -> Unit, onDisconnect: () -> Unit,
   onOpen: (Screen) -> Unit, onReconnect: () -> Unit,
+  // The update worth offering, already compared with what is installed (Updates.offered); null when
+  // this phone is current, which is the usual case and shows nothing at all.
+  update: UpdateRow? = null, installedBuild: Long = 0, updateState: String = "", onUpdate: () -> Unit = {},
 ) {
   val ui = LocalUiStrings.current
   Column(Modifier.fillMaxSize()) {
     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
       StatusPanel(presentation)
       if (notice.isNotBlank()) InfoNotice(notice)
+      update?.let { UpdateCard(it, installedBuild, updateState, busy, onUpdate) }
       Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), onClick = { onOpen(Screen.COUNTRIES) }) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
           Surface(shape = RoundedCornerShape(9.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
@@ -214,6 +218,40 @@ fun ConnectScreen(
         enabled = !busy && !starting, secondary = vpnUp,
         onClick = { if (vpnUp) onDisconnect() else if (!keySet) onOpen(Screen.ACCESS) else onConnect() },
       )
+    }
+  }
+}
+
+/**
+ * The one place this application ever offers to install code.
+ *
+ * It says which build is offered and what the phone is running, because "an update is available" with
+ * no numbers is exactly the message a person cannot check. Nothing happens until it is tapped: the
+ * package is some 85 MB and this client is often on a mobile network.
+ */
+@Composable
+fun UpdateCard(update: UpdateRow, installed: Long, state: String, busy: Boolean, onAct: () -> Unit) {
+  val ui = LocalUiStrings.current
+  Surface(
+    shape = RoundedCornerShape(18.dp),
+    color = MaterialTheme.colorScheme.surface,
+    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    onClick = { if (!busy) onAct() },
+  ) {
+    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+      Surface(shape = RoundedCornerShape(9.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) { UiIcon(R.drawable.ic_activity) }
+      }
+      Column(Modifier.weight(1f)) {
+        Text(ui.text(R.string.update_available), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("${update.versionCode} · ${update.versionName}", style = MaterialTheme.typography.titleMedium, fontFamily = Mono)
+        Text(
+          state.ifBlank { ui.text(R.string.update_from_build, installed) },
+          style = MaterialTheme.typography.bodySmall,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+      }
+      UiIcon(R.drawable.ic_next)
     }
   }
 }

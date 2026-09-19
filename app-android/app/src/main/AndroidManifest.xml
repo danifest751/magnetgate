@@ -15,6 +15,9 @@
   <!-- Not for a receiver: a persisted job is one the system keeps across a reboot, and it asks for this
        permission to prove the app is allowed to be woken after one. -->
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!-- To offer the update this application fetched and verified itself. The system still asks the
+       person, and still refuses a package signed with a different key than the installed one. -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
   <application
     android:label="@string/app_name"
