@@ -90,6 +90,8 @@ fun AppRoot(
   var parentScreen by rememberSaveable { mutableStateOf(Screen.CONNECT) }
   // Отчёты о сбоях: состояние переключателя и сколько отчётов ждёт туннеля. Читается при открытии
   // настроек, а не раз за жизнь экрана, - отчёт мог быть записан или отправлен уже после запуска.
+  // One tap, one installer session: see the comment at the call site.
+  var installing by remember { mutableStateOf(false) }
   var reports by remember { mutableStateOf(Reports.enabled(context)) }
   var reportsWaiting by remember { mutableIntStateOf(Reports.pending(context).size) }
   val pending = vpnUp && revision != appliedRevision
@@ -170,7 +172,32 @@ fun AppRoot(
       val apk = java.io.File(context.filesDir, "update.apk")
       updateState = ui.text(R.string.update_verified)
       Updates.withdrawAnnouncement(context)
-      scope.launch { withContext(Dispatchers.IO) { Updates.install(context, apk) } }
+      // One tap, one session. On 20.09 the dialog never appeared, the owner tapped again, and each tap
+      // wrote the whole package into a new session and committed it: four sessions in a second and a
+      // half. The dialog is now raised from here, where this activity is on screen and allowed to.
+      if (installing) return
+      installing = true
+      scope.launch {
+        val handed = withContext(Dispatchers.IO) {
+          Updates.install(context, apk) { confirm ->
+            scope.launch(Dispatchers.Main) {
+              val activity = context as? android.app.Activity
+              runCatching {
+                if (activity != null) activity.startActivity(confirm)
+                else context.startActivity(confirm.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+              }.onFailure {
+                Log.w(TAG, "showing the install dialog: ${it.message}")
+                updateState = ui.text(R.string.update_install_now)
+              }
+              installing = false
+            }
+          }
+        }
+        if (!handed) {
+          installing = false
+          updateState = ui.text(R.string.update_install_now)
+        }
+      }
       return
     }
     val port = status.socksPort

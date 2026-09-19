@@ -1,8 +1,10 @@
 package ai.magnetgate.client
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.app.Notification
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageInstaller
 import android.util.Log
 import java.io.File
@@ -363,26 +365,65 @@ object Updates {
     }
   }
 
+  private const val INSTALL_STATUS = "ai.magnetgate.client.INSTALL_STATUS"
+
   /**
    * Hands the verified package to the system installer, which asks the person.
    *
-   * The session is written from our own file and committed; Android then shows its dialog, checks the
-   * signature against the installed application and refuses if they differ. That refusal is a feature:
-   * it is what makes a stolen update URL useless without the release key.
+   * The session is written from our own file and committed; Android then checks the signature against
+   * the installed application and refuses if they differ. That refusal is a feature: it is what makes a
+   * stolen update URL useless without the release key.
+   *
+   * The dialog is raised by **us**, and that is the whole lesson of 20.09. The session used to be
+   * committed with a PendingIntent to this application's activity, leaving the system to bring the
+   * confirmation up; on the owner's phone the system refused - `abortLaunch` in the log,
+   * `SYSTEM_ALERT_WINDOW: default; rejectTime=+43s` in appops, four sessions committed and four
+   * aborts in a second and a half, and nothing whatsoever on screen while the person tapped again and
+   * again. A PendingIntent that starts an activity is judged as a start from the background, and MIUI
+   * does not allow that without a permission nobody has granted.
+   *
+   * So the session reports to a broadcast receiver, which always arrives, and the intent it hands back
+   * under STATUS_PENDING_USER_ACTION is started by [onConfirm] from the activity the person is looking
+   * at. That is an ordinary foreground start, and it needs no permission at all.
    */
-  fun install(context: Context, apk: File): Boolean = runCatching {
+  fun install(context: Context, apk: File, onConfirm: (Intent) -> Unit): Boolean = runCatching {
     val installer = context.packageManager.packageInstaller
     val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL)
     params.setAppPackageName(context.packageName)
     val sessionId = installer.createSession(params)
+    val application = context.applicationContext
+    val receiver = object : BroadcastReceiver() {
+      override fun onReceive(ctx: Context, intent: Intent) {
+        val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, Int.MIN_VALUE)
+        val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()
+        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
+          val confirm = if (android.os.Build.VERSION.SDK_INT >= 33) {
+            intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+          } else {
+            @Suppress("DEPRECATION") intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+          }
+          if (confirm == null) Log.w(TAG, "the installer asked for a person without saying how")
+          else onConfirm(confirm)
+          return // the session lives on; the answer comes as another broadcast
+        }
+        Log.i(TAG, "installer session $sessionId: status $status $message")
+        runCatching { application.unregisterReceiver(this) }
+      }
+    }
+    val filter = IntentFilter(INSTALL_STATUS)
+    if (android.os.Build.VERSION.SDK_INT >= 33) {
+      application.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+    } else {
+      @Suppress("UnspecifiedRegisterReceiverFlag") application.registerReceiver(receiver, filter)
+    }
     installer.openSession(sessionId).use { session ->
       session.openWrite("package", 0, apk.length()).use { output ->
         apk.inputStream().use { it.copyTo(output, CHUNK) }
         session.fsync(output)
       }
-      val intent = Intent(context, MainActivity::class.java)
+      val intent = Intent(INSTALL_STATUS).setPackage(context.packageName)
       val flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_MUTABLE
-      val pending = android.app.PendingIntent.getActivity(context, sessionId, intent, flags)
+      val pending = android.app.PendingIntent.getBroadcast(context, sessionId, intent, flags)
       session.commit(pending.intentSender)
     }
     Log.i(TAG, "update handed to the system installer, session $sessionId")
