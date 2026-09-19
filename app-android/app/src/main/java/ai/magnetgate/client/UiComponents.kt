@@ -170,13 +170,18 @@ fun ConnectScreen(
   // The update worth offering, already compared with what is installed (Updates.offered); null when
   // this phone is current, which is the usual case and shows nothing at all.
   update: UpdateRow? = null, installedBuild: Long = 0, updateState: String = "", onUpdate: () -> Unit = {},
+  updateReady: Boolean = false,
 ) {
   val ui = LocalUiStrings.current
   Column(Modifier.fillMaxSize()) {
     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
       StatusPanel(presentation)
       if (notice.isNotBlank()) InfoNotice(notice)
-      update?.let { UpdateCard(it, installedBuild, updateState, busy, onUpdate) }
+      update?.let {
+        UpdateCard(it, installedBuild, updateState.ifBlank {
+          if (updateReady) ui.text(R.string.update_install_now) else ""
+        }, busy, onUpdate)
+      }
       Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), onClick = { onOpen(Screen.COUNTRIES) }) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
           Surface(shape = RoundedCornerShape(9.dp), color = MaterialTheme.colorScheme.surfaceVariant) {

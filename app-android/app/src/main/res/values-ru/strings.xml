@@ -128,7 +128,10 @@
   <string name="connected_no_responses">Соединение есть, ответов нет</string>
   <string name="not_connected">Нет соединения</string>
   <string name="core_measurements">Ядро и измерения</string>
-    <string name="update_available">Доступно обновление</string>
+    <string name="update_ready_title">Обновление готово</string>
+  <string name="update_ready_text">Сборка %1$d скачана и проверена — откройте, чтобы установить</string>
+  <string name="update_install_now">Скачано — нажмите, чтобы установить</string>
+  <string name="update_available">Доступно обновление</string>
   <string name="update_from_build">Установлена: сборка %1$d</string>
   <string name="update_downloading">Загрузка %1$d%%</string>
   <string name="update_verified">Проверено — открываю установщик</string>

@@ -129,7 +129,10 @@
   <string name="connected_no_responses">Connected, no responses</string>
   <string name="not_connected">Not connected</string>
   <string name="core_measurements">Core &amp; measurements</string>
-    <string name="update_available">Update available</string>
+    <string name="update_ready_title">Update ready</string>
+  <string name="update_ready_text">Build %1$d is downloaded and checked — open to install</string>
+  <string name="update_install_now">Downloaded — tap to install</string>
+  <string name="update_available">Update available</string>
   <string name="update_from_build">Installed: build %1$d</string>
   <string name="update_downloading">Downloading %1$d%%</string>
   <string name="update_verified">Verified — opening the installer</string>

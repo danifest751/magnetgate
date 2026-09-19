@@ -156,6 +156,15 @@ fun AppRoot(
       runCatching { context.startActivity(Updates.permissionIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
       return
     }
+    // Already downloaded and checked? Then this tap is the install, and it happens with the screen in
+    // front of the person - which is the only way Android will raise its dialog at all.
+    if (Updates.stagedBuild(context) == offered.versionCode) {
+      val apk = java.io.File(context.filesDir, "update.apk")
+      updateState = ui.text(R.string.update_verified)
+      Updates.withdrawAnnouncement(context)
+      scope.launch { withContext(Dispatchers.IO) { Updates.install(context, apk) } }
+      return
+    }
     val port = status.socksPort
     if (!vpnUp || port == 0) {
       updateState = ui.text(R.string.update_needs_tunnel)
@@ -175,7 +184,12 @@ fun AppRoot(
         }
       }
       busy = false
-      if (apk != null) withContext(Dispatchers.IO) { Updates.install(context, apk) }
+      if (apk != null) {
+        // The download took minutes and the person has probably moved on, so the system would abort a
+        // dialog raised from here. The package waits; the shade and the card both say it is ready.
+        Updates.announce(context, offered)
+        updateState = ui.text(R.string.update_install_now)
+      }
     }
   }
 
@@ -339,6 +353,7 @@ fun AppRoot(
           onConnect = { connect() }, onDisconnect = { stopVpn(context); notice = 0 },
           onOpen = { open(it) }, onReconnect = { reconnect() },
           update = Updates.offered(context, status.update),
+          updateReady = Updates.stagedBuild(context) == Updates.offered(context, status.update)?.versionCode,
           installedBuild = Updates.installedCode(context),
           updateState = updateState,
           onUpdate = { takeUpdate() })

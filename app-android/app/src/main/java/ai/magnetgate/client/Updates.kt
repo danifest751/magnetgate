@@ -1,6 +1,7 @@
 package ai.magnetgate.client
 
 import android.content.Context
+import android.app.Notification
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.util.Log
@@ -79,6 +80,10 @@ object Updates {
   /** Read in chunks so that a phone never holds 85 MB twice: once in a buffer and once in a file. */
   private const val CHUNK = 64 * 1024
 
+  /** How much of the package one slice covers, and how many slices travel at once. */
+  private const val PIECE = 4L * 1024 * 1024
+  private const val WORKERS = 4
+
   /**
    * The update worth offering, or null.
    *
@@ -91,6 +96,35 @@ object Updates {
     if (advertised == null) return null
     val installed = installedCode(context)
     return if (advertised.versionCode > installed) advertised else null
+  }
+
+  /**
+   * The build whose package is downloaded, verified and waiting to be installed, or 0.
+   *
+   * There has to be such a state, because the last step of an update needs a person and the download
+   * does not. Android aborts an install dialog launched from the background - measured: the package
+   * arrived seven minutes after the screen had moved on, the session was committed, and the system
+   * wrote `abortLaunch` and showed nothing. A silent nothing is the worst possible outcome for an
+   * update, so the verified package waits, the screen offers it, and the notification says so.
+   */
+  fun stagedBuild(context: Context): Long {
+    val code = context.getSharedPreferences("magnetgate-update", Context.MODE_PRIVATE).getLong("ready", 0)
+    if (code == 0L) return 0
+    return if (File(context.filesDir, FILE).exists()) code else 0
+  }
+
+  private fun rememberStaged(context: Context, versionCode: Long) {
+    context.getSharedPreferences("magnetgate-update", Context.MODE_PRIVATE)
+      .edit().putLong("ready", versionCode).apply()
+  }
+
+  /** Forgets a staged package once it is installed, or once it is no longer the one being offered. */
+  fun forgetStaged(context: Context) {
+    val target = File(context.filesDir, FILE)
+    runCatching { target.delete() }
+    runCatching { partsFile(target).delete() }
+    context.getSharedPreferences("magnetgate-update", Context.MODE_PRIVATE)
+      .edit().remove("ready").remove("partial").apply()
   }
 
   fun installedCode(context: Context): Long = runCatching {
@@ -122,35 +156,127 @@ object Updates {
    */
   fun download(context: Context, update: UpdateRow, socksPort: Int, onProgress: (Progress) -> Unit): File? {
     val target = File(context.filesDir, FILE)
-    runCatching { target.delete() }
-    return try {
-      fetch(update, socksPort, target, onProgress)
-      Log.i(TAG, "update ${update.versionCode} downloaded and verified")
-      onProgress(Progress.Verified)
-      target
-    } catch (error: Throwable) {
+    // A part-file from an earlier attempt is an asset, not rubbish: the first live download of this
+    // took half an hour and then died at 47 of 88 MB, and starting from zero is how a phone on a
+    // mobile network never finishes an update at all. What is kept is the slices, not the file: the
+    // file is laid out full-length from the start, so its size says nothing about what is in it.
+    // The record of finished slices must never outlive the file it describes. An earlier version
+    // deleted the package on failure and left the record behind; the next attempt then trusted it,
+    // wrote nothing, and failed the digest with every slice "done" - which reads like corruption and
+    // is really bookkeeping. So the two are checked together, and dropped together.
+    val stale = partialFor(context) != update.versionCode ||
+      !target.exists() ||
+      target.length() != update.bytes
+    if (stale) {
       runCatching { target.delete() }
-      Log.w(TAG, "update ${update.versionCode}: ${error.message}")
-      onProgress(Progress.Failed(error.message ?: error.javaClass.simpleName))
-      null
+      runCatching { partsFile(target).delete() }
+    }
+    rememberPartial(context, update.versionCode)
+    val pieces = ((update.bytes + PIECE - 1) / PIECE).toInt()
+
+    var attempt = 0
+    while (true) {
+      attempt++
+      try {
+        fetch(update, socksPort, target, onProgress)
+        Log.i(TAG, "update ${update.versionCode} downloaded and verified")
+        rememberStaged(context, update.versionCode)
+        onProgress(Progress.Verified)
+        return target
+      } catch (error: Throwable) {
+        val have = readDone(target).size
+        Log.w(TAG, "update ${update.versionCode}: ${error.message} ($have of $pieces slices)")
+        if (attempt >= MAX_ATTEMPTS) {
+          // Whatever is on disk is either wrong or not worth the space; the slices that did arrive are
+          // no use once this build is no longer the one being offered.
+          runCatching { target.delete() }
+          runCatching { partsFile(target).delete() }
+          onProgress(Progress.Failed(error.message ?: error.javaClass.simpleName))
+          return null
+        }
+        onProgress(Progress.Downloading(have.toLong() * PIECE, update.bytes))
+      }
     }
   }
 
+  /** How many times a stalled download is picked up again before the person is told it failed. */
+  private const val MAX_ATTEMPTS = 6
+
+  private fun partialFor(context: Context): Long =
+    context.getSharedPreferences("magnetgate-update", Context.MODE_PRIVATE).getLong("partial", 0)
+
+  private fun rememberPartial(context: Context, versionCode: Long) {
+    context.getSharedPreferences("magnetgate-update", Context.MODE_PRIVATE)
+      .edit().putLong("partial", versionCode).apply()
+  }
+
   /**
-   * One GET through the tunnel, written by hand rather than through the platform's HTTP client.
+   * Fetches the package in slices, several at a time, and writes each where it belongs.
    *
-   * Two reasons, and the second is the one that forced it. The destination is left as a **name** so
-   * that whatever is behind the SOCKS listener resolves it, exactly as the health check does - a client
-   * that resolved locally would be testing its own resolver rather than the tunnel's. And Android
-   * refuses cleartext through its own stack from targetSdk 28 (`Cleartext HTTP traffic not permitted`),
-   * which is a sound default this application keeps for everything else: the alternatives were flipping
-   * it off for the whole app, or naming the update hosts in the manifest - and the hosts are discovered
-   * at runtime, so naming them in a package would defeat the point of discovering them.
+   * One stream was not enough. Measured on the owner's phone: the same package that arrived in 170
+   * seconds one evening managed 47 of 88 MB in half an hour the next, because the tunnel happened to
+   * leave through the exit that is not the one hosting the file, and one TCP stream across that extra
+   * hop is what it is. Four slices in parallel do not make the hop faster, but one stalled window no
+   * longer holds up everything behind it, and every slice that finishes is finished for good.
    *
-   * The body is read to exactly the length the sealed manifest promised and hashed as it arrives, so a
-   * source that sends more, less or other bytes fails here rather than on disk.
+   * The slices are small on purpose. A slice is the unit of resuming: with four-megabyte pieces a
+   * stall costs at most four megabytes rather than the whole package, and the record of what is done
+   * outlives the process - which, on a phone that is updating its own VPN, may well die mid-way.
    */
   private fun fetch(update: UpdateRow, socksPort: Int, target: File, onProgress: (Progress) -> Unit) {
+    val total = update.bytes
+    val pieces = ((total + PIECE - 1) / PIECE).toInt()
+    // the file is laid out in full once, so that any slice may be written at its own offset
+    java.io.RandomAccessFile(target, "rw").use { it.setLength(total) }
+    val done = java.util.Collections.synchronizedSet(readDone(target).toMutableSet())
+    val next = java.util.concurrent.atomic.AtomicInteger(0)
+    val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+    val fetched = java.util.concurrent.atomic.AtomicLong(done.size.toLong() * PIECE)
+
+    val workers = (1..minOf(WORKERS, maxOf(1, pieces - done.size))).map {
+      Thread {
+        while (failure.get() == null) {
+          val piece = next.getAndIncrement()
+          if (piece >= pieces) return@Thread
+          if (!done.add(piece)) continue // already on disk from an earlier attempt
+          val from = piece.toLong() * PIECE
+          val to = minOf(from + PIECE, total) - 1
+          try {
+            slice(update, socksPort, target, from, to)
+            noteDone(target, piece)
+            val got = fetched.addAndGet(to - from + 1)
+            onProgress(Progress.Downloading(minOf(got, total), total))
+          } catch (error: Throwable) {
+            done.remove(piece) // it is not done, and the next attempt has to take it again
+            failure.compareAndSet(null, error)
+            return@Thread
+          }
+        }
+      }.apply { isDaemon = true; start() }
+    }
+    workers.forEach { it.join() }
+    failure.get()?.let { throw it }
+
+    // Hashed from the finished file rather than in flight: the bytes arrived over several connections
+    // and possibly several attempts, so a digest of any one stream would prove nothing about the rest.
+    val digest = MessageDigest.getInstance("SHA-256")
+    target.inputStream().use { file ->
+      val buffer = ByteArray(CHUNK)
+      while (true) {
+        val read = file.read(buffer)
+        if (read <= 0) break
+        digest.update(buffer, 0, read)
+      }
+    }
+    val got = digest.digest().joinToString("") { "%02x".format(it) }
+    if (!got.equals(update.sha256, ignoreCase = true)) {
+      throw IllegalStateException("the package does not match the manifest")
+    }
+    runCatching { partsFile(target).delete() }
+  }
+
+  /** One slice, over its own connection through the tunnel. */
+  private fun slice(update: UpdateRow, socksPort: Int, target: File, from: Long, to: Long) {
     var url = URL(update.url)
     var redirects = 0
     while (true) {
@@ -163,17 +289,20 @@ object Updates {
       val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
       socket.soTimeout = 60_000
       socket.connect(InetSocketAddress.createUnresolved(host, port), 30_000)
-      val stream: Socket = if (url.protocol == "https") {
-        (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(socket, host, port, false).also {
-          (it as SSLSocket).startHandshake()
-        }
-      } else {
-        socket
-      }
       var redirect: String? = null
       socket.use {
+        val stream: Socket = if (url.protocol == "https") {
+          (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(it, host, port, false).also { tls ->
+            (tls as SSLSocket).startHandshake()
+          }
+        } else {
+          it
+        }
         val writer = stream.getOutputStream().bufferedWriter()
-        writer.write("GET $path HTTP/1.1\r\nHost: $host\r\nConnection: close\r\nUser-Agent: magnetgate\r\n\r\n")
+        writer.write(
+          "GET $path HTTP/1.1\r\nHost: $host\r\nRange: bytes=$from-$to\r\n" +
+            "Connection: close\r\nUser-Agent: magnetgate\r\n\r\n"
+        )
         writer.flush()
         val input = stream.getInputStream()
         val status = readLine(input) ?: throw IllegalStateException("the source answered with nothing")
@@ -186,42 +315,41 @@ object Updates {
         }
         when {
           code in 300..399 && location != null -> redirect = location
-          code != 200 -> throw IllegalStateException("HTTP $code")
-          else -> readBody(input, update, target, onProgress)
+          // 200 would mean the source ignored the range and is sending the whole package per slice
+          code != 206 -> throw IllegalStateException("HTTP $code for bytes $from-$to")
+          else -> {
+            val want = to - from + 1
+            var written = 0L
+            java.io.RandomAccessFile(target, "rw").use { file ->
+              file.seek(from)
+              val buffer = ByteArray(CHUNK)
+              while (written < want) {
+                val read = input.read(buffer, 0, minOf(CHUNK.toLong(), want - written).toInt())
+                if (read <= 0) break
+                file.write(buffer, 0, read)
+                written += read
+              }
+            }
+            if (written != want) throw IllegalStateException("slice $from-$to: got $written of $want B")
+          }
         }
       }
-      val next = redirect ?: return
+      val nextUrl = redirect ?: return
       if (++redirects > 3) throw IllegalStateException("too many redirects")
-      url = URL(url, next)
+      url = URL(url, nextUrl)
     }
   }
 
-  /** Reads exactly what the manifest promised, hashing as it goes, and refuses anything else. */
-  private fun readBody(
-    input: java.io.InputStream,
-    update: UpdateRow,
-    target: File,
-    onProgress: (Progress) -> Unit,
-  ) {
-    val digest = MessageDigest.getInstance("SHA-256")
-    var written = 0L
-    target.outputStream().use { output ->
-      val buffer = ByteArray(CHUNK)
-      while (written < update.bytes) {
-        val want = minOf(CHUNK.toLong(), update.bytes - written).toInt()
-        val read = input.read(buffer, 0, want)
-        if (read <= 0) break
-        written += read
-        digest.update(buffer, 0, read)
-        output.write(buffer, 0, read)
-        onProgress(Progress.Downloading(written, update.bytes))
-      }
-    }
-    if (written != update.bytes) throw IllegalStateException("got $written B of ${update.bytes} B")
-    val got = digest.digest().joinToString("") { "%02x".format(it) }
-    if (!got.equals(update.sha256, ignoreCase = true)) {
-      throw IllegalStateException("the package does not match the manifest")
-    }
+  private fun partsFile(target: File) = File(target.parentFile, target.name + ".parts")
+
+  /** Which slices are already on disk, from an attempt that did not finish. */
+  private fun readDone(target: File): Set<Int> = runCatching {
+    partsFile(target).readLines().mapNotNull { it.trim().toIntOrNull() }.toSet()
+  }.getOrDefault(emptySet())
+
+  @Synchronized
+  private fun noteDone(target: File, piece: Int) {
+    runCatching { partsFile(target).appendText(piece.toString() + "\n") }
   }
 
   /** One CRLF-terminated line, read byte by byte because the body after it must stay unbuffered. */
@@ -260,6 +388,40 @@ object Updates {
     Log.i(TAG, "update handed to the system installer, session $sessionId")
     true
   }.onFailure { Log.w(TAG, "handing the update to the installer: ${it.message}") }.getOrDefault(false)
+
+  /**
+   * Says in the shade that a package is ready, because the dialog cannot be raised from the background.
+   *
+   * Tapping it opens this application, which is the only place the install can be started from with
+   * any chance of the system showing its dialog.
+   */
+  fun announce(context: Context, update: UpdateRow) {
+    runCatching {
+      val manager = context.getSystemService(android.app.NotificationManager::class.java) ?: return
+      val open = android.app.PendingIntent.getActivity(
+        context,
+        1,
+        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
+      )
+      val notification = Notification.Builder(context, "magnetgate")
+        .setContentTitle(context.getString(R.string.update_ready_title))
+        .setContentText(context.getString(R.string.update_ready_text, update.versionCode))
+        .setSmallIcon(R.drawable.ic_launcher_monochrome)
+        .setContentIntent(open)
+        .setAutoCancel(true)
+        .build()
+      manager.notify(UPDATE_NOTIFICATION, notification)
+    }.onFailure { Log.w(TAG, "announcing the update: ${it.message}") }
+  }
+
+  fun withdrawAnnouncement(context: Context) {
+    runCatching {
+      context.getSystemService(android.app.NotificationManager::class.java)?.cancel(UPDATE_NOTIFICATION)
+    }
+  }
+
+  private const val UPDATE_NOTIFICATION = 2
 
   /** Whether this phone allows this app to install packages at all; without it the dialog never opens. */
   fun mayInstall(context: Context): Boolean =
