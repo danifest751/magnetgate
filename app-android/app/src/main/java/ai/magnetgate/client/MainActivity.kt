@@ -35,12 +35,20 @@ class MainActivity : ComponentActivity() {
     // Цвет системных значков следует за темой; отступы учитывает AppRoot.
     enableEdgeToEdge()
     val extras = intent
+    // A hook launch answers and gets out of the way. Returning from onCreate without setContent leaves
+    // an activity with nothing drawn in it sitting on top of the task - a white screen the owner then
+    // finds instead of their client, which is what happened on 20.09 while these hooks were being used
+    // on a phone in daily use. finish() and not finishAndRemoveTask(): the real screen is usually
+    // underneath, and taking the task would close that too (killProcess is the one exception, and it
+    // means it).
     if (extras?.getStringExtra("dump") == "true") {
       dumpStatus()
+      finish()
       return
     }
     if (extras?.getStringExtra("stop") == "true") {
       if (fromShell()) stopTunnel() else Log.w(TAG, "the stop hook is for adb on a debuggable build, and this launch is neither")
+      finish()
       return
     }
     if (extras?.getStringExtra("kill") == "true") {
@@ -57,6 +65,7 @@ class MainActivity : ComponentActivity() {
       } else {
         Log.w(TAG, "the report hook is for adb on a debuggable build, and this launch is neither")
       }
+      finish()
       return
     }
     extras?.getStringExtra("update")?.takeIf { it.isNotBlank() }?.let { Updates.inject(it, fromShell()) }
