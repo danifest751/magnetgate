@@ -311,3 +311,30 @@ func TestUpdateManifestValidity(t *testing.T) {
 		}
 	}
 }
+
+// The update manifest reaches a client over Nostr only, like the rule-set manifest and the pinned
+// hysteria2 endpoint, so merging the two views of one generation has to keep it from whichever side
+// carries it. Added without this rule, and the phone saw no update at all while both nodes advertised
+// one: the DHT view arrives first, the merge started from it, and the field was dropped in silence.
+func TestMergeKeepsTheUpdateManifestFromEitherView(t *testing.T) {
+	manifest := &Update{
+		V: 1, VersionCode: 199, VersionName: "0.1.0+016a5f9",
+		URL:    "http://198.51.100.7:45443/token/magnetgate.apk",
+		SHA256: strings.Repeat("c", 64),
+		Bytes:  85373369,
+	}
+	withUp := &Offer{V: Schema, TS: 2000, DP: []json.RawMessage{json.RawMessage(`{"t":"mgt"}`)}, Update: manifest}
+	withoutUp := &Offer{V: Schema, TS: 2000, DP: []json.RawMessage{json.RawMessage(`{"t":"reality"}`)}}
+
+	if merged := Merge(withoutUp, withUp); merged == nil || merged.Update == nil {
+		t.Fatal("the Nostr view arriving second must bring its manifest with it")
+	}
+	if merged := Merge(withUp, withoutUp); merged == nil || merged.Update == nil {
+		t.Fatal("and arriving first it must not be dropped by the DHT view")
+	}
+	// A newer generation replaces what came before, manifest and all.
+	newer := &Offer{V: Schema, TS: 3000, DP: []json.RawMessage{json.RawMessage(`{"t":"mgt"}`)}}
+	if merged := Merge(withUp, newer); merged == nil || merged.Update != nil {
+		t.Fatal("a newer generation without a manifest means there is no manifest any more")
+	}
+}

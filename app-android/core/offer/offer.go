@@ -233,6 +233,18 @@ func Merge(prev, incoming *Offer) *Offer {
 	} else {
 		merged.RuleSets = nil
 	}
+	// And the update manifest, for exactly the same reason and by exactly the same rule. It was added
+	// without this and the phone saw no update at all: the DHT view of a generation arrives first, the
+	// merge started from it, and the field the Nostr view carried was dropped in silence. The comment
+	// above was already there; copying the field without copying the rule is how this trap catches you
+	// twice.
+	if incoming.Update.Valid() {
+		merged.Update = incoming.Update
+	} else if prev.Update.Valid() {
+		merged.Update = prev.Update
+	} else {
+		merged.Update = nil
+	}
 	return &merged
 }
 
