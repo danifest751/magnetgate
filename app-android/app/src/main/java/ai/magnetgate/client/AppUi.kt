@@ -495,7 +495,7 @@ private fun ConnectScreen(
     if (vpnUp || status.socksPort != 0) {
       SectionLabel("Route")
       Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        ValueRow("Exit", egress.removePrefix("egress ").ifBlank { "not measured" })
+        ValueRow("Exit", exitOf(egress, check))
         ValueRow("Round trip", check?.legs?.pingMs?.let { "${it}ms" } ?: "not measured")
         ValueRow("Whole request", check?.let { clockOf(it.atMs) + "  " + lastWord(it.summary()) } ?: "not yet")
         // Where that time went. The total is one number for four round trips over three legs, and
@@ -546,6 +546,23 @@ private fun bytes(value: Long): String {
     unit++
   }
   return String.format(java.util.Locale.US, "%.1f %s", scaled, units[unit])
+}
+
+/**
+ * Which exit answered.
+ *
+ * The screen used to have only its own measurement, taken once, at the moment the tunnel came up while
+ * someone was watching. That moment stopped happening: the watchdog raises the tunnel before anybody
+ * opens the app, so the transition never fired and the row read "not measured" for ever - on a phone
+ * whose service had measured the exit every minute for hours and knew the answer.
+ *
+ * So the service's measurement is the source, and the screen's own is only preferred when it has one:
+ * that is what the "Measure the exit now" button produces, and it is newer by definition.
+ */
+private fun exitOf(egress: String, check: Health.Check?): String {
+  val own = egress.removePrefix("egress ")
+  if (own.isNotBlank()) return own
+  return check?.takeIf { it.ok }?.detail?.takeIf { it.isNotBlank() } ?: "not measured"
 }
 
 /** The tail of a summary, which is where its measurement sits ("... in 788ms"). */
