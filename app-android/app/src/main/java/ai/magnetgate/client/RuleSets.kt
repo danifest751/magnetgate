@@ -181,7 +181,17 @@ object RuleSets {
       // Read at most one byte more than promised: a source that sends more is not serving the file the
       // manifest describes, and there is no reason to spend a phone's data finding out how much more.
       val cap = minOf(expectedBytes, MAX_BYTES)
-      val body = connection.inputStream.use { it.readNBytes(cap + 1) }
+      // readNBytes недоступен до Android 13; сохраняем ограничение размера на minSdk 26.
+      val body = connection.inputStream.use { input ->
+        val buffer = ByteArray(cap + 1)
+        var size = 0
+        while (size < buffer.size) {
+          val read = input.read(buffer, size, buffer.size - size)
+          if (read < 0) break
+          size += read
+        }
+        buffer.copyOf(size)
+      }
       if (body.size != expectedBytes) throw IllegalStateException("got ${body.size}B, manifest says ${expectedBytes}B")
       return body
     } finally {
