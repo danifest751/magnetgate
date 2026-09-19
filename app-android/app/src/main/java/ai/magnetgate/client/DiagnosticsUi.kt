@@ -10,6 +10,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
+/**
+ * The build a person is holding: the number Android compares when it is offered an update, and the
+ * commit it was built from.
+ *
+ * Read from the package manager rather than from BuildConfig, because what matters is what is
+ * installed - a debug build left on a phone beside a release is exactly the confusion this answers.
+ */
+private fun appBuild(context: android.content.Context): String = runCatching {
+  val info = context.packageManager.getPackageInfo(context.packageName, 0)
+  val code = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+  "$code · ${info.versionName}"
+}.getOrDefault("unknown")
+
 @Composable
 fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, presentation: ConnectionPresentation,
   engineError: String, checking: Boolean, notice: String, onTest: () -> Unit,
@@ -57,6 +70,10 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
       }
       item {
         SectionLabel(ui.text(R.string.core_measurements))
+        // Which build is this? The first question asked about any bug, and until now the screen could
+        // not answer it: the core's version is a constant, and the app's was 1 for every build ever
+        // made. This one names the commit, and says so when the tree it was built from was dirty.
+        ValueRow(ui.text(R.string.app_build), appBuild(LocalContext.current))
         ValueRow(ui.text(R.string.core_version), status.version.ifBlank { ui.text(R.string.unknown) })
         ValueRow("SOCKS", if (status.socksPort > 0) "127.0.0.1:${status.socksPort}" else ui.text(R.string.not_running))
         ValueRow(ui.text(R.string.slots), status.slots.joinToString(", ").ifBlank { ui.text(R.string.none) })

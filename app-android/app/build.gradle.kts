@@ -4,6 +4,32 @@ plugins {
   id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// What build is this, and which commit is it?
+//
+// `versionCode = 1` forever made two things impossible: telling from a phone which build it is running,
+// and offering it an update at all - an update is by definition a higher code, and Android enforces
+// that. So the number comes from the history: the count of commits, which only ever grows, and the
+// short hash so that a screen can be mapped back to a commit without guessing.
+//
+// A tree with uncommitted changes says so. Without that a hand-built APK looks exactly like a release,
+// and the first question about any bug - "which build is this?" - gets a confident wrong answer.
+//
+// A checkout without git, or a source archive, still builds: the code falls back to 1 and the name
+// says `unknown`, which is honest and cannot be mistaken for a release.
+fun git(vararg args: String): String? = runCatching {
+  val process = ProcessBuilder(listOf("git") + args)
+    .directory(rootDir)
+    .redirectErrorStream(true)
+    .start()
+  val text = process.inputStream.bufferedReader().readText().trim()
+  if (process.waitFor() == 0 && text.isNotEmpty()) text else null
+}.getOrNull()
+
+val buildNumber = git("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+val buildCommit = git("rev-parse", "--short=7", "HEAD") ?: "unknown"
+val buildDirty = !git("status", "--porcelain").isNullOrEmpty()
+val buildName = "0.1.0+" + buildCommit + if (buildDirty) "-dirty" else ""
+
 android {
   namespace = "ai.magnetgate.client"
   compileSdk = 35
@@ -12,8 +38,8 @@ android {
     applicationId = "ai.magnetgate.client"
     minSdk = 26
     targetSdk = 35
-    versionCode = 1
-    versionName = "0.1.0"
+    versionCode = buildNumber
+    versionName = buildName
   }
 
   // Release signing. The keystore and its password live in key/, which sits outside this repository
