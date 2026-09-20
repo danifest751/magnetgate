@@ -17,13 +17,21 @@ object CoreConfig {
     config.put("bootstrap", array(bootstrap))
     config.put("relays", array(relays))
     // Transports in order of preference: the two the engine speaks for us come first, and the native mux
-    // is the fallback - the same order the desktop client uses.
+    // is the fallback - the same order the desktop client uses, and the same measurement behind it.
     config.put("preference", array(PREFERENCE))
     return config.toString()
   }
 
-  /** The order the core tries a node's planes in, as src/transport-config.cjs orders them. */
-  val PREFERENCE = listOf("reality", "hy2", "mgt")
+  /**
+   * The order the core tries a node's planes in.
+   *
+   * Copied from `PLANE_ORDER` in `src/health.mjs`, which is where this is decided and where the
+   * measurement behind it is written down. It cannot be imported across languages, so a drift gate
+   * holds the two together (`drift: every client tries a node's planes in the same order`). The comment
+   * this replaced pointed at `src/transport-config.cjs`, which orders nothing and never did - the shape
+   * of rot a gate exists to stop.
+   */
+  val PREFERENCE = listOf("hy2", "reality", "mgt")
 
   fun array(values: List<String>): JSONArray {
     val array = JSONArray()

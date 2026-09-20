@@ -177,6 +177,54 @@ test('drift: the phone routes by the same policy as the desktop', () => {
   }
 })
 
+test("drift: every client tries a node's planes in the same order", async () => {
+  // Until 20.09 this one decision was written out by hand in three files and contradicted by a fourth.
+  // src/client.js and CoreConfig.kt both said reality-then-hy2-then-mgt; the update downloader had
+  // measured that hy2 carries several times what reality does over a long transfer and quietly used its
+  // own order; and the Kotlin comment justified itself by pointing at src/transport-config.cjs, which
+  // orders nothing and never has. Nobody was wrong on their own - they were wrong together, which is
+  // the exact shape of the ten defects of 17.09.
+  const { PLANE_ORDER } = await import('../src/health.mjs')
+  const listOf = (text, re, what) => {
+    const m = re.exec(text)
+    if (!m) throw new Error(`drift guard: could not find ${what} (pattern ${re})`)
+    return m[1].match(/[a-z0-9]+/g) ?? []
+  }
+
+  // The desktop reads the order rather than repeating it, so what is held here is that it still does.
+  const client = read('src/client.js')
+  assert.ok(
+    /PLANE_ORDER/.test(client),
+    'the desktop no longer reads the shared plane order - check whether it grew a copy of its own'
+  )
+
+  // Kotlin cannot import it, so the copy is held against the original word for word.
+  const core = read('app-android/app/src/main/java/ai/magnetgate/client/CoreConfig.kt')
+  assert.deepEqual(
+    listOf(core, /val PREFERENCE = listOf\(([^)]*)\)/, "the phone's plane order"),
+    [...PLANE_ORDER],
+    'the phone and the desktop try a node’s planes in a different order'
+  )
+
+  // And the downloader must keep taking it from there rather than naming a transport again - it is the
+  // one place that had measured the answer for itself, and the one that stayed right while the others
+  // were wrong. That is not a reason to let it keep its own copy; it is the reason this gate exists.
+  const updates = read('app-android/app/src/main/java/ai/magnetgate/client/Updates.kt')
+  assert.ok(
+    /CoreConfig\.PREFERENCE/.test(updates),
+    'the update downloader stopped reading the shared order - it used to carry a private copy of it'
+  )
+
+  // mgt last, always: it is the transport this process speaks by itself, so it is the floor under the
+  // engine rather than a road competing with it. A measurement that put it first would mean the engine
+  // had stopped working, not that mgt had got fast.
+  assert.equal(
+    PLANE_ORDER[PLANE_ORDER.length - 1],
+    'mgt',
+    'mgt is no longer last, so the fallback has become a choice'
+  )
+})
+
 test('drift: the phone gives UDP a road that is not the core', () => {
   // The core's SOCKS refuses UDP ASSOCIATE on purpose, so on Android a datagram that reaches the `core`
   // outbound is not slow or unreliable - it is refused, every time, with code=7. In full mode `final` is

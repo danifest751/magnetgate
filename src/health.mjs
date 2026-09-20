@@ -17,6 +17,40 @@
 // until it proves itself fast again.
 //
 // Pure and side-effect free so the policy can be unit-tested without a network.
+
+// The order a node's planes are tried in — declared here, once, because until 2026-09-20 it was written
+// out by hand in three places and silently contradicted by a fourth.
+//
+// It is hy2 first, and that is a measurement, not a preference. `scripts/android/speed-check.ps1` on the
+// owner's phone, 2026-09-20, on Wi-Fi, 8 MB per round, three rounds, median of each road:
+//
+//     in-0-hy2      2.82 MB/s   first byte 422 ms
+//     in-1-hy2      1.74 MB/s   first byte 245 ms
+//     in-0-reality  1.31 MB/s   first byte 633 ms
+//     in-1-reality  0.71 MB/s   first byte 341 ms
+//     core          0.53 MB/s   first byte 720 ms   <- everything a person uses went through here
+//
+// That last row is what this order is worth. The core is the road all ordinary traffic takes, and it
+// was carrying a fifth of what the phone's best plane could, because it was choosing reality. With this
+// order it carried 2.59 MB/s at 268 ms, and the core's own cost - engine, core, engine again - turned
+// out to be 8%, not the 81% it looked like. Nearly five times, from one list.
+//
+// For a day this file declared two orders — one for pages, one for downloads — on the reasoning that
+// "fastest" is two questions: how soon the first byte arrives, and how much the path carries once it is
+// open. The reasoning is sound and the split was still wrong, because on this network hy2 wins **both**.
+// reality was first for pages on the belief that it answers in milliseconds; it does not, it answers in
+// hundreds of them, and one round took 5.5 seconds. Two orders that rank the planes identically are one
+// order and a story. If a future measurement genuinely separates the two questions, the split comes
+// back — with its numbers beside it, the way this one has.
+//
+// mgt is last: it is the transport we speak ourselves, so it is what still works when the engine has
+// nothing to offer — a floor, not a choice.
+//
+// ⚠️ This decides where traffic goes, so re-measure before trusting it on another network, and note that
+// it is a speed ranking only. hy2 is QUIC and stands out more to someone looking for it than reality
+// does; the health policy below is what moves traffic off a plane that has started to be blocked.
+export const PLANE_ORDER = Object.freeze(['hy2', 'reality', 'mgt'])
+
 export const BACKOFF_MS = [30_000, 120_000, 600_000]
 
 // An open that takes this long is not healthy. A data-plane open is milliseconds when the path is well

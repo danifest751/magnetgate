@@ -23,7 +23,7 @@ import { startSocks5Server } from './socks5.mjs'
 import { connectNative } from './native-client.mjs'
 import { encodeAddress } from './address.mjs'
 import { atomicWrite } from './state-file.mjs'
-import { createPlaneHealth } from './health.mjs'
+import { createPlaneHealth, PLANE_ORDER } from './health.mjs'
 import { DpPool } from './dp-supervisor.mjs'
 import { validateConfig } from './config.cjs'
 import { pickDp, mergeOffer, newPeerSlots } from './offer.mjs'
@@ -173,7 +173,9 @@ if (!RENDEZVOUS_ONLY && cfg.dataPlane !== 'mgt' && !supervisor.available())
     '[dp] sing-box not found (run scripts/get-singbox.ps1) — using the native channel only'
   )
 const SB_OK = cfg.dataPlane !== 'mgt' && (RENDEZVOUS_ONLY || supervisor.available())
-const DP_PREFERENCE = SB_OK ? ['reality', 'hy2', 'mgt'] : ['mgt']
+// The order comes from src/health.mjs, where it is declared once for every client. Without the engine
+// there is no choice left to make: mgt is the only plane this process can speak by itself.
+const DP_PREFERENCE = SB_OK ? PLANE_ORDER : ['mgt']
 
 // atomically publish the merged data-plane list for an external engine (write tmp + rename). Only
 // re-writes when the endpoints actually change, so the app doesn't restart sing-box on every poll.

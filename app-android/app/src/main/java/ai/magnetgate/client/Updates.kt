@@ -333,14 +333,19 @@ object Updates {
   ) {
     // The fastest road first, another only when it will not carry.
     //
-    // Measured on the owner's phone, 8 MB from one CDN: the hy2 listeners 2.2-3.6 MB/s, the reality
-    // ones 0.5-1.8 with an outright failure among them, the core - which picks per connection by time
-    // to first byte, the right question for a page and the wrong one for 88 MB - in between. So every
-    // slice starts on an hy2 listener, spread across the nodes that have one; a slice that fails takes
-    // the next road down the list, ending at the core itself, which can always find *a* way.
-    val fast = planes.filter { it.plane == "hy2" }.map { it.port }
+    // Which road that is no longer lives here. This file used to name hy2 itself, from its own
+    // measurement, while two other files named reality from a different one - four declarations of one
+    // decision, disagreeing. The order is now `CoreConfig.PREFERENCE`, and the measurement behind it is
+    // in `src/health.mjs`. This file turned out to have been right all along, and that is not a defence:
+    // being right privately is exactly how the four of them drifted apart.
+    //
+    // What stays here is the shape: every slice starts on the best road the node set actually offers,
+    // spread across the nodes that have it; a slice that fails takes the next road down, ending at the
+    // core itself, which can always find *a* way.
     val roads = (planes.map { it.port } + socksPort).distinct()
-    val first = fast.ifEmpty { roads }
+    val first = CoreConfig.PREFERENCE
+      .firstNotNullOfOrNull { plane -> planes.filter { it.plane == plane }.map { it.port }.ifEmpty { null } }
+      ?: roads
     val total = update.bytes
     val pieces = ((total + PIECE - 1) / PIECE).toInt()
     // the file is laid out in full once, so that any slice may be written at its own offset
