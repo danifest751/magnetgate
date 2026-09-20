@@ -2,6 +2,7 @@ package ai.magnetgate.client
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -13,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
@@ -112,9 +114,14 @@ fun StatusPanel(presentation: ConnectionPresentation) {
     ConnectionTone.OFF -> MaterialTheme.colorScheme.onSurfaceVariant to MaterialTheme.colorScheme.surfaceVariant
   }
   Surface(color = ground, shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxWidth()) {
-    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Icon(painterResource(if (presentation.tone == ConnectionTone.OK) R.drawable.ic_check else if (presentation.tone == ConnectionTone.OFF) R.drawable.ic_power else R.drawable.ic_alert), null, tint = ink, modifier = Modifier.size(24.dp))
-      Text(presentation.title, color = ink, style = MaterialTheme.typography.headlineSmall)
+    // The sign and the verdict share a line. Stacked, they cost three rows and most of the space above
+    // the fold for one short sentence; the longest verdict here is "Нужна свежая проверка", which fits
+    // beside the sign at titleLarge on a phone. maxLines holds that promise if a translation grows.
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Icon(painterResource(if (presentation.tone == ConnectionTone.OK) R.drawable.ic_check else if (presentation.tone == ConnectionTone.OFF) R.drawable.ic_power else R.drawable.ic_alert), null, tint = ink, modifier = Modifier.size(22.dp))
+        Text(presentation.title, color = ink, style = MaterialTheme.typography.titleLarge, maxLines = 1)
+      }
       Text(presentation.detail, color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodySmall)
     }
   }
@@ -209,6 +216,18 @@ fun ConnectScreen(
           Column(Modifier.weight(1f)) {
             Text(ui.text(R.string.preferred_country), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(ui.countryName(country), style = MaterialTheme.typography.titleMedium)
+            // The setting and what it came to are two different facts, and "Автоматически" answers only
+            // the first. This line answers the second, and it is not guessed: the node named here is the
+            // one the last measurement actually came out of, matched the same way its latency is - so
+            // the flag and the number above it can never be talking about different machines.
+            carryingNode(status, check)?.takeIf { vpnUp }?.let { node ->
+              Text(
+                ui.text(R.string.now_via, "${node.flag} ${node.title}".trim()),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+              )
+            }
           }
           UiIcon(R.drawable.ic_next)
         }
@@ -221,7 +240,14 @@ fun ConnectScreen(
           Text(ui.text(R.string.session_received), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-          Text(check?.takeIf { vpnUp && it.ok }?.legs?.pingMs?.let { ui.text(R.string.milliseconds, it) } ?: "—", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontFamily = Mono)
+          // The near half only: the handshake to the node. The whole way out and back is still measured
+          // and still written down - it is on the diagnostics screen, where a second number is worth the
+          // room it costs. Here one number that a person can read at a glance is worth more than two
+          // they have to interpret.
+          Text(
+            check?.takeIf { vpnUp && it.ok }?.legs?.nodeMs?.toString() ?: "—",
+            Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontFamily = Mono, maxLines = 1,
+          )
           Text(if (vpnUp) ui.bytes(status.received) else "—", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontFamily = Mono)
         }
       }
@@ -302,5 +328,82 @@ fun CountriesScreen(status: CoreStatus, selected: String, notice: String, onSele
     InfoNotice(ui.text(R.string.country_preference_hint))
     Text(ui.text(R.string.existing_routes_hint), style = MaterialTheme.typography.bodySmall)
     BottomAction(ui.text(R.string.done), onClick = onBack)
+  }
+}
+
+/**
+ * The build a person is holding: the number Android compares when it is offered an update, and the
+ * commit it was built from.
+ *
+ * Read from the package manager rather than from BuildConfig, because what matters is what is
+ * installed - a debug build left on a phone beside a release is exactly the confusion this answers.
+ *
+ * It lives here, and not beside one of the screens that shows it, because it is shown by two of them
+ * and a second hand-written copy of a fact is how the phone and the desktop drifted apart in the
+ * first place.
+ */
+fun appBuild(context: android.content.Context): String = runCatching {
+  val info = context.packageManager.getPackageInfo(context.packageName, 0)
+  val code = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+  "$code · ${info.versionName}"
+}.getOrDefault("unknown")
+
+/**
+ * The build, at the foot of a screen, the way an "about" line reads.
+ *
+ * Diagnostics has carried this number since 19.09, but nobody asked "what build have you got?"
+ * expects the answer to be behind a screen called Diagnostics - and once the client is in other
+ * people's hands that question is the first one every conversation starts with. Selectable on
+ * purpose: the useful thing to do with it is send it to someone, and retyping `0.1.0+5c6b65b` off a
+ * phone screen is how the wrong build gets reported.
+ */
+@Composable
+fun BuildFooter() {
+  val ui = LocalUiStrings.current
+  val context = LocalContext.current
+  SelectionContainer {
+    Text(
+      "${ui.text(R.string.app_build)}: ${appBuild(context)}",
+      style = MaterialTheme.typography.bodySmall,
+      fontFamily = Mono,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}
+
+/**
+ * The two latencies as one string: the node first, then the whole way out and back.
+ *
+ * Numbers only, no unit - `latency_detail` carries the "ms", because a trailing unit on a monospaced
+ * value is the first thing to be clipped when a reading grows, and it was: on the phone 20.09 the home
+ * tile rendered "118 / 173 мс" as "118 / 173" and the unit was simply gone.
+ *
+ * This is the diagnostics form. The home tile shows the node on its own, because one number read at a
+ * glance beats two that have to be interpreted; both come from the same measurement either way.
+ *
+ * Null when there is nothing honest to show; the node half is dropped rather than faked when the plane
+ * that carried the check has no handshake to time.
+ */
+fun latencyPair(legs: Health.Legs?): String? {
+  val whole = legs?.pingMs ?: return null
+  return legs.nodeMs?.let { "$it / $whole" } ?: "$whole"
+}
+
+/**
+ * The node the last good measurement came out of, or null when nothing is known.
+ *
+ * The check's body is the address the destination saw, and for these exits that is the same machine
+ * the plane dials - so the egress address identifies the node without anyone having to report it. This
+ * is deliberately the same rule the node latency uses (see Health.check): one rule, so a screen cannot
+ * show one node's flag beside another node's milliseconds.
+ *
+ * Null rather than "probably the first one": a wrong flag is worse than no flag, because a person
+ * changing countries would believe it.
+ */
+fun carryingNode(status: CoreStatus, check: Health.Check?): NodeRow? {
+  val egress = check?.takeIf { it.ok }?.detail?.trim().orEmpty()
+  if (egress.isBlank()) return null
+  return status.nodes.firstOrNull { node ->
+    node.planes.any { it.endpoint.substringBeforeLast(':', "") == egress }
   }
 }

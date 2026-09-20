@@ -31,7 +31,13 @@
   <string name="nav_home">Связь</string>
   <string name="back">Назад</string>
   <string name="preferred_country">Предпочитаемая страна</string>
-  <string name="tunnel_latency">Отклик через туннель</string>
+  <!-- Единица — в подписи: значение это два моноширинных числа со слешем, и хвостовое «мс»
+       обрезается первым, когда замер вырастает до четырёх цифр, то есть ровно когда на него смотрят. -->
+  <string name="tunnel_latency">Отклик ноды, мс</string>
+  <!-- На диагностике обе половины; на главной — только ближняя. -->
+  <string name="latency_detail">Нода / весь путь, мс</string>
+  <!-- Во что превратилось предпочтение — под тем, что попросили. -->
+  <string name="now_via">Сейчас через %1$s</string>
   <string name="session_received">Получено за сеанс</string>
   <string name="routing">Маршрутизация</string>
   <string name="diagnostics_action">Проверка и диагностика</string>

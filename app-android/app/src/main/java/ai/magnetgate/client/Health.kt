@@ -27,6 +27,12 @@ object Health {
   const val SLOW_MS = 4_000L
 
   /**
+   * How long the node gets to answer a handshake before the number is simply left out. Short on
+   * purpose: this is a decoration on a screen, and it must never hold up the measurement that matters.
+   */
+  private const val NODE_PING_TIMEOUT_MS = 4_000
+
+  /**
    * Where the time went, for a measurement that finished.
    *
    * The total on its own reads like a ping and frightens people who compare it with one: it is nothing
@@ -45,9 +51,24 @@ object Health {
      * after its first answer, which it is entitled to do.
      */
     val pingMs: Long? = null,
+    /**
+     * The TCP handshake to the node that carried this measurement - the first half of [pingMs], and the
+     * only number here that is about our own machine rather than about the destination.
+     *
+     * The two side by side are what a person is actually asking when they ask whether it is slow: a
+     * node 40 ms away and a whole path of 800 ms says the far side is slow, while 400 and 800 says the
+     * node is simply far. One number could never tell those apart, and this screen was showing one.
+     *
+     * Measured outside the tunnel on purpose - the app excludes itself from its own VPN - because a
+     * handshake that went through the tunnel would be measuring the tunnel, which is the other number.
+     * Null when the node's plane is hy2: there is no TCP handshake to time in a transport made of
+     * datagrams, and inventing one would be worse than a dash.
+     */
+    val nodeMs: Long? = null,
   ) {
     /** Compact and in a fixed order, so two readings can be compared by eye or by grep. */
-    override fun toString(): String = "$connectMs/$tlsMs/$answerMs" + (pingMs?.let { "/$it" } ?: "")
+    override fun toString(): String =
+      "$connectMs/$tlsMs/$answerMs" + (pingMs?.let { "/$it" } ?: "") + (nodeMs?.let { "/$it" } ?: "")
 
     fun summary(): String = "connect ${connectMs}ms · TLS ${tlsMs}ms · answer ${answerMs}ms"
   }
@@ -112,13 +133,21 @@ object Health {
    * then carries nothing is the failure this project keeps meeting, and a check that stops at "the
    * socket opened" would call it healthy (see the relay channel in core/nostr).
    */
-  fun check(socksPort: Int, url: String): Check {
+  fun check(socksPort: Int, url: String, nodes: Map<String, Int> = emptyMap()): Check {
     val session = synchronized(this) { generation }
     val started = System.currentTimeMillis()
     val result = runCatching { fetch(socksPort, url) }
     val took = System.currentTimeMillis() - started
     val check = result.fold(
-      onSuccess = { Check(System.currentTimeMillis(), ok = true, tookMs = took, detail = it.first, legs = it.second) },
+      onSuccess = { measured ->
+        // Which node carried it is not guessed: the body of the check is the address the destination
+        // saw, and for these exits that is the same machine the plane dials. A node that is not in the
+        // map - hy2 only, or an exit whose egress differs from its endpoint - gets no number rather
+        // than a number belonging to somebody else.
+        val egress = measured.first.trim()
+        val legs = measured.second.copy(nodeMs = nodes[egress]?.let { port -> handshakeMs(egress, port) })
+        Check(System.currentTimeMillis(), ok = true, tookMs = took, detail = measured.first, legs = legs)
+      },
       onFailure = {
         Check(System.currentTimeMillis(), ok = false, tookMs = took, detail = it.message ?: it.javaClass.simpleName)
       },
@@ -132,6 +161,20 @@ object Health {
     }
     return check
   }
+
+  /**
+   * How long the node takes to answer a TCP handshake - the ping a person means by "ping".
+   *
+   * Nothing is sent and nothing is read: the socket is opened and closed, which is one round trip on
+   * the same path the plane uses and no data at all. It never fails a check - a node that refuses a
+   * second connection while happily carrying the first is odd but not broken - so every failure here
+   * is simply a missing number.
+   */
+  private fun handshakeMs(host: String, port: Int): Long? = runCatching {
+    val started = System.currentTimeMillis()
+    Socket().use { it.connect(InetSocketAddress(host, port), NODE_PING_TIMEOUT_MS) }
+    System.currentTimeMillis() - started
+  }.getOrNull()
 
   /**
    * One HTTPS GET through a SOCKS listener, with the destination left as a **name**.

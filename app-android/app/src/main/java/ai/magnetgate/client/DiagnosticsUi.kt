@@ -10,19 +10,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 
-/**
- * The build a person is holding: the number Android compares when it is offered an update, and the
- * commit it was built from.
- *
- * Read from the package manager rather than from BuildConfig, because what matters is what is
- * installed - a debug build left on a phone beside a release is exactly the confusion this answers.
- */
-private fun appBuild(context: android.content.Context): String = runCatching {
-  val info = context.packageManager.getPackageInfo(context.packageName, 0)
-  val code = if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
-  "$code · ${info.versionName}"
-}.getOrDefault("unknown")
-
 @Composable
 fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, presentation: ConnectionPresentation,
   engineError: String, checking: Boolean, notice: String, onTest: () -> Unit,
@@ -38,7 +25,12 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
     item {
       ValueRow(ui.text(R.string.vpn_interface), if (vpnUp) ui.text(R.string.running) else ui.text(R.string.off))
       ValueRow(ui.text(R.string.tunnel_check), if (!vpnUp) ui.text(R.string.no_tunnel) else check?.let { if (it.ok) ui.text(R.string.response_at, ui.clockOf(it.atMs)) else ui.text(R.string.no_response_at, ui.clockOf(it.atMs)) } ?: ui.text(R.string.not_checked))
-      ValueRow(ui.text(R.string.tunnel_latency), check?.takeIf { vpnUp && it.ok }?.legs?.pingMs?.let { ui.text(R.string.milliseconds, it) } ?: ui.text(R.string.not_measured))
+      // The same pair as the home screen, and deliberately the same words: two screens that name one
+      // measurement differently are two screens a person has to reconcile.
+      ValueRow(
+        ui.text(R.string.latency_detail),
+        latencyPair(check?.takeIf { vpnUp && it.ok }?.legs) ?: ui.text(R.string.not_measured),
+      )
       ValueRow(ui.text(R.string.https_request), check?.takeIf { vpnUp }?.let { ui.durationOf(it.tookMs) } ?: ui.text(R.string.not_measured))
       ValueRow(ui.text(R.string.last_check_ip), check?.takeIf { vpnUp && it.ok }?.detail ?: ui.text(R.string.not_confirmed))
       Text(ui.text(R.string.check_scope_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

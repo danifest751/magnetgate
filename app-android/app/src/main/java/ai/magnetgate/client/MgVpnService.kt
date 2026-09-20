@@ -52,6 +52,9 @@ class MgVpnService : VpnService() {
 
     /** Every measurement, one line each, so a whole session can be read as a curve; see [recordCheck]. */
     private const val HEALTH_FILE = "health.csv"
+
+    /** Named once: the writer appends by it and the reader rotates the file when it stops matching. */
+    private const val HEALTH_HEADER = "at,ok,tookMs,connectMs,tlsMs,answerMs,pingMs,nodeMs,detail"
     private const val MAX_HEALTH_FILE = 2L * 1024 * 1024
     private const val NOTIFICATION_ID = 1
 
@@ -296,15 +299,40 @@ class MgVpnService : VpnService() {
       // A day of checks is 1440 lines of some 60 bytes; the cap is generous and exists only so that a
       // phone left running for a month does not carry a file nobody will ever read to its end.
       if (file.length() > MAX_HEALTH_FILE) file.delete()
-      if (!file.exists()) file.appendText("at,ok,tookMs,connectMs,tlsMs,answerMs,pingMs,detail\n")
+      // A file written under an older header would grow rows with a different number of fields, and a
+      // day of measurements that no tool can read straight is worse than one that starts today: the
+      // point of this file is that it can be pulled and counted without ceremony. The old one is kept,
+      // not dropped - it is somebody's evidence of a day that already happened.
+      if (file.exists() && file.useLines { it.firstOrNull() } != HEALTH_HEADER) {
+        file.renameTo(java.io.File(filesDir, "$HEALTH_FILE.1"))
+      }
+      if (!file.exists()) file.appendText(HEALTH_HEADER + "\n")
       val legs = check.legs
       file.appendText(
         "${check.atMs},${if (check.ok) 1 else 0},${check.tookMs}," +
           "${legs?.connectMs ?: ""},${legs?.tlsMs ?: ""},${legs?.answerMs ?: ""},${legs?.pingMs ?: ""}," +
-          check.detail.replace(',', ' ').replace('\n', ' ') + "\n",
+          "${legs?.nodeMs ?: ""}," + check.detail.replace(',', ' ').replace('\n', ' ') + "\n",
       )
     }.onFailure { Log.w(TAG, "recording the measurement: ${it.message}") }
   }
+
+  /**
+   * Where each node answers a TCP handshake, keyed by the address its traffic comes out of.
+   *
+   * The key is the egress address because that is what a finished check knows about itself, and for
+   * these exits the machine that carries the plane is the machine the destination sees. hy2 is left
+   * out: there is no TCP handshake in a transport made of datagrams.
+   */
+  private fun realityEndpoints(): Map<String, Int> = runCatching {
+    CoreStatus.parse(Mgbox.coreStatus()).nodes
+      .flatMap { node -> node.planes.filter { it.type == "reality" } }
+      .mapNotNull { plane ->
+        val host = plane.endpoint.substringBeforeLast(':', "")
+        val port = plane.endpoint.substringAfterLast(':', "").toIntOrNull()
+        if (host.isBlank() || port == null) null else host to port
+      }
+      .toMap()
+  }.getOrDefault(emptyMap())
 
   /**
    * Keeps the running tunnel's log from growing without end.
@@ -480,7 +508,7 @@ class MgVpnService : VpnService() {
       if ((checkRequested || System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS) && through != 0) {
         checkRequested = false
         checkedAt = System.currentTimeMillis()
-        recordCheck(Health.check(through, CHECK_URL))
+        recordCheck(Health.check(through, CHECK_URL, realityEndpoints()))
         trimEngineLog()
         // Reports wait for a tunnel and go through it; see Reports.send. This is the moment there is
         // one, and the send does nothing at all when there is nothing waiting.

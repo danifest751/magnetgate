@@ -32,7 +32,14 @@
   <string name="nav_home">Home</string>
   <string name="back">Back</string>
   <string name="preferred_country">Preferred country</string>
-  <string name="tunnel_latency">Tunnel latency</string>
+  <!-- The unit lives in the label: the value is two monospaced numbers and a slash, and a trailing
+       "ms" is the first thing clipped when a reading grows to four digits - which is exactly when
+       somebody is looking at it. -->
+  <string name="tunnel_latency">Node latency, ms</string>
+  <!-- Diagnostics shows both halves; the home tile shows only the near one. -->
+  <string name="latency_detail">Node / whole path, ms</string>
+  <!-- What the preference came to, under what was asked for. -->
+  <string name="now_via">Now via %1$s</string>
   <string name="session_received">Received this session</string>
   <string name="routing">Routing</string>
   <string name="diagnostics_action">Checks &amp; diagnostics</string>

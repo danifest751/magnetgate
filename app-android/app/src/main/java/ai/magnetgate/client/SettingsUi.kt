@@ -46,6 +46,11 @@ fun SettingsScreen(keySet: Boolean, pending: Boolean, notice: String, busy: Bool
       InfoNotice(ui.text(R.string.settings_reconnect_hint))
       BottomAction(ui.text(R.string.reconnect_apply), enabled = !busy, onClick = onReconnect)
     }
+    // Diagnostics has shown this number since 19.09, but "what build have you got?" is the first
+    // question of every conversation about a phone, and nobody expects the answer to live behind a
+    // screen called Diagnostics. Settings is where a person looks for it, so it is here too - one
+    // function, shown twice, rather than the number written out in two places.
+    BuildFooter()
   }
 }
 
