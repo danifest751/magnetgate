@@ -36,6 +36,12 @@ object SingBoxConfig {
   private const val CHECK_INBOUND = "in-health-check"
 
   /**
+   * The clock's port. It gets a rule of its own because it is the one thing on this phone that needs
+   * UDP and has no other way to ask - see the rule at the end of the policy for the measurement.
+   */
+  private const val NTP_PORT = 123
+
+  /**
    * The configuration, the plane-to-port mapping the core has to be told about, and the loopback port
    * the health check goes through. [checkPort] is 0 when there is no engine path to check.
    */
@@ -254,6 +260,52 @@ object SingBoxConfig {
     }
     // A private address is the local network, never something an exit could reach for us.
     rules.put(JSONObject().put("ip_is_private", true).put("outbound", "direct"))
+
+    // ---- the clock: the one class of UDP that has nowhere else to go --------------------------------
+    //
+    // The core's SOCKS refuses UDP ASSOCIATE on purpose (core/socks/socks.go): every plane the core owns
+    // is TCP - the native mux, and the loopback entries of the engine's own outbounds - so a UDP relay
+    // there would have nothing to carry a datagram on. In full mode `final` is `core`, so on this phone
+    // every UDP datagram died with `code=7`.
+    //
+    // Measured over a day of ordinary use (20.09, docs/evidence-engine-20260920-day.log): 270 refusals,
+    // and 63 % of them were not QUIC but the clock - 172 attempts to reach an NTP server, 172 refused,
+    // none through. The difference between the two is the whole reason this rule exists and is this
+    // narrow: QUIC has somewhere to fall back to and the same log proves it goes there (every refused
+    // address is followed by TCP streams to that same address), while NTP is UDP and nothing else. So
+    // while the tunnel was up, the phone could not set its clock at all - the only two NTP answers in
+    // two days arrived at boot and in the one minute the acceptance run had the tunnel down.
+    //
+    // It cost the owner nothing, and that is luck rather than design: this phone has a SIM and takes the
+    // time from the carrier instead (`mOriginPriorities=[network,telephony]`). A device without one - a
+    // Wi-Fi tablet, or a carrier that sends no NITZ - has no other source, and a clock that has drifted
+    // breaks certificate validation and eventually rendezvous itself, which dates what it signs.
+    //
+    // The desktop never had this: its `proxy` is the transport outbound (app/vpn-config.cjs), which
+    // speaks UDP. Same shape as the ten defects of 17.09 - a policy true on one side of a hand-written
+    // copy and not the other.
+    //
+    // Letting it out `direct` was the other option and is refused here. In full mode the tunnel takes
+    // everything, and a rule that quietly puts a class of traffic on the open network is precisely what
+    // the note above about bundled lists refuses to do. So it goes through a transport that speaks UDP:
+    // hy2 first, because it is UDP to begin with, and reality otherwise.
+    //
+    // One road on purpose, and no urltest group: the core owns the question of which plane is healthy,
+    // and a second opinion living in the engine could disagree with the first. If the chosen node is
+    // down the clock does not get set - which is what happened every single time before this rule, so
+    // it cannot be worse than what it replaces. In split mode nothing is added: `final` is `direct`
+    // there, the datagram already leaves by the road the user asked for.
+    val udpRoad =
+      if (mode == Settings.Mode.SPLIT) null
+      else planes.firstOrNull { it.plane == "hy2" } ?: planes.firstOrNull { it.plane == "reality" }
+    if (udpRoad != null) {
+      rules.put(
+        JSONObject()
+          .put("network", "udp")
+          .put("port", JSONArray().put(NTP_PORT))
+          .put("outbound", "exit-${udpRoad.slot}-${udpRoad.plane}"),
+      )
+    }
 
     config.put("inbounds", inbounds)
     config.put("outbounds", outbounds)
