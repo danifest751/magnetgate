@@ -343,13 +343,26 @@ try {
   Save-Text (Join-Path $ReportDir 'engine.log') (AsApp 'tail -n 3000 files/engine.log 2>/dev/null')
 
   # --- 1. the core has one owner ------------------------------------------------
-  $listening = [regex]::Matches($logs, 'core listening on 127\.0\.0\.1:(\d+)')
+  # Counted per process, not per line. The defect this guards (goto 67) is one *process* starting the
+  # core twice and the engine then dialling a port nobody owns - two processes each starting their own
+  # is not that, and happens for real: an install kills the previous app, and a run that installs
+  # catches the dying process's last line in the same logcat window. It failed exactly that way on
+  # 20.09 (pid 5831 on :44151 at 13:45:45.444, pid 11453 on :40943 0.7 s later, the second being the
+  # build just installed) and the failure was the check's, not the phone's. The live process is the one
+  # that wrote `app started`, and only its cores are counted.
+  $listening = [regex]::Matches($logs, '(?m)^\S+\s+\S+\s+(\d+)\s+\d+\s+I magnetgate: core listening on 127\.0\.0\.1:(\d+)')
+  $livePid = [regex]::Matches($logs, '(?m)^\S+\s+\S+\s+(\d+)\s+\d+\s+I magnetgate: app started') |
+    Select-Object -Last 1 | ForEach-Object { $_.Groups[1].Value }
+  $mine = @($listening | Where-Object { -not $livePid -or $_.Groups[1].Value -eq $livePid })
+  $others = $listening.Count - $mine.Count
   $socksPort = if ($status) { [int]$status.socksPort } else { 0 }
   $corePort = if ($tunnelUp.Success) { [int]$tunnelUp.Groups[1].Value } else { 0 }
   Add-Check 'the tunnel came up' $tunnelUp.Success $(if ($tunnelUp.Success) { $tunnelUp.Value } else { 'no `tunnel up` line in the log' })
   Add-Check 'the core has exactly one owner' `
-    ($listening.Count -eq 1 -and $corePort -ne 0 -and $corePort -eq $socksPort) `
-    "core listening x$($listening.Count), engine dialling $corePort, status says $socksPort"
+    ($mine.Count -eq 1 -and $corePort -ne 0 -and $corePort -eq $socksPort) `
+    ("core listening x$($mine.Count) in pid $livePid" +
+      $(if ($others) { " (and $others in an earlier process, which an install leaves behind)" } else { '' }) +
+      ", engine dialling $corePort, status says $socksPort")
 
   # --- 2. the exit answers ------------------------------------------------------
   $health = [regex]::Match($dump.health, 'check=(\w+)(?:\s+took=(\d+)ms)?')
