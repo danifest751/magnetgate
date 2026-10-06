@@ -35,6 +35,17 @@ test('macOS shares current routing policy and lets the OS allocate utun', () => 
   assert.deepEqual(conf, expected)
 })
 
+test('macOS Full sends dual-stack Google destinations to proxy and owns TUN DNS', () => {
+  const request = input()
+  request.cfg.vpnMode = 'full'
+  const conf = safeConfig(root, request)
+  assert.equal(conf.dns.strategy, 'prefer_ipv4')
+  assert.deepEqual(conf.inbounds[0].dns_address, ['172.19.0.2'])
+  assert.equal(conf.route.rules.some(rule => rule.ip_version === 6 && rule.action === 'reject'), false)
+  assert.equal(conf.route.rules.some(rule => rule.domain_suffix?.some(domain => /google|youtube|gmail/.test(domain)) && rule.outbound === 'direct'), false)
+  assert.deepEqual(conf.route.rules.at(-1), { clash_mode: 'Global', action: 'route', outbound: 'proxy' })
+})
+
 test('macOS root helper preserves authenticated peer routing and bypasses only the owned carrier', () => {
   const request = input()
   request.cfg.connectionSource = 'peers'

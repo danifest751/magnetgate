@@ -159,7 +159,11 @@ function modeFixture(initial) {
             'tunnel.test',
             'overlap.test',
             'app.kilo.ai',
-            'kilocode.ai'
+            'kilocode.ai',
+            'mail.google.com',
+            'accounts.google.com',
+            'www.youtube.com',
+            'video.googlevideo.com'
           ].map((name) => [name, ['198.51.100.1']])
         )
       }
@@ -187,6 +191,8 @@ function modeFixture(initial) {
     await check('default.test', 'proxy')
     await check('app.kilo.ai', 'proxy')
     await check('kilocode.ai', 'proxy')
+    for (const domain of ['mail.google.com', 'accounts.google.com', 'www.youtube.com', 'video.googlevideo.com'])
+      await check(domain, 'proxy')
     await check('direct.test', initial.directDomains.length ? 'direct' : 'proxy')
     await check('overlap.test', initial.directDomains.length ? 'direct' : 'proxy')
     const oldFull = await routedSocket(routePort, 'default.test')
@@ -208,6 +214,8 @@ function modeFixture(initial) {
     await check('default.test', 'proxy')
     await check('app.kilo.ai', 'proxy')
     await check('kilocode.ai', 'proxy')
+    for (const domain of ['mail.google.com', 'accounts.google.com', 'www.youtube.com', 'video.googlevideo.com'])
+      await check(domain, 'proxy')
     await check('direct.test', initial.directDomains.length ? 'direct' : 'proxy')
     assert.equal(child.pid, pid)
     assert.equal(child.exitCode, null)

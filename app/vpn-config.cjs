@@ -59,7 +59,9 @@ function buildVpnConfig({
     rules.push({ process_name: cfg.directProcesses, action: 'route', outbound: 'direct' })
   if (bypass.length)
     rules.push({ ip_cidr: bypass.map((ip) => `${ip}/32`), action: 'route', outbound: 'direct' })
-  rules.push({ ip_version: 6, action: 'reject' })
+  // macOS browsers may retain AAAA answers. Route those addresses through the
+  // proxy too, instead of unconditionally breaking dual-stack Google services.
+  if (platform !== 'darwin') rules.push({ ip_version: 6, action: 'reject' })
   const ruleSets = []
   const addSet = (tag, file, outbound, mode) => {
     const p = path.join(ruleSetRoot, 'tools', 'sing-box', file)
@@ -118,7 +120,7 @@ function buildVpnConfig({
     },
     dns: {
       servers: [{ tag: 'proxy-dns', type: 'https', server: '1.1.1.1', detour: 'proxy' }],
-      strategy: 'ipv4_only'
+      strategy: platform === 'darwin' ? 'prefer_ipv4' : 'ipv4_only'
     },
     inbounds: [
       {
@@ -129,6 +131,7 @@ function buildVpnConfig({
         mtu: 1400,
         auto_route: true,
         strict_route: true,
+        ...(platform === 'darwin' ? { dns_address: ['172.19.0.2'] } : {}),
         stack: 'gvisor'
       },
       { type: 'socks', tag: 'health-in', listen: '127.0.0.1', listen_port: cfg.probePort }

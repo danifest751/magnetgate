@@ -7,6 +7,8 @@ const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
 const { peer } = require('./mac-protocol.cjs')
 const { buildVpnConfig } = require('./vpn-config.cjs')
+const { MacDnsLease } = require('./mac-dns.cjs')
+const { waitForEngineReady } = require('./ready.cjs')
 
 function safeConfig(root, input, clientPath = process.execPath, ruleSetRoot = root) {
   const { validateConfig, freshEndpoints } = require(path.join(root, 'src', 'config.cjs'))
@@ -80,8 +82,11 @@ async function serve(bootstrapPath) {
   } finally { fs.closeSync(binaryFd) }
   const configPath = path.join(runtime, 'vpn.json')
   const socket = net.createConnection(bootstrap.socket)
-  let child = null, chain = Promise.resolve(), closing = false, lastPing = Date.now()
+  let child = null, dns = null, chain = Promise.resolve(), closing = false, lastPing = Date.now()
   async function stop() {
+    const oldDns = dns
+    dns = null
+    await oldDns?.stop()
     const old = child
     if (!old) { fs.rmSync(configPath, { force: true }); return }
     await new Promise(resolve => {
@@ -114,19 +119,32 @@ async function serve(bootstrapPath) {
       fs.writeFileSync(configPath, JSON.stringify(conf), { mode: 0o600 })
       child = spawn(exe, ['run', '-c', configPath], { cwd: path.dirname(exe), env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin' } })
       const owned = child
+      const ownedDns = dns = new MacDnsLease({ onLost: () => {
+        // Never leave a connected VPN silently using the LAN resolver.
+        if (child === owned) owned.kill('SIGTERM')
+      } })
       for (const [name, stream] of [['stdout', owned.stdout], ['stderr', owned.stderr]])
         stream.on('data', data => {
           try { channel.send(name, String(data).slice(0, 8192)) } catch { void close() }
         })
       owned.on('error', () => {
         if (child === owned) child = null
+        void ownedDns.stop()
         try { channel.send('exit', { code: 1, signal: null }) } catch {}
       })
       owned.once('exit', (code, signal) => {
         if (child === owned) child = null
+        void ownedDns.stop()
         try { channel.send('exit', { code, signal }) } catch {}
       })
-      return { pid: owned.pid }
+      try {
+        await waitForEngineReady(owned, conf, new AbortController().signal, 20000)
+        await ownedDns.start()
+        return { pid: owned.pid }
+      } catch (error) {
+        await stop()
+        throw error
+      }
     }
     const result = chain.then(operation)
     chain = result.catch(() => {})

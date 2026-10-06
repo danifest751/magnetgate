@@ -1,4 +1,4 @@
-# magnetgate desktop 0.3.3
+# magnetgate desktop 0.3.4
 
 The desktop app manages a sing-box TUN process and a discovery/native SOCKS client.
 Reality and pinned hysteria2 run directly in sing-box; native is a fallback through the Node client.
@@ -22,9 +22,9 @@ npm start
 npm run dist
 ```
 
-The portable artifact is `app/dist/magnetgate-0.3.3.exe`. The app requests Administrator at launch
+The portable artifact is `app/dist/magnetgate-0.3.4.exe`. The app requests Administrator at launch
 for TUN/firewall operations. Child processes are hidden and only owned processes are stopped.
-For frequent use, extract `app/dist/magnetgate-0.3.3-win.zip` once and launch `magnetgate.exe`
+For frequent use, extract `app/dist/magnetgate-0.3.4-win.zip` once and launch `magnetgate.exe`
 from that folder. Keep all extracted files together. This avoids unpacking Electron and the engine
 on every cold launch; the standalone portable EXE still unpacks into a fresh temporary directory.
 Each portable launch uses its own temporary resource directory; duplicate launches reveal the
@@ -42,7 +42,7 @@ configs and logs. Store user settings in Electron userData; use Open config fold
 
 This shared Electron client supports Windows x64 and macOS x64/arm64. It is separate from the native
 [Android client](../app-android/README.md), whose UI has a RU/EN switch. Desktop currently uses
-Russian labels. The root core version and Android package version are independent of desktop 0.3.3.
+Russian labels. The root core version and Android package version are independent of desktop 0.3.4.
 `npm run dist` builds a local portable executable and a ZIP archive; it does not publish a GitHub release.
 
 ## macOS build and testing
@@ -66,7 +66,7 @@ npm run dist:mac
 
 Build on the target architecture. The resource gate checks the pinned engine/rule-set hashes
 and refuses cross-architecture packaging. CI uses macOS 15 arm64 and macOS 15 Intel runners.
-Archives are `magnetgate-0.3.3-mac-arm64` or `magnetgate-0.3.3-mac-x64` (DMG and ZIP).
+Archives are `magnetgate-0.3.4-mac-arm64` or `magnetgate-0.3.4-mac-x64` (DMG and ZIP).
 These test builds are unsigned and unnotarized; production signing requires an Apple Developer
 identity and notarization credentials. No signing key is included in the repository.
 
@@ -103,6 +103,12 @@ to its module directory if it is not on the module search path). Screenshots go 
 `tools/verification/ui-0.3.0`. This does not replace a manual test of the packaged desktop app.
 
 ## Routing and protection
+
+On macOS the root helper leases a supplemental system DNS resolver at `172.19.0.2`
+only after the TUN is ready. Queries use encrypted DNS through the proxy in both modes.
+The temporary resolver disappears on disconnect, engine failure or helper termination;
+Wi-Fi/Ethernet DNS preferences are not modified. IPv4 is preferred, but IPv6 destinations
+are routed according to the selected policy instead of being unconditionally rejected.
 
 - Full: proxy by default with only explicit user domain exceptions. Bundled lists never add
   direct website exceptions. Private-network and transport/discovery bypasses remain separate.
