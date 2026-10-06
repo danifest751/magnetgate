@@ -3,6 +3,7 @@
 
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
   <queries>
     <intent>
       <action android:name="android.intent.action.MAIN" />
@@ -54,6 +55,11 @@
 
     <!-- The watchdog. It is held by the system rather than by this process, which is the whole point:
          it is what is left when the process carrying the tunnel dies. -->
+    <service android:name=".PeerSharingService" android:exported="false" android:foregroundServiceType="specialUse">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+        android:value="User enabled internet sharing with authenticated peers, bounded speed and traffic limits, and a persistent stop action" />
+    </service>
+
     <service
       android:name=".WatchdogJob"
       android:exported="false"

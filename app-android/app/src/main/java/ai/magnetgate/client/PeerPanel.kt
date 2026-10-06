@@ -64,6 +64,8 @@ fun PeerPanel(enabled: Boolean, country: String, status: JSONObject, error: Stri
       }
       if (hint.isNotEmpty()) Text(hint, style = MaterialTheme.typography.bodySmall)
       if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+      HorizontalDivider()
+      PeerSharingPanel(status, provisioned)
       TextButton(onClick = { details = true }, contentPadding = PaddingValues(0.dp)) { Text(ui.text(R.string.peer_details)) }
     }
   }

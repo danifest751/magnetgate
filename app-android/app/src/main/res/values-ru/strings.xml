@@ -216,7 +216,7 @@
   <string name="peer_country_missing">Эта страна недоступна. Ждём соединение именно в ней.</string>
   <string name="peer_directory_wait">Подключаемся к каталогу…</string>
   <string name="peer_empty">Доступных соединений пока нет.</string>
-  <string name="peer_android_guest">Телефон может подключаться к другим пользователям. Раздача своего интернета с Android пока недоступна.</string>
+  <string name="peer_android_guest">Раздача использует ваш обычный интернет. После перезапуска приложения она выключается. Android может приостановить её для экономии батареи.</string>
   <string name="peer_location">Страна выхода</string>
   <string name="peer_details">Об этом подключении</string>
   <string name="peer_done">Готово</string>
@@ -230,4 +230,18 @@
   <string name="country_refresh">Обновить список</string>
   <string name="country_search_access">Добавьте ключ в настройках доступа, чтобы найти серверы.</string>
   <string name="country_search_failed">Не удалось найти серверы. Проверьте интернет и настройки доступа.</string>
+  <string name="peer_share_title">Раздача интернета</string>
+  <string name="peer_share_toggle">Разрешить другим использовать моё соединение</string>
+  <string name="peer_share_off">Раздача выключена</string>
+  <string name="peer_share_ready">Ваше соединение доступно другим пользователям</string>
+  <string name="peer_share_paused">Ожидание обычного интернета. При включённом VPN раздача на паузе.</string>
+  <string name="peer_share_failed">Не удалось включить раздачу. Попробуйте снова.</string>
+  <string name="peer_share_unprovisioned">Доступ к раздаче для этого устройства ещё не активирован.</string>
+  <string name="peer_share_stop">Остановить раздачу</string>
+  <string name="peer_share_limits">Ограничения раздачи</string>
+  <string name="peer_share_auto">Автоматически регулировать скорость</string>
+  <string name="peer_share_speed">Всего до %1$s Мбит/с</string>
+  <string name="peer_share_guests">Пользователей одновременно</string>
+  <string name="peer_share_quota">За день: %1$d / 1024 МиБ; за месяц: %2$d / 20480 МиБ</string>
+  <string name="peer_share_save">Сохранить</string>
 </resources>

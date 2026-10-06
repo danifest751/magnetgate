@@ -12,7 +12,7 @@ distribution plan; the peer service cannot authorize an app update.
 | Windows x64 | Implemented; tested with native HTTPS egress | Implemented; separate limited process |
 | Linux | Shared headless host | Tested on an unprivileged pilot server |
 | macOS arm64/x64 | Included in shared desktop packaging and helper configuration | Disabled pending real Mac validation |
-| Android arm64/x64 | Included in the combined AAR; tested on a physical arm64 phone | Disabled pending network/background validation |
+| Android arm64/x64 | Included in the combined AAR; tested on a physical arm64 phone | Opt-in physical IPv4 adapter implemented; exit/background field validation pending |
 
 The pilot supports **TCP ports 80 and 443 only**. Proxied UDP is rejected after DNS interception.
 DNS uses HTTPS through the selected exit; explicit direct routing exceptions retain their behavior.
@@ -31,6 +31,17 @@ On Android, select **Пользователи** and tap the country card to open
 Connection details are available separately. Received and sent counters measure TCP payload
 through the user connection, including proxied DNS and health checks; they exclude relay framing
 and traffic routed directly. Counters survive recovery within a VPN session and reset for a new one.
+
+In the same Android panel, **Разрешить другим использовать моё соединение** enables a separate
+foreground sharing service with a persistent stop action. A provisioned exit role is required;
+selecting user connections alone never enables sharing. **Ограничения раздачи** selects automatic
+or manual aggregate speed (0.1–5 Mbps) and 1–2 simultaneous users; default quotas are 1 GiB/day and
+20 GiB/month across both directions. Saved limits survive restart, but consent does not.
+Sharing pauses for the owner's or another VPN, an uncertain physical network, or restricted Doze.
+It resolves and binds each target socket to one validated physical Network generation and rejects
+local/on-link prefixes, gateway/DNS endpoints, its observed IPv4 source and the control service.
+Native IPv6-only forwarding is not enabled in this pilot. Android foreground services do not
+exempt an app from [Doze network restrictions](https://developer.android.com/training/monitoring-device-state/doze-standby).
 
 An eligible desktop owner enables **Разрешать другим пользователям использовать моё соединение**.
 No per-guest invitations are needed. Hosting is off by default. The pilot allows 1–2 guests,
@@ -120,6 +131,11 @@ and renewal beyond 60 seconds. Actual macOS installation, utun behavior and peer
 remain open for testing on a Mac. Windows strict firewall integration with this new carrier
 still needs a complete failure/recovery field run before production rollout.
 
-Direct ICE/QUIC paths, UDP associations, sharing while the owner's VPN is active, Android/macOS
+Android exit validation currently covers native adapter race tests (handover, suspend/stop,
+old DNS tokens, all-answer guarding, half-close and crash consent), combined AAR compilation,
+Android unit tests and lint, and installation on an arm64 phone. Real remote-client egress,
+screen-off sharing and VPN pause/resume remain field gates; installation alone is not proof.
+
+Direct ICE/QUIC paths, UDP associations, sharing while the owner's VPN is active, macOS
 exit hosting, multiple relay servers, and public-scale abuse/account infrastructure are later
 stages, not features of this pilot.

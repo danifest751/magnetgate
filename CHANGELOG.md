@@ -1,5 +1,17 @@
 # Changelog
 
+### Android: opt-in internet sharing (2026-10-06)
+
+- Add a sharing checkbox in Users, compact state, speed/guest limits and quota usage. Hosting
+  uses a separate foreground service with a stop notification and requires a provisioned exit role.
+- Bind DNS and target sockets to an immutable physical Android network generation, deny local
+  endpoints and self/control addresses, and drain outgoing sockets before starting the owner's VPN.
+  IPv4 hosting pauses for other VPNs and restricted Doze; fresh processes require new consent.
+- Keep aggregate pilot caps at 0.1–5 Mbps, 1–2 users, 1 GiB/day and 20 GiB/month. Preserve quotas
+  across clock rollback and TCP responses after a guest half-close.
+- Native race tests, Android unit tests/lint and debug build passed; installed on an arm64 phone.
+  Remote egress and screen-off field tests are pending. macOS hosting remains disabled.
+
 ### Android: countries before VPN connection (2026-10-06)
 
 - Discover server countries when the location list opens, without starting the VPN. Show search

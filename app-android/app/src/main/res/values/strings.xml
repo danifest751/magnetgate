@@ -218,7 +218,7 @@
   <string name="peer_country_missing">This country is unavailable. Waiting for a connection in this country.</string>
   <string name="peer_directory_wait">Connecting to the directory…</string>
   <string name="peer_empty">No available connections.</string>
-  <string name="peer_android_guest">This phone can connect through other users. Sharing its internet connection from Android is not available yet.</string>
+  <string name="peer_android_guest">Sharing uses your native internet connection. It stops after an app restart. Android may pause it in battery saving mode.</string>
   <string name="peer_location">Exit country</string>
   <string name="peer_details">About this connection</string>
   <string name="peer_done">Done</string>
@@ -232,4 +232,18 @@
   <string name="country_refresh">Refresh list</string>
   <string name="country_search_access">Add your key in access settings to find servers.</string>
   <string name="country_search_failed">Could not find servers. Check your internet connection and access settings.</string>
+  <string name="peer_share_title">Internet sharing</string>
+  <string name="peer_share_toggle">Let other users use my connection</string>
+  <string name="peer_share_off">Sharing is off</string>
+  <string name="peer_share_ready">Your connection is available to other users</string>
+  <string name="peer_share_paused">Waiting for native internet. Sharing pauses while a VPN is active.</string>
+  <string name="peer_share_failed">Could not enable sharing. Try again.</string>
+  <string name="peer_share_unprovisioned">Sharing access has not been activated for this device.</string>
+  <string name="peer_share_stop">Stop sharing</string>
+  <string name="peer_share_limits">Sharing limits</string>
+  <string name="peer_share_auto">Adjust speed automatically</string>
+  <string name="peer_share_speed">Up to %1$s Mbps total</string>
+  <string name="peer_share_guests">Simultaneous users</string>
+  <string name="peer_share_quota">Today: %1$d / 1024 MiB; month: %2$d / 20480 MiB</string>
+  <string name="peer_share_save">Save</string>
 </resources>

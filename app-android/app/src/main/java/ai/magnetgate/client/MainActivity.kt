@@ -250,6 +250,7 @@ class MainActivity : ComponentActivity() {
   private fun dumpStatus() {
     val status = runCatching { Mgbox.coreStatus() }.getOrElse { "status failed: ${it.message}" }
     runCatching { File(filesDir, "status.txt").writeText(status) }
+    runCatching { File(filesDir, "peer-status.json").writeText(PeerRuntime.status().toString()) }
     // The health of the tunnel lives in this process and nowhere else, so without this line the only
     // way to see whether the exit is answering is to look at the screen - and a check that needs a
     // human looking at a screen cannot be part of an acceptance run.

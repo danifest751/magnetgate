@@ -369,6 +369,7 @@ class MgVpnService : VpnService() {
     val ticket = session.begin() ?: return
     val revision = Settings.revision(this)
     starting = true
+    PeerRuntime.gateForVpn()
     CountryDiscovery.takeover()
     // a new tunnel must not be judged by the previous one's measurements
     Health.reset()
@@ -376,6 +377,7 @@ class MgVpnService : VpnService() {
     val worker = Thread {
       val guestToken = java.util.UUID.randomUUID().toString()
       try {
+        session.use(ticket) { PeerRuntime.suspendForVpn() }
         val selectedPeerRoute = !coreless && Settings.peerSource(this)
         val selectedPeerCountry = Settings.peerCountry(this)
         session.use(ticket) { peerRoute = selectedPeerRoute; peerCountry = selectedPeerCountry }
@@ -813,6 +815,7 @@ class MgVpnService : VpnService() {
       peerRoute = false
     }
     runCatching { Mgbox.stopCore() }.onFailure { Log.w(TAG, "closing the core: ${it.message}") }
+    PeerRuntime.resumeAfterVpn()
     stopForeground(STOP_FOREGROUND_REMOVE)
     Log.i(TAG, "tunnel down")
   }
