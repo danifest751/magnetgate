@@ -24,6 +24,8 @@ docs/
 # field test reports carry live infrastructure addresses — never publish them
 tests/results*.md
 *.bundle
+/.playwright-cli/
+/output/playwright/
 
 # electron app build output
 app/dist/

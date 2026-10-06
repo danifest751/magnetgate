@@ -47,7 +47,7 @@ const processes = (list) => {
   ]
 }
 // Which exit country to prefer, as an ISO-3166 alpha-2 code; empty means "any". The desktop shows a
-// list built from what the nodes advertise (see app/countries.cjs) — never an address.
+// list built from what the nodes advertise (see src/countries.cjs) — never an address.
 const country = (value) => {
   const s = String(value ?? '')
     .trim()

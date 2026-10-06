@@ -226,28 +226,14 @@ test("drift: every client tries a node's planes in the same order", async () => 
 })
 
 test('drift: the phone gives UDP a road that is not the core', () => {
-  // The core's SOCKS refuses UDP ASSOCIATE on purpose, so on Android a datagram that reaches the `core`
-  // outbound is not slow or unreliable - it is refused, every time, with code=7. In full mode `final` is
-  // `core`, which made that the fate of all UDP on the phone. Measured across a day of ordinary use
-  // (20.09): 270 refusals, 170 of them the clock - 172 attempts to reach an NTP server, none through.
-  // QUIC falls back to TCP and the same log shows it doing so; NTP is UDP and nothing else, so the phone
-  // could not set its clock while the tunnel was up. The desktop never had this: its `proxy` is the
-  // transport outbound itself, which speaks UDP. That asymmetry is why this is held here and not in the
-  // list above - it is a decision the phone needs *because* it is built differently, not one that must
-  // read the same on both sides.
   const android = read('app-android/app/src/main/java/ai/magnetgate/client/SingBoxConfig.kt')
-  const rule = /\.put\("network", "udp"\)[\s\S]{0,200}?\.put\("outbound", ([^)]+)\)/.exec(android)
-  assert.ok(rule, 'the phone has no rule carrying UDP: the clock cannot be set while the tunnel is up')
-  // A rule that names `direct` would be a class of traffic quietly leaving in the clear in full mode,
-  // and one that names `core` would be the refusal this rule exists to avoid.
-  assert.ok(
-    /exit-/.test(rule[1]),
-    `UDP is routed to ${rule[1].trim()}: it has to go through a transport that speaks UDP, not the core and not out in the clear`
-  )
-  assert.ok(
-    /NTP_PORT = 123/.test(android),
-    'the UDP rule no longer names the clock port, so what it carries is anyone’s guess'
-  )
+  assert.match(android, /planes\.filter \{ it\.plane == "hy2" && it\.slot in selectedSlots \}/)
+  assert.match(android, /matching\.ifEmpty \{ nodes \}/)
+  assert.match(android, /\.put\("type", "urltest"\)\.put\("tag", "udp-proxy"\)/)
+  assert.match(android, /udpTags\.isEmpty\(\)\) udp\.put\("action", "reject"\)/)
+  assert.match(android, /udp\.put\("outbound", "udp-proxy"\)/)
+  assert.match(android, /tunnelRule\(JSONObject\(\)\.put\("rule_set"/)
+  assert.match(android, /tunnelRule\(JSONObject\(\)\.put\("domain_suffix", JSONArray\(tunnelDomains\)/)
 })
 
 test('drift: STATUS.md states the number of tests that actually run', () => {

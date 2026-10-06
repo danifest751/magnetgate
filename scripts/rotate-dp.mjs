@@ -26,6 +26,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { rotateTransaction, recoverRotation } from '../src/rotation.mjs'
 import { atomicWrite } from '../src/state-file.mjs'
+import { withRealityResolver } from '../src/reality-resolver.cjs'
 
 const DIR = '/etc/sing-box'
 const CFG = `${DIR}/config.json`
@@ -118,7 +119,7 @@ const uuids = [gen.uuid, ...(prev ? [prev.uuid] : [])]
 const sids = [gen.sid, ...(prev ? [prev.sid] : [])]
 const pws = [gen.pw, ...(prev ? [prev.pw] : [])]
 
-const config = {
+const config = withRealityResolver({
   log: { level: 'warn' },
   inbounds: [
     {
@@ -158,7 +159,7 @@ const config = {
     { type: 'block', tag: 'block' }
   ],
   route: { rules: [{ ip_is_private: true, outbound: 'block' }], final: 'direct' }
-}
+})
 
 // hy2 is advertised with its pinned self-signed cert (carried to clients over the Nostr channel,
 // which has no size limit) instead of `insecure`; the cert is stable across rotations.

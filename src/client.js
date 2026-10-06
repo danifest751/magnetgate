@@ -27,6 +27,7 @@ import { createPlaneHealth, PLANE_ORDER } from './health.mjs'
 import { DpPool } from './dp-supervisor.mjs'
 import { validateConfig } from './config.cjs'
 import { pickDp, mergeOffer, newPeerSlots } from './offer.mjs'
+import { select as selectCountry } from './countries.cjs'
 
 const OFFER_TTL_MS = 12 * 60 * 1000
 const ts = () => new Date().toISOString()
@@ -160,6 +161,11 @@ const dht = new DHT({ bootstrap: cfg.bootstrap, verify: bep44Verify })
 // returns the exit's current fresh offer object, or null (an exit with no fresh offer cannot be used;
 // per-plane cooldown is tracked separately — see src/health.mjs)
 const fresh = (e) => (e.offer && Date.now() - e.offer.ts < OFFER_TTL_MS ? e.offer : null)
+const routeCandidates = () =>
+  selectCountry(
+    exits.filter(fresh).map((e) => ({ ...e, country: e.offer.country })),
+    cfg.country
+  ).endpoints
 // a plane that failed recently is not retried until its cooldown expires, and the pair backs off
 const planeHealth = createPlaneHealth()
 
@@ -179,6 +185,7 @@ const DP_PREFERENCE = SB_OK ? PLANE_ORDER : ['mgt']
 
 // atomically publish the merged data-plane list for an external engine (write tmp + rename). Only
 // re-writes when the endpoints actually change, so the app doesn't restart sing-box on every poll.
+let lastDpOut = null
 function writeDpOut() {
   try {
     const available = exits
@@ -191,7 +198,12 @@ function writeDpOut() {
         // why a node is not being used
         cooling: planeHealth.cooling(e.id)
       }))
-    atomicWrite(DP_OUT, JSON.stringify({ v: 4, exits: available }))
+    const snapshot = JSON.stringify({ v: 4, exits: available })
+    if (snapshot === lastDpOut) return
+    atomicWrite(DP_OUT, snapshot)
+    lastDpOut = snapshot
+    // The desktop can start its engine immediately; the file remains the source of truth.
+    if (process.connected) process.send({ type: 'endpoints-updated' }, () => {})
   } catch (e) {
     console.log(ts(), '[dp-out] write failed:', e.message)
   }
@@ -356,7 +368,7 @@ async function routeFn(target, app) {
   const deadline = Date.now() + Number(process.env.MAGNETGATE_ROUTE_WAIT_MS ?? 5000)
   while (!exits.some(fresh) && Date.now() < deadline && !app.destroyed)
     await new Promise((r) => setTimeout(r, 100))
-  const candidates = exits.filter(fresh)
+  const candidates = routeCandidates()
   if (!candidates.length) {
     if (!app.destroyed) lookupAll() // make the next attempt likely to succeed
     throw new Error(
@@ -427,7 +439,7 @@ function udpFn(req, control, sendReply) {
   if (!association) {
     // UDP used to take the first fresh exit and give up if it failed; fail over across exits the
     // same way the TCP path does.
-    const candidates = exits.filter(fresh)
+    const candidates = routeCandidates()
     if (!candidates.length) return control.destroy()
     association = {
       pendingBytes: 0,
