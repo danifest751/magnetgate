@@ -41,6 +41,9 @@ function renderStatus() {
   all(
     '[data-mode], #btnAddSite, #domain, #killSwitch, #btnAddExit, #btnSaveServers, #btnSaveAdvanced, #localPort, #singboxPort, #probePort, #bootstrap, #directProcesses, #country, #slots'
   ).forEach((el) => (el.disabled = !loaded))
+  $('killSwitch').disabled = !loaded || st.killSwitchSupported === false
+  $('macGuardNote').hidden = st.killSwitchSupported !== false
+  text('platformLabel', 'magnetgate для ' + (st.platform === 'darwin' ? 'macOS' : 'Windows'))
   $('mg-app').dataset.state = view.connected ? 'connected' : 'idle'
   text('phase', view.title)
   text('statusDetail', view.detail)
@@ -209,7 +212,7 @@ function renderRules() {
       ? 'В режиме «Весь интернет» сайты для прямого доступа добавляете вы. Изменения сохраняются автоматически.'
       : 'Встроенные списки дополняют выбранные сайты в режиме «Только выбранное». Изменения сохраняются автоматически.'
   )
-  $('killSwitch').checked = cfg.killSwitch
+  $('killSwitch').checked = st.killSwitchSupported === false ? false : cfg.killSwitch
   $('guardNote').hidden = !cfg.killSwitch
   const box = $('siteList')
   box.replaceChildren()
@@ -447,6 +450,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     }
   }
   $('killSwitch').onchange = () => {
+    if (st.killSwitchSupported === false) { $('killSwitch').checked = false; return }
     const value = $('killSwitch').checked
     saveChange((current) => ({ ...current, killSwitch: value })).catch(() => {})
   }

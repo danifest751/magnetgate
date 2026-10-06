@@ -1,6 +1,6 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
-const { summarize, select } = require('../countries.cjs')
+const { summarize, select } = require('../../src/countries.cjs')
 
 const ep = (country, exitName, t = 'reality') => ({
   t,
@@ -61,7 +61,7 @@ test('countries: a single old exit leaves no list, so the UI hides the control',
 })
 
 test('node summariser lists every node once with its planes and cooling state', () => {
-  const { summarizeNodes } = require('../countries.cjs')
+  const { summarizeNodes } = require('../../src/countries.cjs')
   const ep = (name, country, t, cooling = []) => ({
     t,
     host: '203.0.113.1',

@@ -8,7 +8,7 @@
     const pending =
       state.vpnOn &&
       (state.modePending || (state.activeMode && state.activeMode !== config.vpnMode))
-    const busy = !!pending || ['rendezvous', 'starting', 'switching'].includes(state.phase)
+    const busy = !!pending || ['rendezvous', 'starting', 'switching', 'authorizing'].includes(state.phase)
     const connected = !!(
       state.vpnOn &&
       state.vpnHealthy &&
@@ -36,6 +36,9 @@
     } else if (state.phase === 'rendezvous') {
       title = 'Ищем сервер…'
       detail = 'Ожидаем параметры подключения.'
+    } else if (state.phase === 'authorizing') {
+      title = 'Подтвердите запуск VPN'
+      detail = 'Разрешите запуск в системном окне macOS.'
     } else if (state.phase === 'starting') {
       title = 'Проверяем соединение…'
       detail = 'Ожидаем готовности туннеля и проверки интернета.'

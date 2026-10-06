@@ -113,7 +113,7 @@ class EngineController {
         await fs.writeFile(candidate, JSON.stringify(config, null, 2), { mode: 0o600 })
         await this.execute(this.exe, ['check', '-c', candidate], { cwd: this.cwd })
         if (generation !== this.generation || !this.wanted) return false
-        await beforeStart()
+        await beforeStart(abort.signal)
         if (generation !== this.generation || !this.wanted) return false
         await this.stopOwned()
         if (generation !== this.generation || !this.wanted) return false

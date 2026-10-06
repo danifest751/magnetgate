@@ -1,6 +1,6 @@
 # magnetgate desktop 0.3.3
 
-The elevated Electron app manages a sing-box TUN process and a discovery/native SOCKS client.
+The desktop app manages a sing-box TUN process and a discovery/native SOCKS client.
 Reality and pinned hysteria2 run directly in sing-box; native is a fallback through the Node client.
 Multiple fresh exits participate in selection. Node is bundled through Electron.
 
@@ -24,6 +24,14 @@ npm run dist
 
 The portable artifact is `app/dist/magnetgate-0.3.3.exe`. The app requests Administrator at launch
 for TUN/firewall operations. Child processes are hidden and only owned processes are stopped.
+For frequent use, extract `app/dist/magnetgate-0.3.3-win.zip` once and launch `magnetgate.exe`
+from that folder. Keep all extracted files together. This avoids unpacking Electron and the engine
+on every cold launch; the standalone portable EXE still unpacks into a fresh temporary directory.
+Each portable launch uses its own temporary resource directory; duplicate launches reveal the
+existing window without deleting its active resources.
+For the pinned electron-builder 26.15.3, `portable.unpackDirName: true` omits `UNPACK_DIR_NAME`
+and selects `$PLUGINSDIR/app`. Its implementation differs from the online documentation's
+description of `false`; check this behavior before changing the builder version.
 
 Builds use the valid empty example config by default. Add PSKs under Настройки → Серверы и ключи доступа.
 `MAGNETGATE_PERSONAL_BUILD=1` deliberately embeds the local `magnetgate.config.json`; such an artifact
@@ -32,16 +40,55 @@ configs and logs. Store user settings in Electron userData; use Open config fold
 
 ## Related clients and versions
 
-This is the Windows x64 Electron client. It is separate from the native
+This shared Electron client supports Windows x64 and macOS x64/arm64. It is separate from the native
 [Android client](../app-android/README.md), whose UI has a RU/EN switch. Desktop currently uses
 Russian labels. The root core version and Android package version are independent of desktop 0.3.3.
-`npm run dist` builds a local portable executable; it does not publish a GitHub release.
+`npm run dist` builds a local portable executable and a ZIP archive; it does not publish a GitHub release.
+
+## macOS build and testing
+
+macOS support was imported from [Xaint00ship/tunnel-manager-client-macos](https://github.com/Xaint00ship/tunnel-manager-client-macos),
+commit `35f08d9fe7854be9f941394e600e25fb538297ec` (MIT). Platform paths, automatic utun naming,
+Darwin download pins and DMG/ZIP packaging are integrated into this shared latest desktop client;
+the fork's older core and planning documents are not substituted for the current implementation.
+
+On an Intel or Apple Silicon Mac, install Node.js 22 and run:
+
+```sh
+npm ci
+bash scripts/get-singbox-macos.sh
+cd app
+npm ci
+npm test
+npm start
+npm run dist:mac
+```
+
+Build on the target architecture. The resource gate checks the pinned engine/rule-set hashes
+and refuses cross-architecture packaging. CI uses macOS 15 arm64 and macOS 15 Intel runners.
+Archives are `magnetgate-0.3.3-mac-arm64` or `magnetgate-0.3.3-mac-x64` (DMG and ZIP).
+These test builds are unsigned and unnotarized; production signing requires an Apple Developer
+identity and notarization credentials. No signing key is included in the repository.
+
+The GUI and discovery client run as the ordinary user. The first VPN start opens macOS's system
+administrator prompt for an ephemeral Node helper, which launches only the bundled VPN engine.
+A private Unix socket with a random per-launch capability carries validated settings. The helper
+rebuilds the VPN config, uses a root-owned private runtime directory, stops its owned engine on
+disconnect/socket loss/heartbeat expiry, and deletes its runtime config on exit. No persistent
+daemon is installed. macOS assigns the utun interface name. The Windows persistent firewall
+kill switch is unavailable on macOS and is disabled in both settings and runtime configuration.
+
+Automated tests cover configuration, protocol authentication and shared lifecycle; CI runs real
+loopback engine mode tests and packages both architectures. Interactive authorization, real TUN
+connectivity, crash recovery, sleep/wake and Gatekeeper installation still need a Mac test session.
+An Intel VM does not replace testing Apple Silicon. A forcibly killed root helper may require
+manual cleanup of its engine; persistent macOS protection is not claimed.
 
 ## Interface
 
 The Russian UI has four screens: Подключение, Сайты, Настройки and Диагностика. Full is labelled
 «Весь интернет» and Split «Только выбранное». The selected preference and actual applied mode
-are displayed separately while a change is pending. Light/dark appearance follows Windows.
+are displayed separately while a change is pending. Light/dark appearance follows the operating system.
 
 Direct exceptions and tunnel domains are separate lists; editing either does not switch modes.
 Rule changes save automatically (unlike Android, where Save rules is explicit).
@@ -61,6 +108,7 @@ to its module directory if it is not on the module search path). Screenshots go 
   direct website exceptions. Private-network and transport/discovery bypasses remain separate.
 - Split: only selected domains/IP rules go through the proxy.
 - With the firewall option off, switching Full/Split updates rules on the same engine/TUN.
+  Both modes remain available when starting in Split with an empty exception list.
   Existing connections close so applications reconnect under the new policy. Other configuration
   changes and transitions with the firewall option enabled still restart the engine.
 - Strict Full firewall option: disables direct exceptions, records prior local firewall settings,
@@ -83,10 +131,18 @@ Other full tunnels should be turned off first. The legacy PowerShell launchers o
 while their engine runs; they do not enable the persistent guard.
 
 Connection health compares HTTPS system egress with an HTTPS request forced through a separate
-proxy-only SOCKS inbound. Split has a separate health condition. Endpoint snapshots expire after
+proxy-only SOCKS inbound. Full accepts matching addresses or two addresses belonging to the selected
+discovered VPN nodes, because concurrent probes can use different exits during failover. An unrelated
+system address still fails the check. Split has a separate health condition. Endpoint snapshots expire after
 12 minutes and are refreshed independently of active connections.
 Mode changes request an immediate health check and discard results from previous policies.
 Logs distinguish a live mode change from an engine restart and include mode-change duration/PID.
+
+On Connect, discovery runs during the Windows adapter inspection. The TUN starts only after that
+inspection passes. Authenticated endpoint changes notify the app over its owned child-process IPC;
+a 100 ms batch window combines nearby offers into one configuration. The two-second poll remains
+as recovery if a notification is lost. Disconnect cancels pending wakeups and late offers cannot
+activate a stopped connection.
 
 App and sing-box warnings share the bounded, rotating userData/logs `magnetgate.log` (plus one
 previous file). Existing `vpn.log` files are historical and are no longer appended by the app.
@@ -97,7 +153,8 @@ offers Disconnect again and keeps the window open on failed shutdown.
 
 ## Country and application rules
 
-The country selector is built from discovered offers. It is a preference with fallback when no
+The country selector applies to both the engine and the native TCP/UDP fallback and is built from discovered offers.
+Changing country or discovery slots refreshes the native client configuration. It is a preference with fallback when no
 endpoint matches, not a promise that every connection exits in that country. Diagnostics summarizes
 discovered nodes and their transports. Traffic counters describe observed activity, not link capacity.
 Desktop application bypass uses executable names; Android selects installed application packages.

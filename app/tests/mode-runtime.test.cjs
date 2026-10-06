@@ -12,7 +12,7 @@ const { switchMode } = require('../mode.cjs')
 const { stopChild } = require('../engine.cjs')
 const { validateConfig } = require('../../src/config.cjs')
 const root = path.resolve(__dirname, '../..')
-const exe = path.join(root, 'tools/sing-box/sing-box.exe')
+const exe = path.join(root, 'tools/sing-box', process.platform === 'win32' ? 'sing-box.exe' : 'sing-box')
 
 async function listen(server) {
   server.listen(0, '127.0.0.1')
@@ -103,10 +103,8 @@ async function routedSocket(port, domain) {
   }
 }
 
-test(
-  'real sing-box changes policies and closes old flows without replacing the process',
-  { skip: process.platform !== 'win32' || !fs.existsSync(exe) },
-  async (t) => {
+function modeFixture(initial) {
+  return async (t) => {
     const cleanups = []
     t.after(async () => {
       const errors = []
@@ -129,10 +127,10 @@ test(
     const cfg = buildVpnConfig({
       root,
       cfg: validateConfig({
-        vpnMode: 'full',
+        vpnMode: initial.mode,
         probePort,
-        directDomains: ['direct.test', 'overlap.test'],
-        tunnelDomains: ['tunnel.test', 'overlap.test']
+        directDomains: initial.directDomains,
+        tunnelDomains: initial.tunnelDomains
       }),
       dp: [{ t: 'mgt', host: '203.0.113.1', port: 49001, protocol: 4, exitId: 'fixture' }],
       bypass: [],
@@ -182,11 +180,15 @@ test(
       assert.equal(socket.route, wanted)
       socket.destroy()
     }
+    if (initial.mode === 'split') {
+      await check('default.test', 'direct')
+      await switchMode(api, 'full', new AbortController().signal)
+    }
     await check('default.test', 'proxy')
     await check('app.kilo.ai', 'proxy')
     await check('kilocode.ai', 'proxy')
-    await check('direct.test', 'direct')
-    await check('overlap.test', 'direct')
+    await check('direct.test', initial.directDomains.length ? 'direct' : 'proxy')
+    await check('overlap.test', initial.directDomains.length ? 'direct' : 'proxy')
     const oldFull = await routedSocket(routePort, 'default.test')
     const fullClosed = once(oldFull, 'close', { signal: AbortSignal.timeout(5000) })
     const start = Date.now()
@@ -194,8 +196,8 @@ test(
     await fullClosed
     const splitMs = Date.now() - start
     await check('default.test', 'direct')
-    await check('tunnel.test', 'proxy')
-    await check('overlap.test', 'proxy')
+    await check('tunnel.test', initial.tunnelDomains.length ? 'proxy' : 'direct')
+    await check('overlap.test', initial.tunnelDomains.length ? 'proxy' : 'direct')
     await check('default.test', 'proxy', probePort)
     const oldSplit = await routedSocket(routePort, 'default.test')
     const splitClosed = once(oldSplit, 'close', { signal: AbortSignal.timeout(5000) })
@@ -206,7 +208,7 @@ test(
     await check('default.test', 'proxy')
     await check('app.kilo.ai', 'proxy')
     await check('kilocode.ai', 'proxy')
-    await check('direct.test', 'direct')
+    await check('direct.test', initial.directDomains.length ? 'direct' : 'proxy')
     assert.equal(child.pid, pid)
     assert.equal(child.exitCode, null)
     assert.equal(child.signalCode, null)
@@ -214,4 +216,19 @@ test(
       `Loopback fixture: Full->Split ${splitMs} ms; Split->Full ${fullMs} ms; same PID ${pid}`
     )
   }
+}
+
+test(
+  'real sing-box switches both ways from Full with exceptions without replacing the process',
+  { skip: !fs.existsSync(exe) },
+  modeFixture({
+    mode: 'full',
+    directDomains: ['direct.test', 'overlap.test'],
+    tunnelDomains: ['tunnel.test', 'overlap.test']
+  })
+)
+test(
+  'real sing-box switches both ways from Split without exceptions without replacing the process',
+  { skip: !fs.existsSync(exe) },
+  modeFixture({ mode: 'split', directDomains: [], tunnelDomains: [] })
 )

@@ -23,7 +23,7 @@
           <button class="mg-nav" data-page="settings">Настройки</button>
           <div class="mg-sidebar-foot">
             <button class="mg-nav" data-page="diagnostics">Диагностика</button>
-            <p class="mg-version">magnetgate для Windows</p>
+            <p id="platformLabel" class="mg-version">magnetgate</p>
           </div>
         </nav>
         <main class="mg-main">
@@ -144,6 +144,7 @@
                 </div>
                 <input id="killSwitch" class="mg-toggle" type="checkbox" />
               </div>
+              <p id="macGuardNote" class="mg-note" hidden>Блокировка интернета при обрыве на macOS пока недоступна.</p>
               <p id="guardNote" class="mg-note" hidden>
                 Прямые исключения отключаются. Закрытие приложения не снимает блокировку; для
                 восстановления интернета нажмите «Отключить» на экране подключения.

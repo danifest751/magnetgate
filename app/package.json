@@ -10,10 +10,13 @@
     "prestart": "node prepare-seed.js",
     "start": "electron .",
     "predist": "node prepare-seed.js",
-    "dist": "electron-builder --win portable",
+    "dist": "electron-builder --win portable zip",
     "install:electron": "node node_modules/electron/install.js",
     "test": "node --test tests/*.test.cjs",
-    "test:ui": "node tests/renderer-browser.cjs"
+    "test:ui": "node tests/renderer-browser.cjs",
+    "predist:mac": "node prepare-seed.js",
+    "dist:mac": "electron-builder --mac dmg zip",
+    "dist:win": "npm run dist"
   },
   "devDependencies": {
     "electron": "44.3.0",
@@ -40,7 +43,14 @@
       {
         "from": "../tools/sing-box",
         "to": "tools/sing-box",
-        "filter": ["sing-box.exe", "wintun.dll", "refilter-domains.srs", "refilter-ip.srs", "tunnel-userlist.srs"]
+        "filter": [
+          "sing-box.exe",
+          "sing-box",
+          "wintun.dll",
+          "refilter-domains.srs",
+          "refilter-ip.srs",
+          "tunnel-userlist.srs"
+        ]
       },
       {
         "from": "../magnetgate.config.example.json",
@@ -57,16 +67,35 @@
       {
         "from": "../scripts/kill-switch.ps1",
         "to": "scripts/kill-switch.ps1"
+      },
+      {
+        "from": "../scripts/pins.json",
+        "to": "scripts/pins.json"
       }
     ],
     "win": {
       "target": [
-        "portable"
+        "portable",
+        "zip"
       ],
       "requestedExecutionLevel": "requireAdministrator"
     },
     "portable": {
+      "unpackDirName": true,
       "artifactName": "magnetgate-${version}.exe"
+    },
+    "beforePack": "./verify-resources.cjs",
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "artifactName": "magnetgate-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "artifactName": "magnetgate-${version}-mac-${arch}.${ext}"
     }
   },
   "engines": {

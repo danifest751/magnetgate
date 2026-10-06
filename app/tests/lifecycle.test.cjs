@@ -4,6 +4,7 @@ const vm = require('node:vm')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { EventEmitter } = require('node:events')
 
 // Exercise the real main-process lifecycle with no Electron, child processes or network.
 function fixture(t, options = {}) {
@@ -18,6 +19,8 @@ function fixture(t, options = {}) {
     starts: 0,
     modes: []
   }
+  observed.spawns = []
+  observed.wakes = new Map()
   observed.focuses = 0
   observed.restores = 0
   observed.windows = 0
@@ -42,6 +45,7 @@ function fixture(t, options = {}) {
     }
     async start(_cfg, beforeStart) {
       await beforeStart()
+      if (observed.startError) throw observed.startError
       observed.starts++
       this.running = true
       this.ready = true
@@ -110,11 +114,25 @@ function fixture(t, options = {}) {
           EngineController: FakeEngine,
           stopChild: async (child) => {
             if (child) observed.clientStops++
+            child?.emit?.('exit', 0)
           },
-          command: async (exe, args) =>
-            exe === 'curl.exe' && observed.probe
-              ? observed.probe(args)
-              : JSON.stringify({ recoveryRequired: false, protected: false })
+          command: async (exe, args) => {
+            if ((exe === 'curl.exe' || exe === '/usr/bin/curl') && observed.probe) return observed.probe(args)
+            if (exe === '/usr/sbin/netstat') return observed.inspect ? observed.inspect() :
+              'Destination Gateway Flags Netif\ndefault 192.168.1.1 UGSc en0'
+            if (args.includes('-Command')) return observed.inspect ? observed.inspect() : ''
+            return JSON.stringify({ recoveryRequired: false, protected: false })
+          }
+        }
+      if (name === 'node:child_process')
+        return {
+          spawn: (exe, args, options) => {
+            const child = new EventEmitter()
+            child.stdout = new EventEmitter()
+            child.stderr = new EventEmitter()
+            observed.spawns.push({ exe, args, options, child })
+            return child
+          }
         }
       if (name === './mode.cjs')
         return {
@@ -128,13 +146,19 @@ function fixture(t, options = {}) {
         return {
           rotatingLog: () => ({ append() {}, flush: async () => observed.flushLog?.() })
         }
+      if (name === './mac-engine.cjs') return { MacEngine: class {
+        async prepare() { if (observed.authorize) await observed.authorize() }
+        async close() {}
+      } }
       if (name.startsWith('./')) return require(path.join(__dirname, '..', name))
       return require(name)
     },
     __dirname: path.join(__dirname, '..'),
-    process: { env: {}, execPath: 'fixture.exe', on() {} },
+    process: { env: {}, platform: options.platform || 'win32', execPath: 'fixture.exe', on() {} },
     setInterval,
     clearInterval,
+    setTimeout: fn => { const id = Symbol(); observed.wakes.set(id, fn); return id },
+    clearTimeout: id => observed.wakes.delete(id),
     Buffer,
     AbortController,
     observed
@@ -146,11 +170,27 @@ function fixture(t, options = {}) {
       restore:()=>{observed.restores++;observed.minimized=false}, focus:()=>observed.focuses++,
       show:()=>observed.shows++, webContents:{send:(ch,s)=>{if(ch==='status')observed.statuses.push(s)}}};
     clientProc = {}; state.clientRunning = true;
-    globalThis.api = {shutdown, runVpn, state, applyVpn, pollEgress, saveConfig,
-      prepareLive(cfg) {
+    globalThis.api = {shutdown, runVpn, state, applyVpn, pollEgress, saveConfig, startClient, stopClient,
+      flushWake() {
+        for (const [id,fn] of [...observed.wakes]) {observed.wakes.delete(id);fn();}
+      },
+      async settle() {
+        for (;;) {
+          const pending=operation;this.flushWake();await pending;
+          if(pending===operation&&!observed.wakes.size)return;
+        }
+      },
+      publishEndpoints(includeFi=false) {
+        const exits=[{id:'fixture',ts:Date.now(),country:'NL',
+          dp:[{t:'mgt',host:'203.0.113.1',port:49001,protocol:4}]}];
+        if(includeFi)exits.push({id:'fi',ts:Date.now(),country:'FI',
+          dp:[{t:'mgt',host:'203.0.113.2',port:49001,protocol:4}]});
+        atomicJson(DP_FILE,{v:4,exits});
+      },
+      prepareLive(cfg, endpoints) {
         cfg=saveConfig(cfg);
-        const dp=[{t:'mgt',host:'203.0.113.1',port:49001,protocol:4,exitId:'fixture'}];
-        atomicJson(DP_FILE,{v:4,exits:[{id:'fixture',ts:Date.now(),dp}]});
+        const dp=endpoints || [{t:'mgt',host:'203.0.113.1',port:49001,protocol:4,exitId:'fixture'}];
+        atomicJson(DP_FILE,{v:4,exits:dp.map(d=>({id:d.exitId,ts:Date.now(),country:d.country,dp:[d]}))});
         state.vpnOn=true;state.vpnHealthy=true;state.activeMode=cfg.vpnMode;
         appliedConfig=cfg;activeEngineSig=engineSignature(cfg,readDp());
         lastSig=JSON.stringify({dp:readDp(),cfg});
@@ -161,6 +201,232 @@ function fixture(t, options = {}) {
   )
   return { ...context.api, engine, observed }
 }
+
+test('macOS live mode changes do not mistake the owned utun for another VPN', async t => {
+  const f = fixture(t, { platform: 'darwin' })
+  f.engine.fail = false
+  f.observed.inspect = () => { throw new Error('Cold-only inspection called on an owned TUN') }
+  f.saveConfig({ vpnMode: 'full', exits: [{ psk: 'fixture-key' }] })
+  await f.startClient()
+  f.prepareLive({ vpnMode: 'full', killSwitch: true, exits: [{ psk: 'fixture-key' }] })
+  assert.equal(f.saveConfig({ vpnMode: 'split', exits: [{ psk: 'fixture-key' }] }).killSwitch, false)
+  await f.runVpn(false)
+  assert.equal(f.state.vpnOn, true)
+  assert.deepEqual(f.observed.modes, ['split'])
+  assert.equal(f.observed.starts, 0)
+})
+
+test('macOS authorization denial stops automatic retry until the next Connect', async t => {
+  const f = fixture(t, { platform: 'darwin' })
+  f.engine.fail = false
+  f.engine.running = f.engine.ready = false
+  f.saveConfig({ exits: [{ psk: 'fixture-key' }] })
+  await f.runVpn(false)
+  f.observed.authorize = () => { throw Object.assign(new Error('Authorization declined'), { code: 'MAC_AUTH_REQUIRED' }) }
+  f.publishEndpoints()
+  f.observed.spawns[0].child.emit('message', { type: 'endpoints-updated' })
+  await f.settle()
+  assert.equal(f.state.vpnOn, false)
+  assert.match(f.state.lastError, /declined/)
+  assert.equal(f.observed.starts, 0)
+  const count = f.observed.spawns.length
+  await f.settle()
+  assert.equal(f.observed.spawns.length, count)
+  assert.equal(f.observed.wakes.size, 0)
+})
+
+test('fresh endpoint notification starts VPN without waiting for the polling interval', async (t) => {
+  const f = fixture(t)
+  f.engine.fail = false
+  await f.stopClient()
+  f.engine.running = f.engine.ready = false
+  f.saveConfig({ exits: [{ name: 'fixture', psk: 'fixture-access-key' }] })
+  await f.runVpn(false)
+  assert.equal(f.observed.starts, 0)
+  const { child, options } = f.observed.spawns[0]
+  assert.ok(options.stdio.includes('ipc'))
+  f.publishEndpoints()
+  child.emit('message', { type: 'endpoints-updated' })
+  await new Promise(setImmediate)
+  assert.equal(f.observed.starts, 0)
+  f.publishEndpoints(true)
+  child.emit('message', { type: 'endpoints-updated' })
+  assert.equal(f.observed.wakes.size, 1)
+  await f.settle()
+  assert.equal(f.observed.starts, 1)
+  assert.equal(f.state.countries.length, 2)
+  // Duplicate notifications don't replace an unchanged engine.
+  child.emit('message', { type: 'endpoints-updated' })
+  child.emit('message', { type: 'endpoints-updated' })
+  await f.settle()
+  assert.equal(f.observed.starts, 1)
+  await f.runVpn(true)
+  child.emit('message', { type: 'endpoints-updated' })
+  await f.settle()
+  assert.equal(f.observed.starts, 1)
+  assert.equal(f.state.vpnOn, false)
+})
+
+test('endpoint messages from a replaced discovery child cannot start VPN', async (t) => {
+  const f = fixture(t)
+  f.engine.fail = false
+  await f.stopClient()
+  f.engine.running = f.engine.ready = false
+  f.saveConfig({ exits: [{ name: 'fixture', psk: 'fixture-access-key' }] })
+  await f.runVpn(false)
+  const old = f.observed.spawns[0].child
+  await f.stopClient()
+  await f.startClient()
+  f.publishEndpoints()
+  old.emit('message', { type: 'endpoints-updated' })
+  f.observed.spawns[1].child.emit('message', { type: 'unknown' })
+  await f.settle()
+  assert.equal(f.observed.starts, 0)
+  f.observed.spawns[1].child.emit('message', { type: 'endpoints-updated' })
+  await f.settle()
+  assert.equal(f.observed.starts, 1)
+  await f.runVpn(true)
+})
+
+test('native discovery restarts for changed country or slots without a spurious stop error', async (t) => {
+  const f = fixture(t)
+  const cfg = f.saveConfig({ exits: [{ name: 'fixture', psk: 'fixture-access-key' }], country: 'NL', slots: [0] })
+  await f.stopClient()
+  await f.startClient()
+  await f.startClient()
+  assert.equal(f.observed.spawns.length, 1)
+  f.saveConfig({ ...cfg, country: 'FI' })
+  await f.startClient()
+  assert.equal(f.observed.spawns.length, 2)
+  f.saveConfig({ ...cfg, country: 'FI', slots: [0, 1] })
+  await f.startClient()
+  assert.equal(f.observed.spawns.length, 3)
+  assert.equal(f.state.lastError, null)
+  await f.stopClient()
+  assert.equal(f.state.lastError, null)
+})
+
+test('discovery overlaps tunnel inspection but early endpoints cannot start TUN before it passes', async (t) => {
+  const f = fixture(t)
+  f.engine.fail = false
+  await f.stopClient()
+  f.engine.running = f.engine.ready = false
+  f.saveConfig({ exits: [{ name: 'fixture', psk: 'fixture-access-key' }] })
+  let release
+  f.observed.inspect = () => new Promise(resolve => { release = resolve })
+  const connecting = f.runVpn(false)
+  await new Promise(setImmediate)
+  assert.equal(f.observed.spawns.length, 1)
+  f.publishEndpoints()
+  const child = f.observed.spawns[0].child
+  child.emit('message', { type: 'endpoints-updated' })
+  child.emit('message', { type: 'endpoints-updated' })
+  f.flushWake()
+  await new Promise(setImmediate)
+  assert.equal(f.observed.starts, 0)
+  release('')
+  await connecting
+  await f.settle()
+  assert.equal(f.observed.starts, 1)
+  await f.runVpn(true)
+})
+
+test('failed inspection or another tunnel cleans up discovery and cannot be bypassed by queued endpoints', async (t) => {
+  for (const other of [false, true]) {
+    const f = fixture(t)
+    f.engine.fail = false
+    await f.stopClient()
+    f.engine.running = f.engine.ready = false
+    f.saveConfig({ exits: [{ name: 'fixture', psk: 'fixture-access-key' }] })
+    let release
+    f.observed.inspect = () => new Promise((resolve, reject) => {
+      release = () => other ? resolve('"OtherVPN"') : reject(new Error('inspection unavailable'))
+    })
+    const connecting = f.runVpn(false)
+    const rejected = assert.rejects(connecting, other ? /Turn off OtherVPN/ : /Could not inspect/)
+    await new Promise(setImmediate)
+    assert.equal(f.observed.spawns.length, 1)
+    f.publishEndpoints()
+    f.observed.spawns[0].child.emit('message', { type: 'endpoints-updated' })
+    f.flushWake()
+    release()
+    await rejected
+    await f.settle()
+    assert.equal(f.observed.starts, 0)
+    assert.equal(f.state.clientRunning, false)
+    assert.equal(f.state.vpnOn, false)
+    assert.equal(f.observed.clientStops, 2)
+  }
+})
+
+test('inspection finishing between nearby offers still waits for a single cold TUN configuration', async (t) => {
+  const f = fixture(t)
+  f.engine.fail = false
+  await f.stopClient()
+  f.engine.running = f.engine.ready = false
+  f.saveConfig({ exits: [{ name: 'fixture', psk: 'fixture-access-key' }] })
+  let release
+  f.observed.inspect = () => new Promise(resolve => { release = resolve })
+  const connecting = f.runVpn(false)
+  await new Promise(setImmediate)
+  const child = f.observed.spawns[0].child
+  f.publishEndpoints()
+  child.emit('message', { type: 'endpoints-updated' })
+  release('')
+  await connecting
+  assert.equal(f.observed.starts, 0)
+  f.publishEndpoints(true)
+  child.emit('message', { type: 'endpoints-updated' })
+  await f.settle()
+  assert.equal(f.observed.starts, 1)
+  assert.equal(f.state.countries.length, 2)
+  await f.runVpn(true)
+})
+
+test('Disconnect during parallel discovery and inspection cannot activate a late endpoint', async (t) => {
+  const f = fixture(t)
+  f.engine.fail = false
+  await f.stopClient()
+  f.engine.running = f.engine.ready = false
+  f.saveConfig({ exits: [{ name: 'fixture', psk: 'fixture-access-key' }] })
+  let release
+  f.observed.inspect = () => new Promise(resolve => { release = resolve })
+  const connecting = f.runVpn(false)
+  await new Promise(setImmediate)
+  assert.equal(f.observed.spawns.length, 1)
+  f.publishEndpoints()
+  const child = f.observed.spawns[0].child
+  child.emit('message', { type: 'endpoints-updated' })
+  f.flushWake()
+  const disconnecting = f.runVpn(true)
+  release('')
+  await Promise.all([connecting, disconnecting])
+  child.emit('message', { type: 'endpoints-updated' })
+  await f.settle()
+  assert.equal(f.observed.starts, 0)
+  assert.equal(f.state.phase, 'idle')
+  assert.equal(f.state.clientRunning, false)
+})
+
+test('Full health accepts two known VPN exits but rejects direct or unselected egress', async (t) => {
+  const endpoints = [
+    { t: 'mgt', host: '203.0.113.10', port: 49001, protocol: 4, exitId: 'nl', country: 'NL' },
+    { t: 'mgt', host: '203.0.113.20', port: 49001, protocol: 4, exitId: 'fi', country: 'FI' }
+  ]
+  const f = fixture(t)
+  f.prepareLive({ vpnMode: 'full' }, endpoints)
+  f.observed.probe = async args => args.includes('--socks5-hostname') ? '203.0.113.20' : '203.0.113.10'
+  await f.pollEgress()
+  assert.equal(f.state.vpnHealthy, true)
+  assert.equal(f.state.viaExit, true)
+  f.observed.probe = async args => args.includes('--socks5-hostname') ? '203.0.113.20' : '203.0.113.99'
+  await f.pollEgress()
+  assert.equal(f.state.vpnHealthy, false)
+  f.prepareLive({ vpnMode: 'full', country: 'NL' }, endpoints)
+  f.observed.probe = async args => args.includes('--socks5-hostname') ? '203.0.113.20' : '203.0.113.10'
+  await f.pollEgress()
+  assert.equal(f.state.vpnHealthy, false)
+})
 
 test('failed Disconnect retains cleanup state and retries without restarting VPN', async (t) => {
   const { runVpn, state, engine, observed } = fixture(t)

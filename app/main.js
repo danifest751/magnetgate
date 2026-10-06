@@ -10,14 +10,17 @@ const { buildVpnConfig } = require('./vpn-config.cjs')
 const { switchMode, engineSignature } = require('./mode.cjs')
 const { rotatingLog } = require('./log.cjs')
 const { accumulate, rate } = require('./stats.cjs')
+const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
+const PLATFORM = process.platform || 'win32'
+const { platformConfig, platformPaths, macTunnel } = require('./platform.cjs')
+const paths = platformPaths(RES, PLATFORM)
 const {
   summarize: summarizeCountries,
   summarizeNodes,
   select: selectCountry
-} = require('./countries.cjs')
+} = require(path.join(RES, 'src', 'countries.cjs'))
 if (process.env.MAGNETGATE_APP_TEST_DIR)
   app.setPath('userData', process.env.MAGNETGATE_APP_TEST_DIR)
-const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
 const { DEFAULT_CONFIG, validateConfig, freshEndpoints } = require(
   path.join(RES, 'src', 'config.cjs')
 )
@@ -30,7 +33,7 @@ fs.mkdirSync(LOG_DIR, { recursive: true })
 const LOG_FILE = path.join(LOG_DIR, 'magnetgate.log'),
   diskLog = rotatingLog(LOG_FILE)
 const SB_DIR = path.join(RES, 'tools', 'sing-box'),
-  SB_EXE = path.join(SB_DIR, 'sing-box.exe')
+  SB_EXE = paths.engine
 const GUARD = path.join(RES, 'scripts', 'kill-switch.ps1')
 const CLASH_PORT = 19090,
   CLASH_SECRET = crypto.randomBytes(16).toString('hex')
@@ -51,7 +54,11 @@ let activeTunnelAlias = null,
   modeAbort = null
 const timers = [],
   logs = []
+const clientStopping = new Set()
 const state = {
+  platform: PLATFORM,
+  killSwitchSupported: paths.killSwitchSupported,
+  authorizing: false,
   clientRunning: false,
   route: null,
   egress: null,
@@ -144,6 +151,8 @@ function pushStatus() {
         ? 'switching'
         : state.vpnHealthy
           ? 'connected'
+          : state.authorizing
+            ? 'authorizing'
           : engine.running
             ? 'starting'
             : 'rendezvous'
@@ -190,10 +199,10 @@ function loadConfig() {
       seed ? JSON.parse(fs.readFileSync(seed, 'utf8').replace(/^﻿/, '')) : DEFAULT_CONFIG
     )
   }
-  return validateConfig(JSON.parse(fs.readFileSync(CONFIG, 'utf8').replace(/^﻿/, '')))
+  return platformConfig(validateConfig(JSON.parse(fs.readFileSync(CONFIG, 'utf8').replace(/^﻿/, ''))), PLATFORM)
 }
 function saveConfig(cfg) {
-  const clean = validateConfig(cfg)
+  const clean = platformConfig(validateConfig(cfg), PLATFORM)
   atomicJson(CONFIG, clean)
   return clean
 }
@@ -207,7 +216,12 @@ function readDp() {
 function bypassIps(dp) {
   return [...new Set(dp.map((d) => d.host).filter(net.isIPv4))]
 }
+let macInput = null
+const macEngine = PLATFORM === 'darwin' ? new (require('./mac-engine.cjs').MacEngine)({
+  onAuthorizing: value => { state.authorizing = value; pushStatus() }
+}) : null
 const engine = new EngineController({
+  ...(macEngine ? { spawnChild: () => macEngine.start(macInput) } : {}),
   exe: SB_EXE,
   cwd: SB_DIR,
   configPath: path.join(LOG_DIR, 'vpn-config.json'),
@@ -223,6 +237,13 @@ const engine = new EngineController({
   }
 })
 async function firewall(off = false, status = false) {
+  if (!paths.killSwitchSupported) {
+    if (!off && !status) throw new Error('Persistent kill switch is unavailable on this platform')
+    guardReady = false
+    state.guardRecoveryRequired = false
+    state.trafficProtected = false
+    return false
+  }
   const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', GUARD]
   if (off) args.push('-Off')
   else if (status) args.push('-Status')
@@ -250,6 +271,14 @@ async function firewall(off = false, status = false) {
   state.trafficProtected = !off
 }
 async function checkOtherTunnel() {
+  if (PLATFORM === 'darwin') {
+    // Live settings changes reuse our existing TUN. Inspect foreign routes on a cold start;
+    // an OS-allocated owned utun must not be mistaken for a competing VPN.
+    if (engine.running) return null
+    try { return macTunnel(await command('/usr/sbin/netstat', ['-rn', '-f', 'inet'], {}, 8000)) }
+    catch (err) { throw new Error('Could not inspect tunnel state: ' + err.message) }
+  }
+  if (PLATFORM !== 'win32') throw new Error('Unsupported desktop platform')
   const script =
     "@(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.Name -ne 'magnetgate' -and $_.InterfaceDescription -match 'WireGuard|OpenVPN|TAP|WARP|Amnezia' } | Select-Object -ExpandProperty Name) | ConvertTo-Json -Compress"
   try {
@@ -273,7 +302,9 @@ async function startClient() {
       exits: cfg.exits,
       bootstrap: cfg.bootstrap,
       localPort: cfg.localPort,
-      transport: cfg.transport
+      transport: cfg.transport,
+      slots: cfg.slots,
+      country: cfg.country
     })
   if (clientProc && sig === clientSig) return
   if (clientProc) await stopClient()
@@ -298,6 +329,7 @@ async function startClient() {
     const child = spawn(process.execPath, [path.join(RES, 'src', 'client.js'), runtimeFile], {
       cwd: RES,
       windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: {
         ...process.env,
         ELECTRON_RUN_AS_NODE: '1',
@@ -309,13 +341,16 @@ async function startClient() {
     clientProc = child
     clientSig = sig
     state.clientRunning = true
+    child.on('message', (message) => {
+      if (clientProc === child && message?.type === 'endpoints-updated') requestTick()
+    })
     for (const output of [child.stdout, child.stderr])
       output.on('data', (buf) => pushLog('[client] ' + String(buf).trim()))
     child.once('error', (err) => {
       if (clientProc === child) {
         clientProc = null
         state.clientRunning = false
-        state.lastError = err.message
+        if (!clientStopping.has(child)) state.lastError = err.message
         pushStatus()
       }
     })
@@ -323,7 +358,7 @@ async function startClient() {
       if (clientProc === child) {
         clientProc = null
         state.clientRunning = false
-        state.lastError = 'Discovery client stopped (' + code + ')'
+        if (!clientStopping.has(child)) state.lastError = 'Discovery client stopped (' + code + ')'
         pushStatus()
       }
     })
@@ -337,7 +372,12 @@ async function startClient() {
 async function stopClient() {
   if (clientStarting) await clientStarting.catch(() => {})
   const old = clientProc
-  await stopChild(old)
+  clientStopping.add(old)
+  try {
+    await stopChild(old)
+  } finally {
+    clientStopping.delete(old)
+  }
   if (clientProc === old) clientProc = null
   clientSig = null
   state.clientRunning = false
@@ -417,7 +457,7 @@ async function applyVpn() {
   activeEngineSig = null
   pushLog(`Applying VPN configuration: mode=${cfg.vpnMode}; engine restart required`)
   pushStatus()
-  const tunnelAlias = 'magnetgate-' + crypto.randomBytes(6).toString('hex')
+  const tunnelAlias = PLATFORM === 'darwin' ? '' : 'magnetgate-' + crypto.randomBytes(6).toString('hex')
   const conf = buildVpnConfig({
     root: RES,
     cfg,
@@ -426,10 +466,17 @@ async function applyVpn() {
     clashPort: CLASH_PORT,
     clashSecret: CLASH_SECRET,
     clientPath: process.execPath,
-    tunnelAlias
+    tunnelAlias,
+    platform: PLATFORM
   })
   // Validate candidate first. Strict policy survives process failure and credential rotation.
-  const started = await engine.start(conf, async () => {
+  const started = await engine.start(conf, async signal => {
+    if (macEngine) {
+      macInput = { cfg: { ...cfg, exits: [] }, bypass: bypassIps(dp),
+        clashPort: CLASH_PORT, clashSecret: CLASH_SECRET,
+        snapshot: { v: 4, exits: chosen.map(d => ({ id: d.exitId, ts: Date.now(), dp: [d] })) } }
+      await macEngine.prepare(signal)
+    }
     activeTunnelAlias = tunnelAlias
     if (cfg.vpnMode === 'full' && cfg.killSwitch) await firewall()
     else if (guardReady) await firewall(true)
@@ -465,6 +512,8 @@ function runVpn(off) {
   if (off) {
     engine.cancelStart()
     modeAbort?.abort()
+    clearTimeout(tickWakeTimer)
+    tickWakeTimer = null
   }
   const token = ++intent
   state.vpnOn = !off
@@ -488,21 +537,33 @@ function runVpn(off) {
         pushStatus()
         return
       }
-      const other = await checkOtherTunnel()
+      // Discovery doesn't alter Windows routes, so it can run during adapter inspection.
+      // Both must finish before applyVpn or an endpoint-triggered tick may start the TUN.
+      const [inspection, discovery] = await Promise.allSettled([checkOtherTunnel(), startClient()])
       if (token !== intent) return
-      state.otherTunnel = other
-      if (other) {
+      state.otherTunnel = inspection.status === 'fulfilled' ? inspection.value : null
+      const failure =
+        inspection.status === 'rejected' ? inspection.reason :
+        discovery.status === 'rejected' ? discovery.reason :
+        state.otherTunnel ? new Error('Turn off ' + state.otherTunnel + ' before connecting') : null
+      if (failure) {
+        // Block queued notifications even if owned-process cleanup itself fails.
         state.vpnOn = false
-        throw new Error('Turn off ' + other + ' before connecting')
+        try {
+          await stopClient()
+        } catch (err) {
+          throw new Error(failure.message + '; client cleanup failed: ' + err.message)
+        }
+        throw failure
       }
-      await startClient()
-      if (token !== intent) return
       state.lastError = null
       retryAt = 0
       resetTraffic() // the volume line means "this connection"
-      await applyVpn()
+      // An offer may have arrived just before inspection finished. Let its batch complete.
+      if (!tickWakeTimer) await applyVpn()
     })
     .catch(async (err) => {
+      await handleAuthorizationFailure(err)
       state.lastError = err.message
       pushLog(err.message)
       try {
@@ -515,9 +576,21 @@ function runVpn(off) {
   pushStatus()
   return result
 }
-let tickBusy = false
+let tickBusy = false,
+  tickAgain = false,
+  tickWakeTimer = null
+// Fresh authenticated offers wake the same serialized lifecycle as the recovery timer.
+function requestTick() {
+  if (quitting || !state.vpnOn || tickWakeTimer) return
+  // Nearby nodes often publish together. Batch the burst to avoid two cold TUN starts.
+  tickWakeTimer = setTimeout(() => {
+    tickWakeTimer = null
+    if (tickBusy) tickAgain = true
+    else tick()
+  }, 100)
+}
 function tick() {
-  if (tickBusy || quitting || !state.vpnOn) return
+  if (tickBusy || tickWakeTimer || quitting || !state.vpnOn) return
   tickBusy = true
   const token = intent
   const result = operation
@@ -530,6 +603,7 @@ function tick() {
         await firewall()
     })
     .catch(async (err) => {
+      await handleAuthorizationFailure(err)
       state.lastError = err.message
       retryAt = Date.now() + 5000
       pushLog(err.message)
@@ -540,8 +614,21 @@ function tick() {
     })
     .finally(() => {
       tickBusy = false
+      if (tickAgain) {
+        tickAgain = false
+        requestTick()
+      }
     })
   operation = result.catch(() => {})
+}
+async function handleAuthorizationFailure(err) {
+  if (err.code !== 'MAC_AUTH_REQUIRED') return
+  state.vpnOn = false
+  clearTimeout(tickWakeTimer)
+  tickWakeTimer = null
+  invalidateHealth()
+  try { await stopProcesses() }
+  catch (cleanup) { err.message += '; cleanup failed: ' + cleanup.message }
 }
 async function pollEgress() {
   if (probeBusy || !state.vpnOn || !engine.ready || state.modePending || !appliedConfig) return
@@ -552,7 +639,7 @@ async function pollEgress() {
     const cfg = appliedConfig
     const run = (extra) =>
       command(
-        'curl.exe',
+        paths.curl,
         [
           '--fail',
           '--silent',
@@ -586,7 +673,13 @@ async function pollEgress() {
       return
     state.egress = system
     state.proxyEgress = proxy
-    state.viaExit = !!(system && proxy && system === proxy)
+    // Concurrent probes may use different live exits during urltest failover.
+    // Accept that only when both addresses belong to the selected VPN nodes;
+    // an ordinary ISP address must still fail Full-mode verification.
+    const exitIps = new Set(selectCountry(readDp(), cfg.country).endpoints.map((d) => d.host))
+    state.viaExit = !!(
+      system && proxy && (system === proxy || (exitIps.has(system) && exitIps.has(proxy)))
+    )
     const wasHealthy = state.vpnHealthy
     state.vpnHealthy = !!proxy && (cfg.vpnMode === 'split' ? !!system : state.viaExit)
     const previousError = state.lastError
@@ -769,6 +862,8 @@ async function stopProcesses() {
 async function shutdown() {
   if (quitting) return
   quitting = true
+  clearTimeout(tickWakeTimer)
+  tickWakeTimer = null
   engine.cancelStart()
   modeAbort?.abort()
   ++intent
@@ -776,6 +871,7 @@ async function shutdown() {
   try {
     await operation
     await stopProcesses()
+    await macEngine?.close()
     await diskLog.flush()
   } catch (err) {
     quitting = false

@@ -1,11 +1,55 @@
 # Changelog
 
+### Android: session ownership and UDP country preference (2026-10-06)
+
+- Reject queued network callbacks, health results and reload errors from a replaced VPN session
+  under the same lock used for native start/stop operations.
+- Apply the selected country to authenticated UDP transports as well as the native TCP core.
+  Fall back to all countries only when no live node advertises the preferred country; reject UDP
+  when matching nodes have no UDP transport. Rebuild on changed country/offers and retry a failed reload.
+
+### Desktop: shared macOS client (2026-10-06)
+
+- Import macOS platform support, Darwin engine pins and DMG/ZIP targets from
+  Xaint00ship/tunnel-manager-client-macos into the current shared desktop client.
+  Keep current country selection, native fallback, live Full/Split switching and cold-start fixes.
+- Run the macOS GUI without elevation; use the system administrator prompt for an ephemeral
+  helper and a pinned engine/rule-set copy in a private root-owned runtime directory.
+  Cancelled authorization stops automatic retry; late helper events cannot clear a newer engine.
+- Disable the unimplemented persistent macOS kill switch and allow automatic utun allocation.
+  Add architecture/resource checks and macOS Intel/arm64 build CI. Interactive installation,
+  authorization, VPN connectivity and cold-start measurements still need a chosen Mac test host.
+
 Entries under Unreleased describe development on `main`, not published installers. Root core,
 Windows desktop and Android package versions are independent; the current values are listed in
 [README.md](README.md#clients-and-requirements). Historical version headings describe their
 development milestone and do not override the package manifests.
 
 ## Unreleased
+
+### Desktop: cold startup (2026-10-06)
+
+- Discover exits while Windows adapters are inspected, without starting TUN before inspection
+  succeeds. Failed inspection and other active tunnels stop discovery and block queued starts.
+- Notify the app after authenticated endpoint snapshots are atomically saved. Batch nearby offers
+  for 100 ms to avoid repeated cold TUN starts; retain periodic recovery and cancellation guards.
+- Add a ZIP build for one-time extraction and direct launches, avoiding the portable wrapper's
+  repeated unpacking. The portable executable remains available.
+
+### Desktop: native country selection, mode switching and multi-node health (2026-10-06)
+
+- Give every portable launch its own extraction directory so opening the app again cannot
+  remove ICU data, the native client or the engine resources of the running instance.
+- Keep Full available after starting in Split with empty direct exceptions; verify both directions
+  against the bundled sing-box without restarting the process.
+
+- Applied the shared country preference to native TCP and UDP fallback, which previously selected
+  among every discovered node even when the engine was restricted to a chosen country.
+- Restart the discovery/native client when country or discovery slots change, and suppress the
+  expected child-exit error during an intentional stop.
+- Accept different system/proxy egress addresses in Full mode only when both belong to the selected
+  discovered VPN nodes. Added lifecycle regressions for configuration refresh and health rejection
+  of unrelated or unselected egress.
 
 ### Android: redesigned interface and RU/EN (2026-09-19)
 

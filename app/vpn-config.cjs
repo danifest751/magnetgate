@@ -3,15 +3,18 @@ const fs = require('node:fs')
 
 function buildVpnConfig({
   root,
+  ruleSetRoot = root,
   cfg,
   dp,
   bypass,
   clashPort,
   clashSecret,
   clientPath,
-  tunnelAlias = 'magnetgate'
+  tunnelAlias = 'magnetgate',
+  platform = process.platform
 }) {
-  if (!/^[a-z0-9-]{1,40}$/.test(tunnelAlias)) throw new Error('Invalid owned TUN alias')
+  if (platform !== 'darwin' && !/^[a-z0-9-]{1,40}$/.test(tunnelAlias))
+    throw new Error('Invalid owned TUN alias')
   const { transportOutbound } = require(path.join(root, 'src', 'transport-config.cjs'))
   const outbounds = []
   for (const [i, d] of dp.entries()) {
@@ -56,7 +59,7 @@ function buildVpnConfig({
   rules.push({ ip_version: 6, action: 'reject' })
   const ruleSets = []
   const addSet = (tag, file, outbound, mode) => {
-    const p = path.join(root, 'tools', 'sing-box', file)
+    const p = path.join(ruleSetRoot, 'tools', 'sing-box', file)
     if (fs.existsSync(p)) {
       ruleSets.push({ type: 'local', tag, format: 'binary', path: p })
       rules.push({
@@ -89,7 +92,12 @@ function buildVpnConfig({
       })
   }
   if (!strict) rules.push({ ip_is_private: true, action: 'route', outbound: 'direct' })
-  if (live) rules.push({ clash_mode: 'Rule', action: 'route', outbound: 'direct' })
+  if (live) {
+    rules.push({ clash_mode: 'Rule', action: 'route', outbound: 'direct' })
+    // sing-box derives available modes from rules and the initial mode. Keep
+    // Global available even when starting in Split with no direct exceptions.
+    rules.push({ clash_mode: 'Global', action: 'route', outbound: 'proxy' })
+  }
   return {
     log: { level: 'warn', timestamp: true },
     experimental: {
@@ -107,7 +115,7 @@ function buildVpnConfig({
       {
         type: 'tun',
         tag: 'tun-in',
-        interface_name: tunnelAlias,
+        ...(platform === 'darwin' ? {} : { interface_name: tunnelAlias }),
         address: ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
         mtu: 1400,
         auto_route: true,

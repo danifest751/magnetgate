@@ -108,10 +108,15 @@ test('split mode retains domain exceptions and native fallback across multiple e
   const cfg = build({ vpnMode: 'split', tunnelDomains: ['example.test'] }, [native, reality])
   assert.equal(cfg.route.final, 'proxy')
   assert.equal(cfg.experimental.clash_api.default_mode, 'Rule')
-  assert.deepEqual(cfg.route.rules.at(-1), {
+  assert.deepEqual(cfg.route.rules.at(-2), {
     clash_mode: 'Rule',
     action: 'route',
     outbound: 'direct'
+  })
+  assert.deepEqual(cfg.route.rules.at(-1), {
+    clash_mode: 'Global',
+    action: 'route',
+    outbound: 'proxy'
   })
   assert.equal(cfg.outbounds.find((o) => o.tag === 'proxy').type, 'urltest')
   assert.equal(
@@ -165,7 +170,7 @@ test('owned TUN alias is configurable without reusing the legacy adapter name', 
     clashPort: 19090,
     clashSecret: 'fixture',
     clientPath: process.execPath,
-    tunnelAlias: 'magnetgate-abcdef123456'
+    platform: 'win32', tunnelAlias: 'magnetgate-abcdef123456'
   })
   assert.equal(cfg.inbounds[0].interface_name, 'magnetgate-abcdef123456')
   assert.equal(cfg.log.output, undefined)
@@ -234,7 +239,7 @@ test('endpoints carry the node country, and a country filter narrows the outboun
   )
   assert.equal(endpoints.find((e) => e.country === 'FI').node, 'fi-1')
 
-  const { select } = require('../countries.cjs')
+  const { select } = require('../../src/countries.cjs')
   const chosen = select(endpoints, 'FI').endpoints
   // assert on the servers, not on tags: a lone endpoint's tag is renamed to `proxy`
   const servers = build({ vpnMode: 'full', country: 'FI' }, chosen)

@@ -1,0 +1,43 @@
+name: macOS desktop
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'src/**', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
+  pull_request:
+    paths: ['app/**', 'src/**', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: bash scripts/get-singbox-macos.sh
+      - run: npm test
+      - run: npm ci
+        working-directory: app
+      - run: npm test
+        working-directory: app
+        env:
+          MAGNETGATE_MAC_TUN_SMOKE: '1'
+      - run: npm run dist:mac
+        working-directory: app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: magnetgate-${{ matrix.runner }}
+          path: |
+            app/dist/*.dmg
+            app/dist/*-mac-*.zip
+          if-no-files-found: error

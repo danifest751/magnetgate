@@ -69,7 +69,7 @@ async function waitForEngineReady(child, config, signal, timeoutMs = 30000) {
     }
   } catch (err) {
     if (timeout.aborted && !signal.aborted)
-      throw new Error(`Windows TUN did not become ready within ${timeoutMs / 1000} seconds`)
+      throw new Error(`VPN TUN did not become ready within ${timeoutMs / 1000} seconds`)
     throw err
   }
 }

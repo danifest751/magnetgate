@@ -156,6 +156,18 @@ async function run() {
   fs.mkdirSync(output, { recursive: true })
   let page = await fixture({ state: connected })
   await has(page, '#phase', 'Подключено')
+  await page.close()
+  page = await fixture({ state: { ...idle, platform: 'darwin', killSwitchSupported: false,
+    vpnOn: true, phase: 'authorizing' } })
+  await has(page, '#phase', 'Подтвердите запуск VPN')
+  await has(page, '#btnConnect', 'Отменить')
+  await has(page, '#platformLabel', 'magnetgate для macOS')
+  await nav(page, 'settings')
+  assert.equal(await page.locator('#killSwitch').isDisabled(), true)
+  assert.equal(await page.locator('#macGuardNote').isVisible(), true)
+  checks += 2
+  await page.close()
+  page = await fixture({ state: connected })
   await page.screenshot({ path: path.join(output, 'connection-dark.png'), fullPage: true })
   for (const scheme of ['light', 'dark']) {
     await page.emulateMedia({ colorScheme: scheme })
