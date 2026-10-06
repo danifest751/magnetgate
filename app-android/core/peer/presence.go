@@ -3,6 +3,7 @@ package peer
 import (
 	"errors"
 	"github.com/gorilla/websocket"
+	"net"
 	"time"
 )
 
@@ -108,7 +109,9 @@ func (c *Client) readControl(ws *websocket.Conn) {
 		}
 		switch m.Type {
 		case "authenticated":
-			if observer, ok := c.Network.(interface{ SetObserved(string) }); ok {
+			if observer, ok := c.Network.(interface{ ControlAuthenticated(net.Conn, string) }); ok {
+				observer.ControlAuthenticated(ws.UnderlyingConn(), m.Observed)
+			} else if observer, ok := c.Network.(interface{ SetObserved(string) }); ok {
 				observer.SetObserved(m.Observed)
 			}
 			c.mu.Lock()

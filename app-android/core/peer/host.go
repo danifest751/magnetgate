@@ -33,6 +33,8 @@ type HostStatus struct {
 	GuestConnected bool   `json:"guestConnected"`
 	Sent           uint64 `json:"sent"`
 	Received       uint64 `json:"received"`
+	SharedDaily    int64  `json:"sharedDaily"`
+	SharedMonthly  int64  `json:"sharedMonthly"`
 }
 type GuestEndpoint struct {
 	Port     int    `json:"port"`
@@ -115,6 +117,7 @@ func (h *Host) startClient() error {
 }
 func (h *Host) Status() HostStatus {
 	s := HostStatus{Status: Status{State: "OFFLINE", Countries: []Country{}}, Configured: h.Client != nil, Policy: h.Store.Policy(), Device: h.Identity.Public()}
+	s.SharedDaily, s.SharedMonthly = h.Store.Usage()
 	if h.Client != nil {
 		s.Status = h.Client.Status()
 		s.CanShare = h.Client.CanShare()

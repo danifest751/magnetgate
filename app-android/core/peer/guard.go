@@ -46,6 +46,13 @@ type Network interface {
 	Blocked(netip.Addr) bool
 }
 
+// PinnedNetwork carries an immutable physical-network generation from DNS to
+// numeric dial. Adapters must reject a token invalidated by a handover or pause.
+type PinnedNetwork interface {
+	ResolvePinned(context.Context, string) ([]netip.Addr, string, error)
+	DialPinned(context.Context, string, string) (net.Conn, error)
+}
+
 func guardedDial(ctx context.Context, network Network, host string, port int) (net.Conn, error) {
 	if !network.Ready() {
 		return nil, errors.New("physical network is not ready")
@@ -57,7 +64,15 @@ func guardedDial(ctx context.Context, network Network, host string, port int) (n
 	if port != 80 && port != 443 {
 		return nil, errors.New("target port not allowed")
 	}
-	addresses, err := network.Resolve(ctx, host)
+	var addresses []netip.Addr
+	var generation string
+	var err error
+	pinned, usesPin := network.(PinnedNetwork)
+	if usesPin {
+		addresses, generation, err = pinned.ResolvePinned(ctx, host)
+	} else {
+		addresses, err = network.Resolve(ctx, host)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -73,5 +88,12 @@ func guardedDial(ctx context.Context, network Network, host string, port int) (n
 		return nil, errors.New("network changed during DNS")
 	}
 	// Numeric dial pins the checked DNS answer, preventing a second resolution.
-	return network.Dial(ctx, net.JoinHostPort(addresses[0].Unmap().String(), strconv.Itoa(port)))
+	address := net.JoinHostPort(addresses[0].Unmap().String(), strconv.Itoa(port))
+	if usesPin {
+		if generation == "" {
+			return nil, errors.New("missing physical network generation")
+		}
+		return pinned.DialPinned(ctx, address, generation)
+	}
+	return network.Dial(ctx, address)
 }

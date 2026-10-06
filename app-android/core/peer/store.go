@@ -143,12 +143,14 @@ func OpenStore(dir string) (*Store, Identity, error) {
 }
 func (s *Store) Policy() Policy { s.mu.Lock(); defer s.mu.Unlock(); return s.policy }
 func (s *Store) Available() bool {
+	return s.available(time.Now().UTC())
+}
+func (s *Store) available(now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	now := time.Now().UTC()
 	return s.active && s.policy.Enabled &&
-		(s.usage.Day != now.Format("2006-01-02") || s.usage.Daily < s.policy.DailyBytes) &&
-		(s.usage.Month != now.Format("2006-01") || s.usage.Monthly < s.policy.MonthlyBytes)
+		(s.usage.Day < now.Format("2006-01-02") || s.usage.Daily < s.policy.DailyBytes) &&
+		(s.usage.Month < now.Format("2006-01") || s.usage.Monthly < s.policy.MonthlyBytes)
 }
 func (s *Store) Save(p Policy) error {
 	if err := p.Validate(); err != nil {
@@ -198,19 +200,21 @@ func (s *Store) End() error {
 // Charge reserves bytes BEFORE accepting/forwarding them. A crash can overcount
 // one 16 KiB copy chunk, but can never erase used quota or overshoot the cap.
 func (s *Store) Charge(n int) error {
+	return s.charge(n, time.Now().UTC())
+}
+func (s *Store) charge(n int, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.active || !s.policy.Enabled {
 		return errors.New("sharing is stopped")
 	}
-	now := time.Now().UTC()
 	day, month := now.Format("2006-01-02"), now.Format("2006-01")
 	u := s.usage
-	if u.Day != day {
+	if u.Day < day {
 		u.Day = day
 		u.Daily = 0
 	}
-	if u.Month != month {
+	if u.Month < month {
 		u.Month = month
 		u.Monthly = 0
 	}
@@ -225,4 +229,18 @@ func (s *Store) Charge(n int) error {
 	}
 	s.usage = u
 	return nil
+}
+
+func (s *Store) Usage() (int64, int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	daily, monthly := s.usage.Daily, s.usage.Monthly
+	if s.usage.Day < now.Format("2006-01-02") {
+		daily = 0
+	}
+	if s.usage.Month < now.Format("2006-01") {
+		monthly = 0
+	}
+	return daily, monthly
 }

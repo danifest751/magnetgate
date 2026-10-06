@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
 	"sync"
 	"time"
 
@@ -195,7 +194,7 @@ func (c *Client) serveFlow(session *yamux.Session, stream *yamux.Stream) {
 	}()
 	go func() {
 		err := c.copyExit(ctx, target, stream, c.limits.up)
-		if tcp, ok := target.(*net.TCPConn); ok {
+		if tcp, ok := target.(interface{ CloseWrite() error }); ok {
 			tcp.CloseWrite()
 		} else {
 			target.Close()
