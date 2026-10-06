@@ -241,7 +241,7 @@ fun ConnectScreen(
         ConnectionMetric(ui.text(R.string.traffic_received), if (vpnUp) ui.bytes(status.received) else "—", Modifier.weight(1f))
         ConnectionMetric(ui.text(R.string.traffic_sent), if (vpnUp) ui.bytes(status.sent) else "—", Modifier.weight(1f))
       }
-      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      if (!peerRoute) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(ui.text(R.string.tunnel_latency), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(check?.takeIf { vpnUp && it.ok }?.legs?.nodeMs?.toString() ?: "—", style = MaterialTheme.typography.bodySmall, fontFamily = Mono)
       }

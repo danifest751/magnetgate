@@ -227,4 +227,5 @@
   <string name="traffic_received">Downloaded</string>
   <string name="traffic_sent">Uploaded</string>
   <string name="peer_save_failed">Could not save the connection choice.</string>
+  <string name="peer_connected_country">Connected: %1$s</string>
 </resources>

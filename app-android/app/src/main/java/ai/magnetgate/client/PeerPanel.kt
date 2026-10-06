@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
@@ -25,11 +26,18 @@ fun PeerPanel(enabled: Boolean, country: String, status: JSONObject, error: Stri
   val countries = status.optJSONArray("countries") ?: JSONArray()
   val rows = (0 until countries.length()).mapNotNull { countries.optJSONObject(it) }
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+    val choices: @Composable (Modifier) -> Unit = { modifier ->
       FilterChip(selected = !enabled, onClick = { onChoice(false, country) }, enabled = editable,
-        modifier = Modifier.weight(1f), label = { Text(ui.text(R.string.peer_servers)) })
+        modifier = modifier, label = { Text(ui.text(R.string.peer_servers)) })
       FilterChip(selected = enabled, onClick = { onChoice(true, country) }, enabled = editable,
-        modifier = Modifier.weight(1f), label = { Text(ui.text(R.string.peer_users)) })
+        modifier = modifier, label = { Text(ui.text(R.string.peer_users)) })
+    }
+    if (LocalDensity.current.fontScale > 1.3f) {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+        choices(Modifier.fillMaxWidth())
+      }
+    } else Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+      choices(Modifier.weight(1f))
     }
     if (enabled) {
       Surface(onClick = { search = ""; choosing = true }, shape = RoundedCornerShape(18.dp),
@@ -41,7 +49,7 @@ fun PeerPanel(enabled: Boolean, country: String, status: JSONObject, error: Stri
             Text(ui.countryName(country), style = MaterialTheme.typography.titleMedium)
             val actual = status.optString("guestCountry")
             if (country.isBlank() && status.optBoolean("guestConnected") && actual.isNotBlank())
-              Text(ui.text(R.string.now_via, ui.countryName(actual)), style = MaterialTheme.typography.bodySmall)
+              Text(ui.text(R.string.peer_connected_country, ui.countryName(actual)), style = MaterialTheme.typography.bodySmall)
           }
           UiIcon(R.drawable.ic_next)
         }
