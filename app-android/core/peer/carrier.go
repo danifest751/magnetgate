@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 	"io"
 	"time"
@@ -27,6 +28,11 @@ func (c *Client) pairSession(ctx context.Context, t Ticket, role string) (*yamux
 	if err != nil {
 		return nil, nil, err
 	}
+	return c.pairSessionOn(ctx, t, role, ws)
+}
+
+func (c *Client) pairSessionOn(ctx context.Context, t Ticket, role string, ws *websocket.Conn) (*yamux.Session, *leaseDeadline, error) {
+	var err error
 	if err = ws.WriteJSON(message{Type: "join", Ticket: &t, Role: role}); err != nil {
 		ws.Close()
 		return nil, nil, err

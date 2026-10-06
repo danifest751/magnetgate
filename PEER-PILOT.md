@@ -27,6 +27,11 @@ Search matches country names and ISO codes. A missing selected country stays vis
 silently become another country. Reconnection may create new TCP connections; existing TCP flows
 are not migrated between exits.
 
+On Android, select **Пользователи** and tap the country card to open the searchable location list.
+Connection details are available separately. Received and sent counters measure TCP payload
+through the user connection, including proxied DNS and health checks; they exclude relay framing
+and traffic routed directly. Counters survive recovery within a VPN session and reset for a new one.
+
 An eligible desktop owner enables **Разрешать другим пользователям использовать моё соединение**.
 No per-guest invitations are needed. Hosting is off by default. The pilot allows 1–2 guests,
 an aggregate cap of 0.1–5 Mbps, and persisted daily/monthly quotas counted across both directions.
@@ -99,6 +104,8 @@ Reservations last three seconds. An owner verifies guest credentials inside TLS 
 keys, then grants a short session lease renewed on a reserved management stream. Data-flow
 saturation cannot take that management slot. Public-target checks reject private/reserved,
 owner and control-plane addresses, validate all DNS results and dial a numeric pinned address.
+Guests prepare the authenticated relay link before reserving an exit, so a cold TLS/WSS connection
+does not consume the short reservation. The overall connection timeout remains bounded.
 
 Relay admission, concurrent sessions, new dials, byte rate and daily relay allowance are bounded.
 Usage persists before forwarding; crashes can conservatively overcount a buffered chunk. A

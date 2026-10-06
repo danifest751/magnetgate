@@ -282,6 +282,9 @@ func TestRelayEndToEndAndConsentRevocation(t *testing.T) {
 	if string(b) != "secret peer payload" {
 		t.Fatal(string(b))
 	}
+	if g.traffic.sent.Load() != uint64(len(b)) || g.traffic.received.Load() != uint64(len(b)) {
+		t.Fatal("guest payload traffic was not counted in both directions")
+	}
 	// Use every data slot with real encrypted TCP streams. The management channel
 	// must still renew without replacing the existing flow or connection.
 	for i := 1; i < 32; i++ {

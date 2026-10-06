@@ -7,6 +7,7 @@ import (
 	"magnetgate/core/socks"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,11 +45,20 @@ func (c *Client) reserve(ctx context.Context, country string) (Ticket, error) {
 func (c *Client) OpenGuest(ctx context.Context, country string) (*Guest, error) {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	t, err := c.reserve(ctx, country)
+	// Prepare the cold TLS/WebSocket link before reserving the owner's short slot.
+	// A slow service handshake must not consume the three-second reservation.
+	ws, err := c.connect(ctx, "pair")
 	if err != nil {
 		return nil, err
 	}
-	session, deadline, err := c.pairSession(ctx, t, "guest")
+	stopSetup := context.AfterFunc(ctx, func() { ws.Close() })
+	defer stopSetup()
+	t, err := c.reserve(ctx, country)
+	if err != nil {
+		ws.Close()
+		return nil, err
+	}
+	session, deadline, err := c.pairSessionOn(ctx, t, "guest", ws)
 	if err != nil {
 		_ = c.send(message{Type: "release", ID: t.ID})
 		return nil, err
@@ -62,7 +72,7 @@ func (c *Client) OpenGuest(ctx context.Context, country string) (*Guest, error) 
 	c.sessions[session] = false
 	c.wg.Add(1)
 	c.mu.Unlock()
-	g := &Guest{client: c, session: session, ticket: t, slots: make(chan struct{}, 32), deadline: deadline}
+	g := &Guest{client: c, session: session, ticket: t, slots: make(chan struct{}, 32), deadline: deadline, traffic: new(trafficCounters)}
 	go func() { defer c.wg.Done(); g.renew() }()
 	return g, nil
 }
@@ -74,7 +84,10 @@ type Guest struct {
 	slots    chan struct{}
 	once     sync.Once
 	deadline *leaseDeadline
+	traffic  *trafficCounters
 }
+
+type trafficCounters struct{ sent, received atomic.Uint64 }
 
 func (g *Guest) Country() string { return g.ticket.Country }
 func (g *Guest) Close() error {
@@ -125,13 +138,25 @@ func (g *Guest) Dial(ctx context.Context, host string, port int) (socks.Conn, er
 		return nil, err
 	}
 	stream.SetDeadline(time.Time{})
-	return &guestConn{Stream: stream, release: func() { <-g.slots }}, nil
+	return &guestConn{Stream: stream, traffic: g.traffic, release: func() { <-g.slots }}, nil
 }
 
 type guestConn struct {
 	*yamux.Stream
 	once    sync.Once
 	release func()
+	traffic *trafficCounters
+}
+
+func (c *guestConn) Read(b []byte) (int, error) {
+	n, err := c.Stream.Read(b)
+	c.traffic.received.Add(uint64(n))
+	return n, err
+}
+func (c *guestConn) Write(b []byte) (int, error) {
+	n, err := c.Stream.Write(b)
+	c.traffic.sent.Add(uint64(n))
+	return n, err
 }
 
 func (c *guestConn) Close() error      { err := c.Stream.Close(); c.once.Do(c.release); return err }

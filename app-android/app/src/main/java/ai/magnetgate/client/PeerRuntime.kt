@@ -37,6 +37,7 @@ object PeerRuntime {
     val guest = root.optBoolean("guestConnected")
     val cc = root.optString("guestCountry")
     return CoreStatus(running = guest, country = cc, countries = rows,
+      sent = root.optLong("sent"), received = root.optLong("received"),
       nodes = if (guest) listOf(NodeRow(0, "Peer", "Peer", cc, listOf(Plane("peer", "")), emptyList())) else emptyList(),
       error = root.optString("error"))
   }

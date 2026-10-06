@@ -198,6 +198,8 @@ func (c *Client) connect(ctx context.Context, scope string) (*websocket.Conn, er
 	if err != nil {
 		return nil, err
 	}
+	stopSetup := context.AfterFunc(ctx, func() { ws.Close() })
+	defer stopSetup()
 	ws.SetReadLimit(64 * 1024)
 	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
 	ws.SetWriteDeadline(time.Now().Add(5 * time.Second))

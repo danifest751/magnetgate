@@ -237,22 +237,13 @@ fun ConnectScreen(
       }
       if (!peerRoute && vpnUp && country.isNotBlank() && status.nodes.none { it.country.equals(country, true) })
         InfoNotice(ui.text(R.string.country_unavailable, ui.countryName(country)))
-      Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-          Text(ui.text(R.string.tunnel_latency), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-          Text(ui.text(R.string.session_received), Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-          // The near half only: the handshake to the node. The whole way out and back is still measured
-          // and still written down - it is on the diagnostics screen, where a second number is worth the
-          // room it costs. Here one number that a person can read at a glance is worth more than two
-          // they have to interpret.
-          Text(
-            check?.takeIf { vpnUp && it.ok }?.legs?.nodeMs?.toString() ?: "—",
-            Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontFamily = Mono, maxLines = 1,
-          )
-          Text(if (vpnUp) ui.bytes(status.received) else "—", Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall, fontFamily = Mono)
-        }
+      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        ConnectionMetric(ui.text(R.string.traffic_received), if (vpnUp) ui.bytes(status.received) else "—", Modifier.weight(1f))
+        ConnectionMetric(ui.text(R.string.traffic_sent), if (vpnUp) ui.bytes(status.sent) else "—", Modifier.weight(1f))
+      }
+      Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(ui.text(R.string.tunnel_latency), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(check?.takeIf { vpnUp && it.ok }?.legs?.nodeMs?.toString() ?: "—", style = MaterialTheme.typography.bodySmall, fontFamily = Mono)
       }
       HorizontalDivider()
       Column {
@@ -272,6 +263,14 @@ fun ConnectScreen(
         onClick = { if (vpnUp) onDisconnect() else if (!keySet) onOpen(Screen.ACCESS) else onConnect() },
       )
     }
+  }
+}
+
+@Composable
+private fun ConnectionMetric(label: String, value: String, modifier: Modifier) {
+  Column(modifier, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Text(value, style = MaterialTheme.typography.titleLarge.copy(fontSize = 20.sp), fontFamily = Mono)
   }
 }
 

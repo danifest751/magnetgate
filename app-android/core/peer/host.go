@@ -31,6 +31,8 @@ type HostStatus struct {
 	Device         string `json:"device"`
 	GuestCountry   string `json:"guestCountry,omitempty"`
 	GuestConnected bool   `json:"guestConnected"`
+	Sent           uint64 `json:"sent"`
+	Received       uint64 `json:"received"`
 }
 type GuestEndpoint struct {
 	Port     int    `json:"port"`
@@ -56,6 +58,7 @@ type Host struct {
 	opCancel     context.CancelFunc
 	opGeneration uint64
 	guestToken   string
+	traffic      atomic.Pointer[trafficCounters]
 }
 type guestInfo struct {
 	country string
@@ -120,6 +123,9 @@ func (h *Host) Status() HostStatus {
 		s.GuestCountry = info.country
 		s.GuestConnected = !info.session.session.IsClosed()
 	}
+	if traffic := h.traffic.Load(); traffic != nil {
+		s.Sent, s.Received = traffic.sent.Load(), traffic.received.Load()
+	}
 	return s
 }
 func (h *Host) SetPolicy(p Policy) error {
@@ -145,6 +151,7 @@ func (h *Host) cancelConnect() {
 	defer h.opMu.Unlock()
 	h.opGeneration++
 	h.guestToken = ""
+	h.traffic.Store(new(trafficCounters))
 	if h.opCancel != nil {
 		h.opCancel()
 		h.opCancel = nil
@@ -156,6 +163,9 @@ func (h *Host) ActivateGuest(token string) {
 	defer h.opMu.Unlock()
 	if h.opCancel != nil {
 		h.opCancel()
+	}
+	if h.guestToken != token {
+		h.traffic.Store(new(trafficCounters))
 	}
 	h.guestToken = token
 }
@@ -172,6 +182,11 @@ func (h *Host) Connect(country string, port int, token ...string) (GuestEndpoint
 	h.opGeneration++
 	generation := h.opGeneration
 	h.opCancel = cancel
+	traffic := h.traffic.Load()
+	if traffic == nil {
+		traffic = new(trafficCounters)
+		h.traffic.Store(traffic)
+	}
 	h.opMu.Unlock()
 	defer func() {
 		cancel()
@@ -189,7 +204,7 @@ func (h *Host) Connect(country string, port int, token ...string) (GuestEndpoint
 	if h.Client == nil {
 		return GuestEndpoint{}, errors.New("peer service is not configured")
 	}
-	if h.guest != nil && !h.guest.session.IsClosed() && (country == "" || h.endpoint.Country == country) && (port == 0 || h.endpoint.Port == port) {
+	if h.guest != nil && h.guest.traffic == traffic && !h.guest.session.IsClosed() && (country == "" || h.endpoint.Country == country) && (port == 0 || h.endpoint.Port == port) {
 		return h.endpoint, nil
 	}
 	h.disconnect()
@@ -201,6 +216,7 @@ func (h *Host) Connect(country string, port int, token ...string) (GuestEndpoint
 		g.Close()
 		return GuestEndpoint{}, err
 	}
+	g.traffic = traffic
 	username, password := randomID(), randomID()
 	server, err := socks.ListenAuthenticated(port, username, password, g.Dial)
 	if err != nil {

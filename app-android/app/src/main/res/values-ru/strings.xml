@@ -209,13 +209,20 @@
   <string name="language_en">English</string>
   <string name="peer_source">Источник подключения</string>
   <string name="peer_servers">Серверы</string>
-  <string name="peer_users">Соединения пользователей</string>
+  <string name="peer_users">Пользователи</string>
   <string name="peer_tcp_hint">Сайты через соединение пользователя (TCP). Выбранная страна не меняется автоматически.</string>
   <string name="peer_search">Найти страну или код</string>
   <string name="peer_unconfigured">Соединения пользователей пока не настроены.</string>
   <string name="peer_country_missing">Эта страна недоступна. Ждём соединение именно в ней.</string>
   <string name="peer_directory_wait">Подключаемся к каталогу…</string>
   <string name="peer_empty">Доступных соединений пока нет.</string>
-  <string name="peer_android_guest">В этой версии телефон использует чужие соединения. Раздача с Android ожидает проверки физической сети и фонового сервиса.</string>
+  <string name="peer_android_guest">Телефон может подключаться к другим пользователям. Раздача своего интернета с Android пока недоступна.</string>
+  <string name="peer_location">Страна выхода</string>
+  <string name="peer_details">Об этом подключении</string>
+  <string name="peer_done">Готово</string>
+  <string name="peer_change_after_disconnect">Отключите VPN, чтобы выбрать другую страну.</string>
+  <string name="peer_available">Доступно: %1$d</string>
+  <string name="traffic_received">Получено</string>
+  <string name="traffic_sent">Передано</string>
   <string name="peer_save_failed">Не удалось сохранить выбор подключения.</string>
 </resources>

@@ -1,5 +1,14 @@
 # Changelog
 
+### User connections: Android counters and connection screen (2026-10-06)
+
+- Count sent and received peer TCP payload, retain counters during recovery, and reset them for
+  a new VPN session. Android now displays both directions.
+- Simplify Android source selection, move countries into a searchable dialog, and put extended
+  connection explanations behind a separate action.
+- Prepare the authenticated relay link before requesting the three-second exit reservation,
+  avoiding expiry during cold TLS/WSS setup without extending admission deadlines.
+
 ### User connections: authenticated TCP pilot (2026-10-06)
 
 - Add a separate opt-in peer service, device identities, live country catalogue, bounded
