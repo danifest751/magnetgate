@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import ai.magnetgate.core.mgbox.Mgbox
 import org.json.JSONObject
@@ -45,7 +47,9 @@ class PeerSharingService : Service() {
         if (wake == null) wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MagnetGate:sharing").apply { setReferenceCounted(false) }
         wake?.acquire(60_000)
       } else releaseWake()
-      manager.notify(ID, notification(if (active) R.string.peer_share_ready else R.string.peer_share_paused))
+      Handler(Looper.getMainLooper()).post {
+        if (alive) manager.notify(ID, notification(if (active) R.string.peer_share_ready else R.string.peer_share_paused))
+      }
     }, 15, 15, TimeUnit.SECONDS)
   }
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
