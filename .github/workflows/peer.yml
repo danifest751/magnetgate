@@ -2,9 +2,9 @@ name: Peer core
 on:
   push:
     branches: [main]
-    paths: ['app-android/core/**', '.github/workflows/peer.yml']
+    paths: ['app-android/core/**', 'app-android/engine/**', '.github/workflows/peer.yml']
   pull_request:
-    paths: ['app-android/core/**', '.github/workflows/peer.yml']
+    paths: ['app-android/core/**', 'app-android/engine/**', '.github/workflows/peer.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -24,7 +24,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: app-android/core/go.mod
-          cache-dependency-path: app-android/core/go.sum
+          cache-dependency-path: |
+            app-android/core/go.sum
+            app-android/engine/go.sum
       - run: go test -race ./... -timeout 90s
       - run: go vet ./...
       - run: go build ./cmd/peer-node ./cmd/peer-service
+      - name: Android physical network adapter tests
+        working-directory: app-android/engine
+        run: go test -race -ldflags=-checklinkname=0 ./mgbox -timeout 90s
+      - name: Android adapter vet
+        working-directory: app-android/engine
+        run: go vet ./mgbox
