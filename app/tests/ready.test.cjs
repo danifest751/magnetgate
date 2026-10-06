@@ -112,8 +112,11 @@ test('taskkill error still waits for the owned process to exit', async () => {
 test('overall deadline interrupts an HTTP probe with unfinished headers', async (t) => {
   const cfg = await endpoints(t)
   const connections = new Set()
+  const socketErrors = []
   const trickle = net.createServer((sock) => {
     connections.add(sock)
+    // The readiness deadline aborts the client while this peer is still writing.
+    sock.on('error', (err) => socketErrors.push(err.code))
     sock.write('HTTP/1.1 200 OK\r\nX-Pending: ')
     const timer = setInterval(() => sock.write('x'), 5)
     sock.once('close', () => {
@@ -122,9 +125,13 @@ test('overall deadline interrupts an HTTP probe with unfinished headers', async 
     })
   })
   const port = await listen(trickle)
-  t.after(() => {
-    for (const sock of connections) sock.destroy()
-    trickle.close()
+  t.after(async () => {
+    const closed = [...connections].map((sock) => new Promise((resolve) => {
+      sock.once('close', resolve)
+      sock.destroy()
+    }))
+    await Promise.all([new Promise((resolve) => trickle.close(resolve)), ...closed])
+    assert.deepEqual(socketErrors.filter((code) => code !== 'ECONNRESET'), [])
   })
   cfg.experimental.clash_api.external_controller = `127.0.0.1:${port}`
   const started = Date.now()
