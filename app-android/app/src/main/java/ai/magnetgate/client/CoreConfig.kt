@@ -9,7 +9,7 @@ import org.json.JSONObject
  * it, and the contract is checked by the core (it refuses a document it cannot read).
  */
 object CoreConfig {
-  fun json(psk: String, slots: List<Int>, bootstrap: List<String>, relays: List<String>): String {
+  fun json(psk: String, slots: List<Int>, bootstrap: List<String>, relays: List<String>, hintFile: String = ""): String {
     val config = JSONObject()
     config.put("psk", psk)
     // slots are numbers: the core decodes them as []int
@@ -19,6 +19,7 @@ object CoreConfig {
     // Transports in order of preference: the two the engine speaks for us come first, and the native mux
     // is the fallback - the same order the desktop client uses, and the same measurement behind it.
     config.put("preference", array(PREFERENCE))
+    if (hintFile.isNotBlank()) config.put("hintFile", hintFile)
     return config.toString()
   }
 

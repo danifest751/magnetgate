@@ -2,11 +2,7 @@ package ai.magnetgate.client
 
 import android.util.Log
 import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.Socket
-import java.net.URL
-import javax.net.ssl.SSLSocket
-import javax.net.ssl.SSLSocketFactory
 
 /**
  * What the app knows about its own health, written by the service and read by the screens.
@@ -30,7 +26,7 @@ object Health {
    * How long the node gets to answer a handshake before the number is simply left out. Short on
    * purpose: this is a decoration on a screen, and it must never hold up the measurement that matters.
    */
-  private const val NODE_PING_TIMEOUT_MS = 4_000
+  private const val NODE_PING_TIMEOUT_MS = 2_000
 
   /**
    * Where the time went, for a measurement that finished.
@@ -100,8 +96,6 @@ object Health {
   var lastCheck: Check? = null
     private set
 
-  private var generation = 0L
-
   /**
    * The last thing the engine refused to do. Engine failures used to go to logcat and nowhere else, so
    * a phone that could not build or reload its tunnel said nothing at all to the person holding it.
@@ -121,39 +115,36 @@ object Health {
   /** Forgets everything: a new tunnel must not be judged by the previous one's measurements. */
   @Synchronized
   fun reset() {
-    generation++
     lastCheck = null
     engineError = ""
   }
 
   /**
-   * Runs one check through the core's SOCKS listener and records it.
+   * Measures one check through SOCKS. The owning service publishes it under its session lock.
    *
    * It is deliberately the whole round trip rather than a connect: an exit that accepts a stream and
    * then carries nothing is the failure this project keeps meeting, and a check that stops at "the
    * socket opened" would call it healthy (see the relay channel in core/nostr).
    */
-  fun check(socksPort: Int, url: String, nodes: Map<String, Int> = emptyMap()): Check {
-    val session = synchronized(this) { generation }
-    val started = System.currentTimeMillis()
-    val result = runCatching { fetch(socksPort, url) }
-    val took = System.currentTimeMillis() - started
+  fun measure(socksPort: Int, url: String, nodes: Map<String, Int> = emptyMap()): Check {
+    val started = System.nanoTime()
+    val result = runCatching { TunnelProbe().fetch(socksPort, url) }
+    val took = TunnelProbe.elapsed(started)
     val check = result.fold(
       onSuccess = { measured ->
         // Which node carried it is not guessed: the body of the check is the address the destination
         // saw, and for these exits that is the same machine the plane dials. A node that is not in the
         // map - hy2 only, or an exit whose egress differs from its endpoint - gets no number rather
         // than a number belonging to somebody else.
-        val egress = measured.first.trim()
-        val legs = measured.second.copy(nodeMs = nodes[egress]?.let { port -> handshakeMs(egress, port) })
-        Check(System.currentTimeMillis(), ok = true, tookMs = took, detail = measured.first, legs = legs)
+        val egress = measured.body.trim()
+        val legs = Legs(measured.connectMs, measured.tlsMs, measured.answerMs, measured.pingMs,
+          nodes[egress]?.let { port -> handshakeMs(egress, port) })
+        Check(System.currentTimeMillis(), ok = true, tookMs = measured.tookMs, detail = measured.body, legs = legs)
       },
       onFailure = {
         Check(System.currentTimeMillis(), ok = false, tookMs = took, detail = it.message ?: it.javaClass.simpleName)
       },
     )
-    // Завершившийся запрос старого туннеля не должен окрашивать новый в зелёный.
-    synchronized(this) { if (generation == session) lastCheck = check }
     // The legs go to the log and not into summary(): the screen takes the last word of that line as the
     // measurement, and a reading with three more numbers after it would quietly become "278ms".
     if (!check.ok || check.slow) {
@@ -161,6 +152,9 @@ object Health {
     }
     return check
   }
+
+  @Synchronized
+  fun record(check: Check) { lastCheck = check }
 
   /**
    * How long the node takes to answer a TCP handshake - the ping a person means by "ping".
@@ -171,110 +165,10 @@ object Health {
    * is simply a missing number.
    */
   private fun handshakeMs(host: String, port: Int): Long? = runCatching {
-    val started = System.currentTimeMillis()
+    val started = System.nanoTime()
     Socket().use { it.connect(InetSocketAddress(host, port), NODE_PING_TIMEOUT_MS) }
-    System.currentTimeMillis() - started
+    TunnelProbe.elapsed(started)
   }.getOrNull()
-
-  /**
-   * One HTTPS GET through a SOCKS listener, with the destination left as a **name**.
-   *
-   * The name is the whole point. `InetSocketAddress.createUnresolved` is what makes Java's SOCKS client
-   * send the domain instead of resolving it here first, and only then does whatever is behind the
-   * listener have to resolve it. Through the engine's listener that is the engine's own resolver - the
-   * part that broke on 17.09 - and a check that let Java resolve locally would test nothing of it.
-   */
-  private fun fetch(socksPort: Int, url: String): Pair<String, Legs> {
-    val parsed = URL(url)
-    val host = parsed.host
-    val port = if (parsed.port != -1) parsed.port else if (parsed.protocol == "https") 443 else 80
-    val path = parsed.path.ifEmpty { "/" }
-
-    val socket = Socket(Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort)))
-    socket.use {
-      it.soTimeout = 15_000
-      // Three legs, timed apart, because the sum says nothing about where a slow phone is slow: this
-      // one covers the SOCKS handshake, the engine resolving the name and everything up to the exit
-      // having a stream to the destination.
-      val before = System.currentTimeMillis()
-      it.connect(InetSocketAddress.createUnresolved(host, port), 15_000)
-      val connected = System.currentTimeMillis()
-      val stream: Socket = if (parsed.protocol == "https") {
-        (SSLSocketFactory.getDefault() as SSLSocketFactory).createSocket(it, host, port, false).also { tls ->
-          (tls as SSLSocket).startHandshake()
-        }
-      } else {
-        it
-      }
-      // TLS is end to end with the destination, so this leg is round trips over the whole chain and
-      // never anything our own machinery can shorten.
-      val handshaken = System.currentTimeMillis()
-      val writer = stream.getOutputStream().bufferedWriter()
-      val reader = stream.getInputStream().bufferedReader()
-      // The connection is kept open on purpose: the second request over it is the measurement a person
-      // actually recognises (see [Legs.pingMs]), and it only exists if nobody hung up first.
-      val body = request(writer, reader, host, path, close = false)
-      if (body.isEmpty()) throw IllegalStateException("the exit answered with no body")
-      val done = System.currentTimeMillis()
-
-      // One round trip over an open connection: no SOCKS, no resolver, no handshakes - phone to exit to
-      // destination and back. Never allowed to fail the check: a server within its rights to close after
-      // the first answer would otherwise turn a healthy exit into a red screen.
-      val ping = runCatching {
-        val asked = System.currentTimeMillis()
-        request(writer, reader, host, path, close = true)
-        System.currentTimeMillis() - asked
-      }.getOrNull()
-
-      return body.take(64) to Legs(
-        connectMs = connected - before,
-        tlsMs = handshaken - connected,
-        answerMs = done - handshaken,
-        pingMs = ping,
-      )
-    }
-  }
-
-  /**
-   * One HTTP request and its answer, read by `Content-Length` rather than by the connection closing.
-   *
-   * Reading to end-of-stream is simpler and is what this did before, but it can only ever be done once:
-   * it needs the other side to hang up. Framing the answer properly is what leaves the connection usable
-   * for the round trip that follows.
-   */
-  private fun request(
-    writer: java.io.Writer,
-    reader: java.io.BufferedReader,
-    host: String,
-    path: String,
-    close: Boolean,
-  ): String {
-    writer.write(
-      "GET $path HTTP/1.1\r\nHost: $host\r\n" +
-        "Connection: ${if (close) "close" else "keep-alive"}\r\nUser-Agent: magnetgate/1.0\r\n\r\n",
-    )
-    writer.flush()
-    val status = reader.readLine() ?: throw IllegalStateException("the exit answered with nothing")
-    if (!status.contains(" 200")) throw IllegalStateException(status.ifEmpty { "no status line" })
-    var length = -1
-    while (true) {
-      val line = reader.readLine() ?: throw IllegalStateException("the answer ended inside its headers")
-      if (line.isEmpty()) break
-      val name = line.substringBefore(':').trim().lowercase()
-      if (name == "content-length") length = line.substringAfter(':').trim().toIntOrNull() ?: -1
-    }
-    // No length means the answer is framed by the connection closing (or chunked), and then this is the
-    // last request this connection can carry - read it to the end and let the caller find out.
-    if (length < 0) return reader.readText().trim()
-    val body = CharArray(length)
-    var read = 0
-    while (read < length) {
-      val got = reader.read(body, read, length - read)
-      if (got < 0) break
-      read += got
-    }
-    return String(body, 0, read).trim()
-  }
 
   private const val TAG = "magnetgate"
 }

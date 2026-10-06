@@ -45,6 +45,7 @@ class MgVpnService : VpnService() {
      * this answers was noticed by a person opening web pages, not by anyone watching a screen.
      */
     private const val CHECK_INTERVAL_MS = 60_000L
+    private const val CHECK_RETRY_INTERVAL_MS = 5_000L
     private const val CHECK_URL = "https://api.ipify.org"
 
     /** How large the engine's log may grow before it is emptied; one generation of it is also kept. */
@@ -57,6 +58,7 @@ class MgVpnService : VpnService() {
     private const val HEALTH_HEADER = "at,ok,tookMs,connectMs,tlsMs,answerMs,pingMs,nodeMs,detail"
     private const val MAX_HEALTH_FILE = 2L * 1024 * 1024
     private const val NOTIFICATION_ID = 1
+    private val nativeLock = Any()
 
     @Volatile
     private var current: MgVpnService? = null
@@ -109,7 +111,7 @@ class MgVpnService : VpnService() {
   @Volatile private var activeRouting: RoutingDraft? = null
   @Volatile private var checkRequested = false
   @Volatile private var enginePlanes: List<EnginePlane> = emptyList()
-  private var watching = false
+  private val session = TunnelSession(nativeLock)
 
   /** The manifest already acted on to a settled end, so it is not worked through again every tick. */
   private var settledRuleSets: String? = null
@@ -175,6 +177,7 @@ class MgVpnService : VpnService() {
   )
 
   private var policy: Policy = Policy()
+  private var engineNodeSignature = ""
 
   /**
    * The tun device this service owns. It stays open until the tunnel goes down: libbox duplicates the fd
@@ -190,10 +193,8 @@ class MgVpnService : VpnService() {
   }
 
   override fun onDestroy() {
-    current = null
-    // the interface must not outlive the service that owns it
-    runCatching { tun?.close() }.onFailure { Log.w(TAG, "closing the tun: ${it.message}") }
-    tun = null
+    stopTunnel()
+    if (current === this) current = null
     super.onDestroy()
   }
 
@@ -360,67 +361,80 @@ class MgVpnService : VpnService() {
    * It runs off the main thread: discovery takes seconds, and the service must not block the UI.
    */
   private fun startTunnel(bootstrap: String, relays: String, coreless: Boolean, modeExtra: String) {
-    if (running || starting) return
+    val ticket = session.begin() ?: return
     val revision = Settings.revision(this)
     starting = true
     // a new tunnel must not be judged by the previous one's measurements
     Health.reset()
     startForeground(NOTIFICATION_ID, notification("looking for a node"))
-    Thread {
+    val worker = Thread {
       try {
-        val port = if (coreless) 0 else startCoreAndWaitForNode(bootstrap, relays)
-        val nodes = if (coreless) emptyList() else discoveredNodes()
-        excludedPackages = Settings.excluded(this)
-        appsMode = Settings.apps(this)
-        policy = Policy(
-          // an acceptance run may name the mode; otherwise the stored setting decides
-          mode = if (modeExtra.isBlank()) Settings.mode(this) else Settings.Mode.of(modeExtra),
-          directDomains = Settings.directDomains(this),
-          tunnelDomains = Settings.tunnelDomains(this),
-          ruleSets = RuleSets.ensure(this),
-        )
-        engineLog = prepareEngineLog()
-        val built = SingBoxConfig.build(
-          port, coreless, nodes, excludedPackages,
-          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
-          brokenSlot, appsMode,
-        )
+        val port = if (coreless) 0 else startCoreAndWaitForNode(ticket, bootstrap, relays)
+        // urltest and QUIC outbounds may dial during StartEngine itself. Seed the
+        // binding's initial interface before it starts those probes, rather than
+        // waiting until the tunnel and its first outbound sockets already exist.
+        val networkReady = session.use(ticket) { watchNetwork(ticket) }
+        // The callback runs on Android's main thread; wait outside the native lock.
+        networkReady?.await(1, java.util.concurrent.TimeUnit.SECONDS)
+        session.use(ticket) {
+          val nodes = if (coreless) emptyList() else discoveredNodes()
+          val country = Settings.country(this)
+          excludedPackages = Settings.excluded(this)
+          appsMode = Settings.apps(this)
+          policy = Policy(
+            // an acceptance run may name the mode; otherwise the stored setting decides
+            mode = if (modeExtra.isBlank()) Settings.mode(this) else Settings.Mode.of(modeExtra),
+            directDomains = Settings.directDomains(this),
+            tunnelDomains = Settings.tunnelDomains(this),
+            ruleSets = RuleSets.ensure(this),
+          )
+          engineLog = prepareEngineLog()
+          val built = SingBoxConfig.build(
+            port, coreless, nodes, excludedPackages,
+            policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
+            brokenSlot, appsMode, country,
+          )
 
-        Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
-        Mgbox.startEngine(built.json, MgTunPlatform(this))
-        enginePlanes = built.planes
-        for (plane in built.planes) {
-          Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+          Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
+          Mgbox.startEngine(built.json, MgTunPlatform(this))
+          engineNodeSignature = nodeSignature(nodes, port, country)
+          enginePlanes = built.planes
+          for (plane in built.planes) {
+            Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+          }
+          // The country the user prefers is told to the core once it is up: it changes which node the next
+          // stream prefers, not how anything is built, so it never needs a reconnect.
+          runCatching { Mgbox.setCountry(Settings.country(this)) }
+            .onFailure { Log.w(TAG, "the country preference did not reach the core: ${it.message}") }
+          activeRouting = RoutingDraft(policy.mode, appsMode, excludedPackages.toSet(), policy.directDomains, policy.tunnelDomains)
+          appliedRevision = revision
+          running = true
+          corePort = port
+          checkPort = built.checkPort
+          Log.i(
+            TAG,
+            "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size}, " +
+              "excluded apps ${excludedPackages.size}, mode ${policy.mode.stored}, " +
+              "rule-sets ${policy.ruleSets.size}, direct ${policy.directDomains.size}, tunnel ${policy.tunnelDomains.size})",
+          )
+          notify(notification("connected"))
+          starting = false
         }
-        // The country the user prefers is told to the core once it is up: it changes which node the next
-        // stream prefers, not how anything is built, so it never needs a reconnect.
-        runCatching { Mgbox.setCountry(Settings.country(this)) }
-          .onFailure { Log.w(TAG, "the country preference did not reach the core: ${it.message}") }
-        activeRouting = RoutingDraft(policy.mode, appsMode, excludedPackages.toSet(), policy.directDomains, policy.tunnelDomains)
-        appliedRevision = revision
-        running = true
-        corePort = port
-        watchNetwork()
-        checkPort = built.checkPort
-        watching = true
-        Log.i(
-          TAG,
-          "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size}, " +
-            "excluded apps ${excludedPackages.size}, mode ${policy.mode.stored}, " +
-            "rule-sets ${policy.ruleSets.size}, direct ${policy.directDomains.size}, tunnel ${policy.tunnelDomains.size})",
-        )
-        notify(notification("connected"))
-        refreshRuleSets()
-        watchNodes()
+        watchNodes(ticket)
+      } catch (_: InterruptedException) {
+        // Disconnect is a decision, not an engine failure. An old worker owns no new session.
+        session.stop(ticket) { closeTunnel(); stopSelf() }
       } catch (error: Throwable) {
-        Log.e(TAG, "the tunnel did not start: ${error.message}", error)
-        Health.recordEngineError("the tunnel did not start: ${error.message}")
-        stopTunnel()
-        stopSelf()
-      } finally {
-        starting = false
+        session.stop(ticket) {
+          Log.e(TAG, "the tunnel did not start: ${error.message}", error)
+          closeTunnel()
+          Health.recordEngineError("the tunnel did not start: ${error.message}")
+          stopSelf()
+        }
       }
-    }.start()
+    }
+    session.attach(ticket, worker)
+    worker.start()
   }
 
   /**
@@ -433,7 +447,7 @@ class MgVpnService : VpnService() {
    * not match what the operator published is discarded rather than installed - the checksum is the whole
    * control, since the file itself comes from wherever the manifest points.
    */
-  private fun refreshRuleSets() {
+  private fun refreshRuleSets(ticket: Long) {
     // A manifest travels in the Nostr offer only, which may arrive well after the tunnel is up, or not
     // at all on a network where no relay answers. So this runs on every node-watch tick rather than
     // once at start-up, and remembers a manifest only once acting on it has settled: a source that
@@ -443,27 +457,36 @@ class MgVpnService : VpnService() {
     if (seen == settledRuleSets) return
     try {
       val result = RuleSets.update(this, manifest, corePort)
-      if (result.settled) settledRuleSets = seen
-      if (!result.changed) return
-      // The engine reads a rule-set from a path when it starts, so a replaced file means nothing until
-      // it is told to read again.
-      policy = policy.copy(ruleSets = RuleSets.ensure(this))
-      val built = SingBoxConfig.build(
-        corePort, false, discoveredNodes(), excludedPackages,
-        policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
-        brokenSlot, appsMode,
-      )
-      Mgbox.forgetPlaneSocksPorts()
-      Mgbox.reloadEngine(built.json)
-      checkPort = built.checkPort
-      enginePlanes = built.planes
-      for (plane in built.planes) {
-        Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+      session.use(ticket) {
+        if (result.settled) settledRuleSets = seen
+        if (!result.changed) return@use
+        // The engine reads a rule-set from a path when it starts, so a replaced file means nothing until
+        // it is told to read again.
+        policy = policy.copy(ruleSets = RuleSets.ensure(this))
+        val nodes = discoveredNodes()
+        val country = Settings.country(this)
+        val built = SingBoxConfig.build(
+          corePort, false, nodes, excludedPackages,
+          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
+          brokenSlot, appsMode, country,
+        )
+        Mgbox.forgetPlaneSocksPorts()
+        Mgbox.reloadEngine(built.json)
+        engineNodeSignature = nodeSignature(nodes, corePort, country)
+        checkPort = built.checkPort
+        enginePlanes = built.planes
+        for (plane in built.planes) {
+          Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+        }
+        Log.i(TAG, "rule-sets: engine reloaded on generation ${RuleSets.generation(this)}")
       }
-      Log.i(TAG, "rule-sets: engine reloaded on generation ${RuleSets.generation(this)}")
+    } catch (cancelled: InterruptedException) {
+      throw cancelled
     } catch (error: Throwable) {
-      Log.w(TAG, "rule-sets: not refreshed: ${error.message}")
-      Health.recordEngineError("rule-sets: not refreshed: ${error.message}")
+      session.commit(ticket) {
+        Log.w(TAG, "rule-sets: not refreshed: ${error.message}")
+        Health.recordEngineError("rule-sets: not refreshed: ${error.message}")
+      }
     }
   }
 
@@ -494,22 +517,26 @@ class MgVpnService : VpnService() {
    * from what the core reports and handed to the running engine. The signature is the node and plane set
    * alone: the loopback ports change with every build, and reloading for those would be a loop.
    */
-  private fun watchNodes() {
-    var signature = nodeSignature()
+  private fun watchNodes(ticket: Long) {
     var checkedAt = 0L
-    while (watching) {
-      Thread.sleep(NODE_WATCH_INTERVAL_MS)
-      if (!watching) return
-      // the manifest can arrive, or change, without the node set changing at all
-      refreshRuleSets()
+    var first = true
+    while (session.current(ticket)) {
+      if (!first) Thread.sleep(NODE_WATCH_INTERVAL_MS)
+      first = false
+      if (!session.current(ticket)) return
       // through the engine when there is one: that path resolves the name with the engine's own resolver,
       // which is the half a check through the core's SOCKS never touches
       val through = if (checkPort != 0) checkPort else corePort
-      if ((checkRequested || System.currentTimeMillis() - checkedAt >= CHECK_INTERVAL_MS) && through != 0) {
+      val interval = if (Health.lastCheck?.ok == false) CHECK_RETRY_INTERVAL_MS else CHECK_INTERVAL_MS
+      if ((checkRequested || System.nanoTime() - checkedAt >= interval * 1_000_000) && through != 0) {
         checkRequested = false
-        checkedAt = System.currentTimeMillis()
-        recordCheck(Health.check(through, CHECK_URL, realityEndpoints()))
-        trimEngineLog()
+        val measured = Health.measure(through, CHECK_URL, realityEndpoints())
+        checkedAt = System.nanoTime()
+        if (!session.commit(ticket) {
+          Health.record(measured)
+          recordCheck(measured)
+          trimEngineLog()
+        }) return
         // Reports wait for a tunnel and go through it; see Reports.send. This is the moment there is
         // one, and the send does nothing at all when there is nothing waiting.
         runCatching {
@@ -517,32 +544,42 @@ class MgVpnService : VpnService() {
           if (sink.isNotEmpty()) Reports.send(this, sink, corePort)
         }.onFailure { Log.w(TAG, "sending reports: ${it.message}") }
       }
+      // Downloads are optional; the first health result must be visible before they begin.
+      refreshRuleSets(ticket)
       val next = nodeSignature()
-      if (next == signature) continue
-      signature = next
+      if (next == engineNodeSignature) continue
       try {
-        // the core may have restarted under us; the engine has to be told where it lives now
-        val port = liveCorePort()
-        if (port != corePort) {
-          Log.i(TAG, "the core moved from port $corePort to $port, rebuilding the engine")
-          corePort = port
+        session.use(ticket) {
+          // the core may have restarted under us; the engine has to be told where it lives now
+          val port = liveCorePort()
+          if (port != corePort) {
+            Log.i(TAG, "the core moved from port $corePort to $port, rebuilding the engine")
+            corePort = port
+          }
+          val nodes = discoveredNodes()
+          val country = Settings.country(this)
+          val built = SingBoxConfig.build(
+            corePort, false, nodes, excludedPackages,
+            policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
+            brokenSlot, appsMode, country,
+          )
+          Mgbox.forgetPlaneSocksPorts()
+          Mgbox.reloadEngine(built.json)
+          engineNodeSignature = nodeSignature(nodes, corePort, country)
+          checkPort = built.checkPort
+          enginePlanes = built.planes
+          for (plane in built.planes) {
+            Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+          }
+          Log.i(TAG, "engine reloaded for ${nodes.size} node(s), ${built.planes.size} engine plane(s)")
         }
-        val nodes = discoveredNodes()
-        val built = SingBoxConfig.build(
-          corePort, false, nodes, excludedPackages,
-          policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
-        )
-        Mgbox.forgetPlaneSocksPorts()
-        Mgbox.reloadEngine(built.json)
-        checkPort = built.checkPort
-        enginePlanes = built.planes
-        for (plane in built.planes) {
-          Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
-        }
-        Log.i(TAG, "engine reloaded for ${nodes.size} node(s), ${built.planes.size} engine plane(s)")
+      } catch (cancelled: InterruptedException) {
+        throw cancelled
       } catch (error: Throwable) {
-        Log.w(TAG, "the engine was not reloaded: ${error.message}")
-        Health.recordEngineError("the engine was not reloaded: ${error.message}")
+        session.commit(ticket) {
+          Log.w(TAG, "the engine was not reloaded: ${error.message}")
+          Health.recordEngineError("the engine was not reloaded: ${error.message}")
+        }
       }
     }
   }
@@ -557,11 +594,15 @@ class MgVpnService : VpnService() {
    * list looks healthy, and not a byte moves. That happened on the phone on 17.09 and cost the owner
    * their connection until the tunnel was restarted by hand.
    */
-  private fun nodeSignature(): String {
-    val nodes = discoveredNodes().joinToString(",") { node ->
-      "${node.slot}:" + node.planes.joinToString("+") { it.optString("t") }
+  private fun nodeSignature(
+    nodes: List<DiscoveredNode> = discoveredNodes(),
+    port: Int = liveCorePort(),
+    country: String = Settings.country(this),
+  ): String {
+    val offers = nodes.joinToString(",") { node ->
+      "${node.slot}:${node.country}:" + node.planes.joinToString("+") { it.toString() }
     }
-    return "$nodes@${liveCorePort()}"
+    return "$offers@$port#$country"
   }
 
   /** The port the core is listening on right now, which is the only one worth believing. */
@@ -572,21 +613,25 @@ class MgVpnService : VpnService() {
 
 
   /** Starts the core and waits for the first discovered node. */
-  private fun startCoreAndWaitForNode(bootstrap: String, relays: String): Int {
+  private fun startCoreAndWaitForNode(ticket: Long, bootstrap: String, relays: String): Int {
     val psk = CoreConfig.readPsk(this)
     if (psk.isBlank()) throw IllegalStateException("no PSK: put it in files/psk.txt or the settings screen")
-    val port = Mgbox.startCore(
-      CoreConfig.json(
-        psk = psk,
-        slots = Settings.slots(this),
-        bootstrap = CoreConfig.splitList(bootstrap),
-        relays = CoreConfig.splitList(relays),
-      ),
-    ).toInt()
+    val port = session.use(ticket) {
+      Mgbox.startCore(
+        CoreConfig.json(
+          psk = psk,
+          slots = Settings.slots(this),
+          bootstrap = CoreConfig.splitList(bootstrap),
+          relays = CoreConfig.splitList(relays),
+          hintFile = java.io.File(filesDir, "route-hint.json").absolutePath,
+        ),
+      ).toInt()
+    }
     Log.i(TAG, "core listening on 127.0.0.1:$port")
 
-    val deadline = System.currentTimeMillis() + DISCOVERY_TIMEOUT_MS
-    while (System.currentTimeMillis() < deadline) {
+    val deadline = System.nanoTime() + DISCOVERY_TIMEOUT_MS * 1_000_000
+    while (System.nanoTime() < deadline) {
+      if (!session.current(ticket)) throw InterruptedException("tunnel start cancelled")
       if (discoveredNodes().isNotEmpty()) return port
       Thread.sleep(1000)
     }
@@ -604,7 +649,7 @@ class MgVpnService : VpnService() {
       val planes = mutableListOf<JSONObject>()
       val dp = exit.optJSONArray("dp") ?: JSONArray()
       for (plane in 0 until dp.length()) dp.optJSONObject(plane)?.let { planes.add(it) }
-      nodes.add(DiscoveredNode(exit.optInt("slot"), planes))
+      nodes.add(DiscoveredNode(exit.optInt("slot"), planes, exit.optString("country")))
     }
     return nodes
   }
@@ -686,10 +731,13 @@ class MgVpnService : VpnService() {
   }
 
   internal fun stopTunnel() {
-    if (!running && !starting) return
+    session.stop { closeTunnel() }
+  }
+
+  private fun closeTunnel() {
     running = false
     starting = false
-    watching = false
+    Health.reset()
     forgetNetwork()
     try {
       Mgbox.forgetPlaneSocksPorts()
@@ -701,7 +749,7 @@ class MgVpnService : VpnService() {
     // interface up
     runCatching { tun?.close() }.onFailure { Log.w(TAG, "closing the tun: ${it.message}") }
     tun = null
-    Mgbox.stopCore()
+    runCatching { Mgbox.stopCore() }.onFailure { Log.w(TAG, "closing the core: ${it.message}") }
     stopForeground(STOP_FOREGROUND_REMOVE)
     Log.i(TAG, "tunnel down")
   }
@@ -713,9 +761,10 @@ class MgVpnService : VpnService() {
    * engine's outbound sockets end up on. `onLost` with nothing to take over is reported as index -1:
    * no network at all is a state the engine has to know, not a gap in the reporting.
    */
-  private fun watchNetwork() {
-    if (networkWatch != null) return
-    val manager = getSystemService(ConnectivityManager::class.java) ?: return
+  private fun watchNetwork(ticket: Long): java.util.concurrent.CountDownLatch? {
+    if (networkWatch != null) return null
+    val manager = getSystemService(ConnectivityManager::class.java) ?: return null
+    val ready = java.util.concurrent.CountDownLatch(1)
     val callback = object : ConnectivityManager.NetworkCallback() {
       override fun onAvailable(network: Network) = report(network)
 
@@ -726,9 +775,12 @@ class MgVpnService : VpnService() {
         report(network, capabilities = capabilities)
 
       override fun onLost(network: Network) {
-        Log.i(TAG, "the network under the tunnel went away")
-        runCatching { Mgbox.updateDefaultInterface("", -1L, false) }
-          .onFailure { Log.w(TAG, "telling the engine the network is gone: ${it.message}") }
+        session.commit(ticket) {
+          lastNetwork = ""
+          Log.i(TAG, "the network under the tunnel went away")
+          runCatching { Mgbox.updateDefaultInterface("", -1L, false) }
+            .onFailure { Log.w(TAG, "telling the engine the network is gone: ${it.message}") }
+        }
       }
 
       private fun report(
@@ -746,11 +798,15 @@ class MgVpnService : VpnService() {
         if (able?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) return
         val expensive = able?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true
         if (index <= 0) return
-        if (name == lastNetwork) return
-        lastNetwork = name
-        Log.i(TAG, "the tunnel now rides $name (index $index, metered $expensive)")
-        runCatching { Mgbox.updateDefaultInterface(name, index.toLong(), expensive) }
-          .onFailure { Log.w(TAG, "telling the engine about $name: ${it.message}") }
+        session.commit(ticket) {
+          if (name != lastNetwork) {
+            lastNetwork = name
+            Log.i(TAG, "the tunnel now rides $name (index $index, metered $expensive)")
+            runCatching { Mgbox.updateDefaultInterface(name, index.toLong(), expensive) }
+              .onSuccess { ready.countDown() }
+              .onFailure { Log.w(TAG, "telling the engine about $name: ${it.message}") }
+          }
+        }
       }
     }
     // Not the default network: once the tunnel is up, that is the tunnel itself, and the engine would
@@ -770,6 +826,7 @@ class MgVpnService : VpnService() {
     }
       .onSuccess { networkWatch = callback }
       .onFailure { Log.w(TAG, "watching the network: ${it.message}") }
+    return ready
   }
 
   private fun forgetNetwork() {
