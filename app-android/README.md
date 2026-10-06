@@ -55,6 +55,11 @@ three-tab layout are shared by both languages.
 
 ## Routing and applying changes
 
+In **Users**, choose a country from the available locations. Enable **Allow others to use my
+connection** to share; the administrator must provision an exit role. **Sharing limits** controls
+speed and guest count and displays quota usage. The owner's VPN pauses sharing; after a process
+restart, sharing requires a new enable action. See [PEER-PILOT.md](../PEER-PILOT.md).
+
 Website and application rules work together: the application selector decides which apps enter
 the VPN, then website rules decide where their traffic goes.
 

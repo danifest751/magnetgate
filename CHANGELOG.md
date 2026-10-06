@@ -1,5 +1,13 @@
 # Changelog
 
+### Peer connections: complete cold session setup (2026-10-06)
+
+- Use the existing eight-second connection budget for both peers and their inner TLS/lease
+  exchange. A nested five-second timeout could close an admitted channel before setup completed.
+  Earlier caller deadlines, three-second reservations and five-second target dials remain bounded.
+- Add regressions for a slow owner link followed by session authorization, and consent withdrawal
+  while an admitted pair is still being prepared.
+
 ### Android: opt-in internet sharing (2026-10-06)
 
 - Add a sharing checkbox in Users, compact state, speed/guest limits and quota usage. Hosting
@@ -10,7 +18,8 @@
 - Keep aggregate pilot caps at 0.1–5 Mbps, 1–2 users, 1 GiB/day and 20 GiB/month. Preserve quotas
   across clock rollback and TCP responses after a guest half-close.
 - Native race tests, Android unit tests/lint and debug build passed; installed on an arm64 phone.
-  Remote egress and screen-off field tests are pending. macOS hosting remains disabled.
+  Native HTTPS egress, quota growth, background/screen-off lease renewal and VPN pause/resume passed on
+  Xiaomi Android 16 over Wi-Fi. Extended sleep/network coverage is pending; macOS hosting stays disabled.
 
 ### Android: countries before VPN connection (2026-10-06)
 

@@ -12,7 +12,7 @@ distribution plan; the peer service cannot authorize an app update.
 | Windows x64 | Implemented; tested with native HTTPS egress | Implemented; separate limited process |
 | Linux | Shared headless host | Tested on an unprivileged pilot server |
 | macOS arm64/x64 | Included in shared desktop packaging and helper configuration | Disabled pending real Mac validation |
-| Android arm64/x64 | Included in the combined AAR; tested on a physical arm64 phone | Opt-in physical IPv4 adapter implemented; exit/background field validation pending |
+| Android arm64/x64 | Included in the combined AAR; tested on a physical arm64 phone | Opt-in physical IPv4 exit tested on a Xiaomi Android 16 phone over Wi-Fi; broader device/network coverage pending |
 
 The pilot supports **TCP ports 80 and 443 only**. Proxied UDP is rejected after DNS interception.
 DNS uses HTTPS through the selected exit; explicit direct routing exceptions retain their behavior.
@@ -117,6 +117,9 @@ saturation cannot take that management slot. Public-target checks reject private
 owner and control-plane addresses, validate all DNS results and dial a numeric pinned address.
 Guests prepare the authenticated relay link before reserving an exit, so a cold TLS/WSS connection
 does not consume the short reservation. The overall connection timeout remains bounded.
+Both peers share an eight-second setup budget for the cold relay link and inner TLS/lease exchange;
+an earlier caller deadline wins. Joining the relay still requires the three-second reservation,
+and target TCP connection attempts remain limited to five seconds.
 
 Relay admission, concurrent sessions, new dials, byte rate and daily relay allowance are bounded.
 Usage persists before forwarding; crashes can conservatively overcount a buffered chunk. A
@@ -133,8 +136,14 @@ still needs a complete failure/recovery field run before production rollout.
 
 Android exit validation currently covers native adapter race tests (handover, suspend/stop,
 old DNS tokens, all-answer guarding, half-close and crash consent), combined AAR compilation,
-Android unit tests and lint, and installation on an arm64 phone. Real remote-client egress,
-screen-off sharing and VPN pause/resume remain field gates; installation alone is not proof.
+Android unit tests and lint, and installation on an arm64 phone. A Windows guest passed HTTPS
+through the phone's native IPv4 exit; quota usage and payload counters grew. The same session
+renewed beyond 60 seconds with the app in the background. Checkbox withdrawal removed the exit
+from the catalogue and rejected the old guest. Starting the owner's VPN paused hosting; after
+stopping it, a new guest passed native HTTPS again. Extended Doze, network handover and
+manufacturer coverage remain field gates.
+The same guest also passed HTTPS after 70 seconds with the screen off while USB charging.
+This short test does not establish unattended battery operation or prolonged restricted Doze.
 
 Direct ICE/QUIC paths, UDP associations, sharing while the owner's VPN is active, macOS
 exit hosting, multiple relay servers, and public-scale abuse/account infrastructure are later

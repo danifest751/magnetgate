@@ -96,7 +96,7 @@ func (c *Client) acceptOffer(t Ticket) {
 	go func() {
 		defer c.wg.Done()
 		defer func() { <-c.exitSlots }()
-		ctx, cancel := context.WithTimeout(c.ctx, 5*time.Second)
+		ctx, cancel := context.WithTimeout(c.ctx, peerSetupTimeout)
 		defer cancel()
 		session, _, err := c.pairSession(ctx, t, "exit")
 		if err != nil {

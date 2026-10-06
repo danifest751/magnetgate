@@ -43,7 +43,7 @@ func (c *Client) reserve(ctx context.Context, country string) (Ticket, error) {
 // OpenGuest pins a country for the session; no automatic fallback to another
 // country or the local connection. The caller closes it on selection change.
 func (c *Client) OpenGuest(ctx context.Context, country string) (*Guest, error) {
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, peerSetupTimeout)
 	defer cancel()
 	// Prepare the cold TLS/WebSocket link before reserving the owner's short slot.
 	// A slow service handshake must not consume the three-second reservation.

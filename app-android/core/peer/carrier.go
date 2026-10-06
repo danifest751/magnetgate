@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+// Both roles need a bounded budget for the cold relay link and inner TLS/lease
+// setup. The relay still requires joining within its three-second reservation.
+const peerSetupTimeout = 8 * time.Second
+
 func muxConfig() *yamux.Config {
 	cfg := yamux.DefaultConfig()
 	cfg.AcceptBacklog = 32
@@ -51,7 +55,11 @@ func (c *Client) pairSessionOn(ctx context.Context, t Ticket, role string, ws *w
 	defer stopSetup()
 	stopClient := context.AfterFunc(c.ctx, func() { carrier.Close() })
 	defer stopClient()
-	carrier.SetDeadline(time.Now().Add(5 * time.Second))
+	setupDeadline := time.Now().Add(peerSetupTimeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(setupDeadline) {
+		setupDeadline = deadline
+	}
+	carrier.SetDeadline(setupDeadline)
 	var secure *tls.Conn
 	if role == "exit" {
 		secure = tls.Server(carrier, cfg)
