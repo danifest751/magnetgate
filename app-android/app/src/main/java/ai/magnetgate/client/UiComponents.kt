@@ -197,18 +197,21 @@ fun ConnectScreen(
   // this phone is current, which is the usual case and shows nothing at all.
   update: UpdateRow? = null, installedBuild: Long = 0, updateState: String = "", onUpdate: () -> Unit = {},
   updateReady: Boolean = false,
+  peerRoute: Boolean = false,
+  peerContent: @Composable () -> Unit = {},
 ) {
   val ui = LocalUiStrings.current
   Column(Modifier.fillMaxSize()) {
     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
       StatusPanel(presentation)
+      peerContent()
       if (notice.isNotBlank()) InfoNotice(notice)
       update?.let {
         UpdateCard(it, installedBuild, updateState.ifBlank {
           if (updateReady) ui.text(R.string.update_install_now) else ""
         }, busy, onUpdate)
       }
-      Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), onClick = { onOpen(Screen.COUNTRIES) }) {
+      if (!peerRoute) Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant), onClick = { onOpen(Screen.COUNTRIES) }) {
         Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
           Surface(shape = RoundedCornerShape(9.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
             Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) { if (country.isBlank()) UiIcon(R.drawable.ic_globe) else Text(country, fontFamily = Mono) }
@@ -232,7 +235,7 @@ fun ConnectScreen(
           UiIcon(R.drawable.ic_next)
         }
       }
-      if (vpnUp && country.isNotBlank() && status.nodes.none { it.country.equals(country, true) })
+      if (!peerRoute && vpnUp && country.isNotBlank() && status.nodes.none { it.country.equals(country, true) })
         InfoNotice(ui.text(R.string.country_unavailable, ui.countryName(country)))
       Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {

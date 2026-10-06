@@ -37,6 +37,13 @@ object Settings {
   private const val KEY_REVISION = "settingsRevision"
 
   fun revision(context: Context): Long = get(context, KEY_REVISION).toLongOrNull() ?: 0L
+  fun peerSource(context: Context): Boolean = get(context, "peerSource") == "true"
+  fun peerCountry(context: Context): String = get(context, "peerCountry")
+  fun savePeerChoice(context: Context, enabled: Boolean, country: String): Boolean {
+    if (country.isNotEmpty() && !Regex("[A-Z]{2}").matches(country)) return false
+    return open(context)?.edit()?.putString("peerSource", enabled.toString())
+      ?.putString("peerCountry", country)?.putString(KEY_REVISION, (revision(context) + 1).toString())?.commit() == true
+  }
 
   /** Настройки и их версия записываются вместе; ошибка записи не считается сохранением. */
   fun saveRouting(context: Context, draft: RoutingDraft): Boolean {

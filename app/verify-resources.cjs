@@ -24,6 +24,14 @@ function verifyResources(platform, arch, dir = path.resolve(__dirname, '../tools
   for (const name of ['refilter-domains.srs', 'refilter-ip.srs']) check(name, pins.ruleSets[name].sha256)
   check('tunnel-userlist.srs', pins.localAssets['tunnel-userlist.srs'].sha256, false)
 }
-module.exports = context => verifyResources(context.electronPlatformName,
-  require('builder-util').Arch[context.arch])
+module.exports = context => {
+  const platform = context.electronPlatformName, arch = require('builder-util').Arch[context.arch]
+  verifyResources(platform, arch)
+  const dir = path.resolve(__dirname, '../tools/peer')
+  const metadata = JSON.parse(fs.readFileSync(path.join(dir, 'build.json'), 'utf8'))
+  const name = platform === 'win32' ? 'peer-node.exe' : 'peer-node'
+  const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex')
+  if (metadata.platform !== platform || metadata.arch !== arch || actual !== metadata.sha256)
+    throw new Error('Rebuild peer host on the target platform/architecture before packaging')
+}
 module.exports.verifyResources = verifyResources

@@ -31,6 +31,9 @@ function buildVpnConfig({
       server_port: cfg.localPort,
       version: '5'
     })
+  const peer = dp.find(d => d.t === 'peer' && d.protocol === 1)
+  if (peer) outbounds.push({ type: 'socks', tag: 'peer', server: '127.0.0.1',
+    server_port: cfg.localPort, version: '5', username: peer.username, password: peer.password })
   if (!outbounds.length) throw new Error('no supported endpoint')
   const tags = outbounds.map((d) => d.tag)
   if (tags.length === 1) outbounds[0].tag = 'proxy'
@@ -49,7 +52,7 @@ function buildVpnConfig({
     { inbound: ['health-in'], action: 'route', outbound: 'proxy' },
     { action: 'sniff' },
     { protocol: 'dns', action: 'hijack-dns' },
-    { process_path: [clientPath], action: 'route', outbound: 'direct' }
+    { process_path: [clientPath, ...(peer ? [path.join(root, 'tools', 'peer', platform === 'win32' ? 'peer-node.exe' : 'peer-node')] : [])], action: 'route', outbound: 'direct' }
   ]
   // keep named applications out of the tunnel (e.g. qbittorrent.exe) — see src/config.cjs
   if (cfg.directProcesses?.length)
@@ -98,6 +101,12 @@ function buildVpnConfig({
     // Global available even when starting in Split with no direct exceptions.
     rules.push({ clash_mode: 'Global', action: 'route', outbound: 'proxy' })
   }
+  const peerRules = peer ? rules.flatMap(rule => {
+    if (rule.outbound !== 'proxy' || rule.inbound) return [rule]
+    const { outbound, ...match } = rule
+    return [{ ...match, network: 'udp', action: 'reject' }, rule]
+  }) : rules
+  if (peer && !live && cfg.vpnMode === 'full') peerRules.push({ network: 'udp', action: 'reject' })
   return {
     log: { level: 'warn', timestamp: true },
     experimental: {
@@ -126,7 +135,7 @@ function buildVpnConfig({
     ],
     outbounds,
     route: {
-      rules,
+      rules: peerRules,
       rule_set: ruleSets,
       final: !live && cfg.vpnMode === 'split' ? 'direct' : 'proxy',
       auto_detect_interface: true,

@@ -73,7 +73,14 @@ object SingBoxConfig {
     // their bank left alone. Last in the list because the callers pass these positionally.
     appsMode: Settings.Apps = Settings.Apps.EXCEPT,
     country: String = "",
+    peerEndpoint: JSONObject? = null,
   ): Built {
+    if (peerEndpoint != null) {
+      require(peerEndpoint.getInt("port") == socksPort && socksPort in 1024..65535)
+      require(Regex("[a-f0-9]{48}").matches(peerEndpoint.getString("username")))
+      require(Regex("[a-f0-9]{48}").matches(peerEndpoint.getString("password")))
+      require(nodes.isEmpty())
+    }
     val outbounds = JSONArray()
     val planeInbounds = JSONArray()
     val rules = JSONArray()
@@ -149,7 +156,8 @@ object SingBoxConfig {
         // The core answers on loopback, so this is not about the network: it is the bound on how long a
         // request may sit inside the core while it works through its planes. Past it the caller is told,
         // rather than left to a browser's own patience.
-        .put("connect_timeout", CORE_TIMEOUT),
+        .put("connect_timeout", CORE_TIMEOUT)
+        .apply { peerEndpoint?.let { put("username", it.getString("username")); put("password", it.getString("password")) } },
     )
     outbounds.put(JSONObject().put("type", "direct").put("tag", "direct"))
 

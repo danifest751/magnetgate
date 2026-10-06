@@ -62,6 +62,19 @@ const ALLOWED_CIDRS = [
   [203, 0, 113, 0, 24]
 ]
 
+// Protocol constants in route checks and public-target guards, not live hosts.
+// Require the complete CIDR spelling; a bare host from one of these ranges is
+// still rejected. The Windows route table also represents /1 as a dotted mask.
+const NETWORK_LITERALS = new Set(['128.0.0.0/1', '192.0.0.0/24', '224.0.0.0/3', '192.88.99.0/24'])
+const SPLIT_BOUNDARY = '128.0.0.0/1'.split('/')[0]
+function isNetworkLiteral(file, line, match) {
+  const rest = line.slice(match.index)
+  const literal = rest.match(/^\d+\.\d+\.\d+\.\d+\/\d+\b/)?.[0]
+  if (NETWORK_LITERALS.has(literal)) return true
+  return file === 'app-android/core/cmd/peer-node/platform_windows.go' &&
+    line.trim() === `if mask == "${SPLIT_BOUNDARY}" && (dest == "0.0.0.0" || dest == "${SPLIT_BOUNDARY}") {`
+}
+
 function ipToInt(ip) {
   return ip.split('.').reduce((acc, part) => acc * 256 + Number(part), 0)
 }
@@ -122,10 +135,10 @@ for (const file of files) {
     })
   }
   lines.forEach((line, i) => {
-    for (const match of line.match(IPV4) ?? []) {
-      if (!isAllowedIp(match)) {
+    for (const match of line.matchAll(IPV4)) {
+      if (!isAllowedIp(match[0]) && !isNetworkLiteral(file, line, match)) {
         problems.push(
-          `${file}:${i + 1}: public address ${match} (use a placeholder such as <exit-ip>)`
+          `${file}:${i + 1}: public address ${match[0]} (use a placeholder such as <exit-ip>)`
         )
       }
     }

@@ -10,6 +10,7 @@ const { buildVpnConfig } = require('./vpn-config.cjs')
 const { switchMode, engineSignature } = require('./mode.cjs')
 const { rotatingLog } = require('./log.cjs')
 const { accumulate, rate } = require('./stats.cjs')
+const { PeerHost } = require('./peer-host.cjs')
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
 const PLATFORM = process.platform || 'win32'
 const { platformConfig, platformPaths, macTunnel } = require('./platform.cjs')
@@ -77,8 +78,19 @@ const state = {
   countries: [],
   nodes: [],
   country: '',
-  countryFallback: false
+  countryFallback: false,
+  connectionSource: 'servers',
+  peer: { configured: false, state: 'OFFLINE', countries: [], policy: { enabled: false } }
 }
+const peerHost = new PeerHost({ root: RES, profile: path.join(app.getPath('userData'), 'peer'),
+  onStatus: value => {
+    state.peer = value
+    if (state.connectionSource === 'peers') {
+      state.countries = value.countries || []
+      if (!value.guestConnected) { state.vpnHealthy = false; requestTick() }
+    }
+    pushStatus()
+  } })
 function safeSend(channel, value) {
   if (win && !win.isDestroyed() && !quitting) win.webContents.send(channel, value)
 }
@@ -203,10 +215,37 @@ function loadConfig() {
 }
 function saveConfig(cfg) {
   const clean = platformConfig(validateConfig(cfg), PLATFORM)
+  const old = loadConfig()
   atomicJson(CONFIG, clean)
+  if (state.vpnOn && (old.connectionSource !== clean.connectionSource ||
+      clean.connectionSource === 'peers' && old.country !== clean.country)) {
+    invalidateHealth()
+    state.modePending = true
+    const token = ++intent
+    engine.cancelStart()
+    modeAbort?.abort()
+    const change = operation.then(async () => {
+      if (token !== intent || !state.vpnOn) return clean
+      await stopClient()
+      if (token === intent && state.vpnOn) {
+        await startClient()
+        if (token !== intent || !state.vpnOn) return clean
+        await applyVpn()
+      }
+      return clean
+    })
+    operation = change.catch(() => {})
+    return change
+  }
   return clean
 }
 function readDp() {
+  if (state.connectionSource === 'peers') {
+    const e = peerHost.endpoint
+    return e && peerHost.state.guestConnected ? [{ t: 'peer', protocol: 1, host: '127.0.0.1',
+      port: e.port, username: e.username, password: e.password,
+      exitId: 'peer', country: e.country, node: 'Пользователь' }] : []
+  }
   try {
     return freshEndpoints(JSON.parse(fs.readFileSync(DP_FILE, 'utf8')))
   } catch {
@@ -257,6 +296,7 @@ async function firewall(off = false, status = false) {
       '-TunnelAlias',
       activeTunnelAlias
     )
+    if (loadConfig().connectionSource === 'peers') args.push('-PeerExe', peerHost.executable)
   }
   const output = await command('powershell.exe', args, {}, 20000)
   if (status) {
@@ -297,7 +337,18 @@ async function checkOtherTunnel() {
   }
 }
 async function startClient() {
-  const cfg = loadConfig(),
+  const cfg = loadConfig()
+  state.connectionSource = cfg.connectionSource
+  if (cfg.connectionSource === 'peers') {
+    if (clientProc) await stopClient()
+    await peerHost.suspend(true)
+    await peerHost.connect(cfg.country, cfg.localPort)
+    state.clientRunning = true
+    state.rvReady = true
+    return
+  }
+  await peerHost.disconnect()
+  const
     sig = JSON.stringify({
       exits: cfg.exits,
       bootstrap: cfg.bootstrap,
@@ -370,6 +421,8 @@ async function startClient() {
   return clientStarting
 }
 async function stopClient() {
+  let peerError = null
+  try { await peerHost.disconnect() } catch (err) { peerError = err }
   if (clientStarting) await clientStarting.catch(() => {})
   const old = clientProc
   clientStopping.add(old)
@@ -387,13 +440,14 @@ async function stopClient() {
   } catch (err) {
     if (err.code !== 'ENOENT') pushLog('[client] could not remove the runtime config: ' + err.message)
   }
+  if (peerError) throw peerError
 }
 async function applyVpn() {
   if (!state.vpnOn) return
   const dp = readDp()
   state.rvReady = dp.length > 0
   if (!dp.length) {
-    if (engine.running) await engine.stop()
+    if (engine.running && state.connectionSource !== 'peers') await engine.stop()
     state.vpnHealthy = false
     state.route = null
     state.countries = []
@@ -406,7 +460,10 @@ async function applyVpn() {
   const cfg = loadConfig()
   // Country preference: only the chosen country's endpoints are offered to the engine, while every
   // endpoint's address still bypasses the TUN (the client's own uplinks must never be captured).
-  const selection = selectCountry(dp, cfg.country)
+  const selection = cfg.connectionSource === 'peers'
+    ? { endpoints: dp.filter(d => !cfg.country || d.country === cfg.country),
+      available: peerHost.state.countries || [], fallback: false }
+    : selectCountry(dp, cfg.country)
   state.countries = selection.available
   state.nodes = summarizeNodes(dp)
   state.country = cfg.country
@@ -534,11 +591,13 @@ function runVpn(off) {
         state.activeMode = null
         state.modePending = false
         state.lastError = null
+        await peerHost.suspend(false)
         pushStatus()
         return
       }
       // Discovery doesn't alter Windows routes, so it can run during adapter inspection.
       // Both must finish before applyVpn or an endpoint-triggered tick may start the TUN.
+      await peerHost.suspend(true)
       const [inspection, discovery] = await Promise.allSettled([checkOtherTunnel(), startClient()])
       if (token !== intent) return
       state.otherTunnel = inspection.status === 'fulfilled' ? inspection.value : null
@@ -772,6 +831,7 @@ function handle(name, fn) {
   })
 }
 handle('getState', () => ({ ...state }))
+handle('setPeerPolicy', policy => peerHost.policy(policy))
 handle('getLog', () => logs.slice())
 handle('getConfig', loadConfig)
 handle('saveConfig', saveConfig)
@@ -838,6 +898,8 @@ else {
     createWindow()
     pushLog('magnetgate ' + app.getVersion() + ' started')
     sweepLeftovers()
+    state.connectionSource = loadConfig().connectionSource
+    void peerHost.start().catch(err => { state.peer = { ...state.peer, error: err.message }; pushStatus() })
     try {
       await firewall(false, true)
       if (guardReady)
@@ -871,6 +933,7 @@ async function shutdown() {
   try {
     await operation
     await stopProcesses()
+    await peerHost.close()
     await macEngine?.close()
     await diskLog.flush()
   } catch (err) {

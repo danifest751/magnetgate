@@ -1,14 +1,14 @@
 // Package socks is the loopback SOCKS5 entry point of the Android core.
 //
-// It is the Go port of src/socks5.mjs, cut down to what a phone actually needs: RFC 1928, the "no
-// authentication" greeting method and CONNECT. BIND and UDP ASSOCIATE are refused on purpose — the
+// It is the Go port of src/socks5.mjs: RFC 1928 CONNECT with either the legacy
+// local greeting or per-session RFC 1929 authentication. BIND and UDP ASSOCIATE are refused — the
 // data plane used on Android is TCP (libbox outbounds and the native mux), so a UDP relay would be
 // dead code.
 //
 // Two properties of the Node server are kept deliberately:
 //
 //   - the listener is bound to 127.0.0.1 and a connection from anywhere else is dropped, because the
-//     SOCKS entry point is an unauthenticated local API;
+//     SOCKS entry point is a local API (peer listeners additionally require credentials);
 //   - the success reply is sent only after the data plane has actually opened the stream, so a client
 //     (a browser, libbox) never believes a dead target is ready.
 //
@@ -104,9 +104,12 @@ type Server struct {
 	ln   net.Listener
 	dial DialFunc
 
-	mu     sync.Mutex
-	conns  map[net.Conn]struct{}
-	closed bool
+	mu                                      sync.Mutex
+	conns                                   map[net.Conn]struct{}
+	closed                                  bool
+	username                                string
+	password                                string
+	requestTimeout, timeToDial, idleTimeout time.Duration
 }
 
 // Listen binds 127.0.0.1:port and serves it in the background. Port 0 picks a free port, readable with
@@ -124,9 +127,26 @@ func Listen(port int, dial DialFunc) (*Server, error) {
 	return s, nil
 }
 
+// ListenAuthenticated is the scoped peer host entry point (RFC 1929). Legacy
+// Listen retains its existing Android API; peer credentials are per run.
+func ListenAuthenticated(port int, username, password string, dial DialFunc) (*Server, error) {
+	if dial == nil || len(username) < 1 || len(username) > 255 || len(password) < 16 || len(password) > 255 {
+		return nil, errors.New("invalid SOCKS credentials")
+	}
+	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		return nil, err
+	}
+	s := newServer(ln, dial)
+	s.username = username
+	s.password = password
+	go s.acceptLoop()
+	return s, nil
+}
+
 // newServer is Listen without the bind, so a test can drive the accept loop with a listener of its own.
 func newServer(ln net.Listener, dial DialFunc) *Server {
-	return &Server{ln: ln, dial: dial, conns: make(map[net.Conn]struct{})}
+	return &Server{ln: ln, dial: dial, conns: make(map[net.Conn]struct{}), requestTimeout: RequestTimeout, timeToDial: DialTimeout, idleTimeout: IdleTimeout}
 }
 
 // Addr is the address the listener is bound to.
@@ -181,7 +201,7 @@ func (s *Server) acceptLoop() {
 		}
 		if !s.track(conn) {
 			conn.Close()
-			return
+			continue
 		}
 		go func() {
 			defer s.untrack(conn)
@@ -194,6 +214,9 @@ func (s *Server) track(c net.Conn) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		return false
+	}
+	if s.password != "" && len(s.conns) >= 128 {
 		return false
 	}
 	s.conns[c] = struct{}{}
@@ -211,9 +234,15 @@ func (s *Server) untrack(c net.Conn) {
 func (s *Server) handle(raw net.Conn) {
 	defer raw.Close()
 
-	raw.SetReadDeadline(time.Now().Add(RequestTimeout))
+	raw.SetReadDeadline(time.Now().Add(s.requestTimeout))
 	br := bufio.NewReader(raw)
-	if err := negotiate(raw, br); err != nil {
+	var negotiationError error
+	if s.password != "" {
+		negotiationError = negotiateAuthenticated(raw, br, s.username, s.password)
+	} else {
+		negotiationError = negotiate(raw, br)
+	}
+	if negotiationError != nil {
 		return
 	}
 	req, err := readRequest(br)
@@ -226,7 +255,7 @@ func (s *Server) handle(raw net.Conn) {
 	}
 	raw.SetReadDeadline(time.Time{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), DialTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeToDial)
 	defer cancel()
 	upstream, err := s.dial(ctx, req.host, req.port)
 	if err != nil {
@@ -239,7 +268,7 @@ func (s *Server) handle(raw net.Conn) {
 		return
 	}
 	// bytes the client pipelined after the request are still in br and are forwarded first
-	relay(WrapConn(raw), br, upstream)
+	relay(WrapConn(raw), br, upstream, s.idleTimeout)
 }
 
 // negotiate answers the greeting. Only "no authentication" is offered: an unauthenticated local socket
@@ -353,7 +382,7 @@ func writeReply(w io.Writer, code byte) error {
 
 // relay pipes the two sides until both are done, honouring half closes the way the Node server does:
 // an EOF on one side closes only that direction.
-func relay(client Conn, clientIn io.Reader, upstream Conn) {
+func relay(client Conn, clientIn io.Reader, upstream Conn, idleTimeout time.Duration) {
 	var last atomic.Int64
 	last.Store(time.Now().UnixNano())
 
@@ -370,16 +399,16 @@ func relay(client Conn, clientIn io.Reader, upstream Conn) {
 	}()
 
 	stop := make(chan struct{})
-	if IdleTimeout > 0 {
+	if idleTimeout > 0 {
 		go func() {
-			ticker := time.NewTicker(watchdogInterval(IdleTimeout))
+			ticker := time.NewTicker(watchdogInterval(idleTimeout))
 			defer ticker.Stop()
 			for {
 				select {
 				case <-stop:
 					return
 				case <-ticker.C:
-					if time.Since(time.Unix(0, last.Load())) > IdleTimeout {
+					if time.Since(time.Unix(0, last.Load())) > idleTimeout {
 						client.Close()
 						upstream.Close()
 						return

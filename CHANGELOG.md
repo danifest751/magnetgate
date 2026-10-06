@@ -1,5 +1,18 @@
 # Changelog
 
+### User connections: authenticated TCP pilot (2026-10-06)
+
+- Add a separate opt-in peer service, device identities, live country catalogue, bounded
+  reservations and TLS-pinned TCP sessions over a WSS relay. Fixed countries never fall back.
+- Add sharing controls, automatic/manual speed caps, guest limits and durable traffic quotas
+  to the shared Windows/macOS interface. Windows/Linux can host native exits; macOS exit
+  hosting remains disabled pending real-device validation.
+- Add Android guest routing in the existing combined Go binding, including physical-network
+  binding, authenticated local SOCKS and cancellation of stale VPN work. Android exit hosting
+  remains disabled. Signed app-update and legacy VPN credentials are unchanged.
+- This is an operator-provisioned pilot for TCP ports 80/443. UDP, direct NAT traversal and
+  production account provisioning remain future work. See [PEER-PILOT.md](PEER-PILOT.md).
+
 ### Android: session ownership and UDP country preference (2026-10-06)
 
 - Reject queued network callbacks, health results and reload errors from a replaced VPN session

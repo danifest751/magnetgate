@@ -58,23 +58,31 @@ test('configured protection is not reported as applied protection', () => {
 
 test('country selector: options show the code and node count, never an address', () => {
   const { countryOptions, countryMessage } = require('../renderer/state.js')
-  assert.deepEqual(countryOptions([]), [['', 'Любая']])
-  assert.deepEqual(countryOptions(undefined), [['', 'Любая']])
+  assert.deepEqual(countryOptions([]), [['', 'Авто']])
+  assert.deepEqual(countryOptions(undefined), [['', 'Авто']])
   assert.deepEqual(countryOptions([{ cc: 'FI', nodes: 1 }, { cc: 'NL', nodes: 2 }]), [
-    ['', 'Любая'],
-    ['FI', 'FI · 1 нода'],
-    ['NL', 'NL · 2 нод']
+    ['', 'Авто'],
+    ['FI', 'Финляндия · 1 доступно'],
+    ['NL', 'Нидерланды · 2 доступно']
   ])
   // malformed entries are dropped rather than rendered as a broken option
   assert.deepEqual(countryOptions([{ cc: 'x' }, { cc: 'DEU' }, null, { cc: 'de', nodes: 1 }]), [
-    ['', 'Любая'],
-    ['DE', 'DE · 1 нода']
+    ['', 'Авто'],
+    ['DE', 'Германия · 1 доступно']
   ])
   assert.equal(
     countryOptions([{ cc: 'FI', nodes: 1 }]).some(([, label]) => /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/.test(label)),
     false,
     'an address must never appear in the list'
   )
+})
+
+test('country search keeps the selected unavailable country and matches names or codes', () => {
+  const { countryOptions } = require('../renderer/state.js')
+  const countries = [{ cc: 'DE', nodes: 2 }, { cc: 'NL', nodes: 1 }]
+  assert.deepEqual(countryOptions(countries, '', 'Герм'), [['', 'Авто'], ['DE', 'Германия · 2 доступно']])
+  assert.deepEqual(countryOptions(countries, '', 'nl'), [['', 'Авто'], ['NL', 'Нидерланды · 1 доступно']])
+  assert.deepEqual(countryOptions(countries, 'FI', 'nl').at(-1), ['FI', 'Финляндия · сейчас недоступна'])
 })
 
 test('country selector: the caption explains the choice and the fallback', () => {

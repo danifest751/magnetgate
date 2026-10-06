@@ -65,6 +65,11 @@ async function fixture(options = {}) {
           return clone(f.config)
         },
         getState: async () => clone(f.state),
+        setPeerPolicy: async policy => {
+          f.peerPolicies = [...(f.peerPolicies || []), clone(policy)]
+          f.emit({ peer: { ...f.state.peer, policy, state: policy.enabled ? 'READY' : 'OFFLINE' } })
+          return clone(f.state.peer)
+        },
         getLog: async () => {
           if (logError) throw new Error('fixture log error')
           return ['fixture log']
@@ -318,6 +323,32 @@ async function run() {
   await has(page, '#btnConnect', 'Повторить')
   await page.locator('#btnConnect').click()
   await checkValue(page, () => fixture.connect, 1)
+  await page.close()
+  const peer = { configured: true, connected: true, state: 'OFFLINE', countries: [{ cc: 'DE', nodes: 2 }, { cc: 'NL', nodes: 1 }],
+    policy: { enabled: false, automatic: true, maxMbps: 5, maxGuests: 2, dailyBytes: 1073741824, monthlyBytes: 21474836480 } }
+  page = await fixture({ config: { ...baseConfig, connectionSource: 'peers', exits: [], country: 'FI' }, state: { ...idle, peer } })
+  await has(page, '#countryMsg', 'недоступна')
+  await checkValue(page, () => document.querySelector('#country option[value="FI"]').disabled, true)
+  await page.locator('#countrySearch').fill('Герм')
+  await checkValue(page, () => [...document.querySelector('#country').options].map(o => o.value), ['', 'DE', 'FI'])
+  await page.locator('#peerShare').check()
+  await checkValue(page, () => fixture.peerPolicies.at(-1).enabled, true)
+  await page.locator('#peerShare').uncheck()
+  await checkValue(page, () => fixture.peerPolicies.at(-1).enabled, false)
+  await page.setViewportSize({ width: 430, height: 900 })
+  await noOverflow(page)
+  await page.screenshot({ path: path.join(output, 'peer-connection.png'), fullPage: true })
+  await nav(page, 'settings')
+  await page.locator('#peerLimits').evaluate(el => { el.open = true })
+  await page.locator('#peerMaxMbps').fill('0.5')
+  await page.locator('#peerSaveLimits').click()
+  await checkValue(page, () => fixture.peerPolicies.at(-1).maxMbps, 0.5)
+  await noOverflow(page)
+  await page.screenshot({ path: path.join(output, 'peer-limits.png'), fullPage: true })
+  await page.evaluate(() => fixture.emit({ peer: { ...fixture.state.peer, canShare: false } }))
+  await nav(page, 'connection')
+  await checkValue(page, () => document.querySelector('#peerShare').disabled, true)
+  await has(page, '#peerState', 'недоступна')
   await page.close()
   assert.deepEqual(errors, [])
   checks++

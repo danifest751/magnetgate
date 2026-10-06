@@ -70,6 +70,8 @@ class MgVpnService : VpnService() {
     fun hasInstance(): Boolean = current != null
     fun appliedSettingsRevision(): Long = current?.appliedRevision ?: -1L
     fun appliedRouting(): RoutingDraft? = current?.activeRouting
+    /** Updates use the engine's local check listener in peer mode, never unauthenticated peer SOCKS. */
+    fun updatePort(): Int = current?.let { if (!it.running) 0 else if (it.peerRoute) it.checkPort else it.corePort } ?: 0
 
     /**
      * The engine's own listeners, one per node and layer, fastest kind first.
@@ -116,6 +118,9 @@ class MgVpnService : VpnService() {
   /** The manifest already acted on to a settled end, so it is not worked through again every tick. */
   private var settledRuleSets: String? = null
   private var corePort = 0
+  private var peerRoute = false
+  private var peerEndpoint: JSONObject? = null
+  private var peerCountry = ""
 
   /**
    * The engine listener the health check goes through. It changes with every engine reload, because the
@@ -368,8 +373,17 @@ class MgVpnService : VpnService() {
     Health.reset()
     startForeground(NOTIFICATION_ID, notification("looking for a node"))
     val worker = Thread {
+      val guestToken = java.util.UUID.randomUUID().toString()
       try {
-        val port = if (coreless) 0 else startCoreAndWaitForNode(ticket, bootstrap, relays)
+        val selectedPeerRoute = !coreless && Settings.peerSource(this)
+        val selectedPeerCountry = Settings.peerCountry(this)
+        session.use(ticket) { peerRoute = selectedPeerRoute; peerCountry = selectedPeerCountry }
+        val preparedPeer = if (selectedPeerRoute) {
+          PeerRuntime.ensure(this)
+          session.use(ticket) { PeerRuntime.attach(this); PeerRuntime.begin(guestToken) }
+          PeerRuntime.connect(selectedPeerCountry, guestToken)
+        } else null
+        val port = preparedPeer?.getInt("port") ?: if (coreless) 0 else startCoreAndWaitForNode(ticket, bootstrap, relays)
         // urltest and QUIC outbounds may dial during StartEngine itself. Seed the
         // binding's initial interface before it starts those probes, rather than
         // waiting until the tunnel and its first outbound sockets already exist.
@@ -377,8 +391,9 @@ class MgVpnService : VpnService() {
         // The callback runs on Android's main thread; wait outside the native lock.
         networkReady?.await(1, java.util.concurrent.TimeUnit.SECONDS)
         session.use(ticket) {
-          val nodes = if (coreless) emptyList() else discoveredNodes()
-          val country = Settings.country(this)
+          peerEndpoint = preparedPeer
+          val nodes = if (coreless || selectedPeerRoute) emptyList() else discoveredNodes()
+          val country = if (selectedPeerRoute) selectedPeerCountry else Settings.country(this)
           excludedPackages = Settings.excluded(this)
           appsMode = Settings.apps(this)
           policy = Policy(
@@ -392,7 +407,7 @@ class MgVpnService : VpnService() {
           val built = SingBoxConfig.build(
             port, coreless, nodes, excludedPackages,
             policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
-            brokenSlot, appsMode, country,
+            brokenSlot, appsMode, country, preparedPeer,
           )
 
           Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
@@ -404,7 +419,7 @@ class MgVpnService : VpnService() {
           }
           // The country the user prefers is told to the core once it is up: it changes which node the next
           // stream prefers, not how anything is built, so it never needs a reconnect.
-          runCatching { Mgbox.setCountry(Settings.country(this)) }
+          if (!selectedPeerRoute) runCatching { Mgbox.setCountry(Settings.country(this)) }
             .onFailure { Log.w(TAG, "the country preference did not reach the core: ${it.message}") }
           activeRouting = RoutingDraft(policy.mode, appsMode, excludedPackages.toSet(), policy.directDomains, policy.tunnelDomains)
           appliedRevision = revision
@@ -420,7 +435,8 @@ class MgVpnService : VpnService() {
           notify(notification("connected"))
           starting = false
         }
-        watchNodes(ticket)
+        if (selectedPeerRoute) session.use(ticket) { startUpdateDiscovery(bootstrap, relays) }
+        if (selectedPeerRoute) watchPeer(ticket, guestToken) else watchNodes(ticket)
       } catch (_: InterruptedException) {
         // Disconnect is a decision, not an engine failure. An old worker owns no new session.
         session.stop(ticket) { closeTunnel(); stopSelf() }
@@ -584,6 +600,37 @@ class MgVpnService : VpnService() {
     }
   }
 
+  private fun watchPeer(ticket: Long, guestToken: String) {
+    var checkedAt = 0L
+    while (session.current(ticket)) {
+      Thread.sleep(NODE_WATCH_INTERVAL_MS)
+      if (!session.current(ticket)) return
+      if (!PeerRuntime.status().optBoolean("guestConnected")) {
+        // Keep the captured route while retrying the SAME requested country.
+        // No server/native fallback is introduced by peer recovery.
+        val next = runCatching { PeerRuntime.connect(peerCountry, guestToken) }.getOrNull()
+        if (next == null) continue
+        session.use(ticket) {
+          peerEndpoint = next
+          corePort = next.getInt("port")
+          val built = SingBoxConfig.build(corePort, false, emptyList(), excludedPackages,
+            policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
+            brokenSlot, appsMode, peerCountry, next)
+          Mgbox.reloadEngine(built.json)
+          checkPort = built.checkPort
+          Health.reset()
+        }
+      }
+      val interval = if (Health.lastCheck?.ok == false) CHECK_RETRY_INTERVAL_MS else CHECK_INTERVAL_MS
+      if (checkRequested || System.nanoTime() - checkedAt >= interval * 1_000_000) {
+        checkRequested = false
+        val measured = Health.measure(checkPort, CHECK_URL, emptyMap())
+        checkedAt = System.nanoTime()
+        if (!session.commit(ticket) { Health.record(measured); recordCheck(measured); trimEngineLog() }) return
+      }
+    }
+  }
+
   /**
    * The node and plane set plus the core's port, as a value that only changes when the configuration
    * should change.
@@ -613,6 +660,15 @@ class MgVpnService : VpnService() {
 
 
   /** Starts the core and waits for the first discovered node. */
+  private fun startUpdateDiscovery(bootstrap: String, relays: String) {
+    val psk = CoreConfig.readPsk(this)
+    if (psk.isBlank()) return
+    // Keep the existing sealed update authority; discovery does not choose the peer route.
+    runCatching { Mgbox.startCore(CoreConfig.json(psk, Settings.slots(this),
+      CoreConfig.splitList(bootstrap), CoreConfig.splitList(relays))) }
+      .onFailure { Log.w(TAG, "update metadata discovery did not start", it) }
+  }
+
   private fun startCoreAndWaitForNode(ticket: Long, bootstrap: String, relays: String): Int {
     val psk = CoreConfig.readPsk(this)
     if (psk.isBlank()) throw IllegalStateException("no PSK: put it in files/psk.txt or the settings screen")
@@ -749,6 +805,12 @@ class MgVpnService : VpnService() {
     // interface up
     runCatching { tun?.close() }.onFailure { Log.w(TAG, "closing the tun: ${it.message}") }
     tun = null
+    if (peerRoute) {
+      runCatching { PeerRuntime.disconnect() }.onFailure { Log.w(TAG, "closing the peer guest: ${it.message}") }
+      PeerRuntime.attach(null)
+      peerEndpoint = null
+      peerRoute = false
+    }
     runCatching { Mgbox.stopCore() }.onFailure { Log.w(TAG, "closing the core: ${it.message}") }
     stopForeground(STOP_FOREGROUND_REMOVE)
     Log.i(TAG, "tunnel down")

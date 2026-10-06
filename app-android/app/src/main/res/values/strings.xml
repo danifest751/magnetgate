@@ -209,4 +209,15 @@
   <string name="language">Interface language</string>
   <string name="language_ru">Русский</string>
   <string name="language_en">English</string>
+  <string name="peer_source">Connection source</string>
+  <string name="peer_servers">Servers</string>
+  <string name="peer_users">User connections</string>
+  <string name="peer_tcp_hint">TCP websites via a user connection. The selected country never changes automatically.</string>
+  <string name="peer_search">Search country or code</string>
+  <string name="peer_unconfigured">User connections are not configured yet.</string>
+  <string name="peer_country_missing">This country is unavailable. Waiting for a connection in this country.</string>
+  <string name="peer_directory_wait">Connecting to the directory…</string>
+  <string name="peer_empty">No available connections.</string>
+  <string name="peer_android_guest">This pilot can use other connections. Sharing from Android awaits physical-network and background-service validation.</string>
+  <string name="peer_save_failed">Could not save the connection choice.</string>
 </resources>

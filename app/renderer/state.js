@@ -16,7 +16,7 @@
       state.engineReady !== false &&
       !pending
     )
-    const empty = !config.exits?.length && !needsDisconnect(state)
+    const empty = config.connectionSource !== 'peers' && !config.exits?.length && !needsDisconnect(state)
     let title = 'Не подключено',
       detail = 'Сейчас используется обычное подключение.'
     if (connected) {
@@ -60,17 +60,17 @@
   // Country selector: the list is built from what the nodes advertise — a two-letter code plus how
   // many nodes stand behind it, never an address. Kept here (and returned as plain pairs) so the DOM
   // code stays trivial and this is testable without a browser.
-  function countryOptions(countries) {
+  function countryOptions(countries, selected = '', search = '') {
     const list = Array.isArray(countries) ? countries : []
+    const names = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['ru'], { type: 'region' }) : null
+    const query = String(search).trim().toLocaleLowerCase('ru')
+    const rows = list.filter(c => c && /^[A-Z]{2}$/.test(String(c.cc || '').toUpperCase()))
+      .map(c => { const cc = String(c.cc).toUpperCase(); return [cc, `${names?.of(cc) || cc} · ${Number(c.nodes) || 0} доступно`] })
+      .filter(([cc,label]) => cc === selected || !query || `${cc} ${label}`.toLocaleLowerCase('ru').includes(query))
+    if (selected && /^[A-Z]{2}$/.test(selected) && !list.some(c => c && String(c.cc).toUpperCase() === selected))
+      rows.push([selected, `${names?.of(selected) || selected} · сейчас недоступна`])
     return [
-      ['', 'Любая'],
-      ...list
-        .filter((c) => c && /^[A-Z]{2}$/.test(String(c.cc || '').toUpperCase()))
-        .map((c) => {
-          const cc = String(c.cc).toUpperCase()
-          const nodes = Number(c.nodes) || 0
-          return [cc, `${cc} · ${nodes} ${nodes === 1 ? 'нода' : 'нод'}`]
-        })
+      ['', 'Авто'], ...rows
     ]
   }
   function countryMessage(country, fallback) {

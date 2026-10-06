@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('mg', {
   getLog: () => ipcRenderer.invoke('getLog'),
   getConfig: () => ipcRenderer.invoke('getConfig'),
   saveConfig: (cfg) => ipcRenderer.invoke('saveConfig', cfg),
+  setPeerPolicy: (policy) => ipcRenderer.invoke('setPeerPolicy', policy),
   genPsk: () => ipcRenderer.invoke('genPsk'),
   startClient: () => ipcRenderer.invoke('startClient'),
   stopClient: () => ipcRenderer.invoke('stopClient'),

@@ -6,12 +6,15 @@ param(
   [switch]$DryRun,
   [string]$ClientExe,
   [string]$EngineExe,
+  [string]$PeerExe,
   [string]$TunnelAlias = 'magnetgate'
 )
 $ErrorActionPreference = 'Stop'
 $group = 'magnetgate-strict-v1'
 $stateDir = Join-Path $env:ProgramData 'magnetgate-firewall'
 $stateFile = Join-Path $stateDir 'state.json'
+$executables = @($ClientExe,$EngineExe)
+if ($PeerExe) { $executables += $PeerExe }
 function Get-GuardStatus {
   $recovery = Test-Path -LiteralPath $stateFile
   $protected = $false
@@ -27,7 +30,7 @@ function Get-GuardStatus {
 if ($Status) { Get-GuardStatus | ConvertTo-Json -Compress; exit }
 if ($DryRun) {
   if (-not $Off) {
-    foreach ($exe in @($ClientExe,$EngineExe)) { if (-not $exe -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Executable missing' } }
+    foreach ($exe in $executables) { if (-not $exe -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Executable missing' } }
   }
   Write-Output 'Guard plan valid: preserve prior policy, disable existing outbound allow rules, allow only owned executables and TUN, block other outbound traffic. No policy changed.'
   exit
@@ -51,7 +54,7 @@ try {
     Write-Output 'Firewall policy restored'
     exit
   }
-  foreach ($exe in @($ClientExe,$EngineExe)) { if (-not $exe -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Executable missing' } }
+  foreach ($exe in $executables) { if (-not $exe -or -not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'Executable missing' } }
   if (-not (Test-Path -LiteralPath $stateFile)) {
     New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
     & icacls.exe $stateDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
@@ -71,6 +74,9 @@ try {
   Get-NetFirewallRule -PolicyStore PersistentStore -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
   New-NetFirewallRule -Name "$group-client" -Group $group -DisplayName 'magnetgate rendezvous/native' -Direction Outbound -Action Allow -Program $ClientExe -Profile Any | Out-Null
   New-NetFirewallRule -Name "$group-engine" -Group $group -DisplayName 'magnetgate transport engine' -Direction Outbound -Action Allow -Program $EngineExe -Profile Any | Out-Null
+  if ($PeerExe) {
+    New-NetFirewallRule -Name "$group-peer" -Group $group -DisplayName 'magnetgate peer carrier' -Direction Outbound -Action Allow -Program $PeerExe -Profile Any | Out-Null
+  }
   New-NetFirewallRule -Name "$group-loopback" -Group $group -DisplayName 'magnetgate loopback' -Direction Outbound -Action Allow -RemoteAddress '127.0.0.0/8','::1' -Profile Any | Out-Null
   # Interface aliases may not exist yet; add this rule once TUN is present on a subsequent call.
   if (Get-NetAdapter -Name $TunnelAlias -ErrorAction SilentlyContinue) {

@@ -7,14 +7,14 @@
   "private": true,
   "main": "main.js",
   "scripts": {
-    "prestart": "node prepare-seed.js",
+    "prestart": "node prepare-seed.js && node ../scripts/build-peer.cjs",
     "start": "electron .",
-    "predist": "node prepare-seed.js",
+    "predist": "node prepare-seed.js && node ../scripts/build-peer.cjs",
     "dist": "electron-builder --win portable zip",
     "install:electron": "node node_modules/electron/install.js",
     "test": "node --test tests/*.test.cjs",
     "test:ui": "node tests/renderer-browser.cjs",
-    "predist:mac": "node prepare-seed.js",
+    "predist:mac": "node prepare-seed.js && node ../scripts/build-peer.cjs",
     "dist:mac": "electron-builder --mac dmg zip",
     "dist:win": "npm run dist"
   },
@@ -71,6 +71,10 @@
       {
         "from": "../scripts/pins.json",
         "to": "scripts/pins.json"
+      },
+      {
+        "from": "../tools/peer",
+        "to": "tools/peer"
       }
     ],
     "win": {

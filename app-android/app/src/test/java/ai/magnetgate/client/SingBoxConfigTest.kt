@@ -6,6 +6,19 @@ import org.junit.Test
 import java.io.File
 
 class SingBoxConfigTest {
+  @Test fun peerGuestUsesAuthenticatedLoopbackAndRejectsUdpAfterDnsWithoutServerFallback() {
+    val endpoint = JSONObject().put("port", 12080).put("username", "a".repeat(48)).put("password", "b".repeat(48))
+    val config = JSONObject(SingBoxConfig.build(12080, false, peerEndpoint = endpoint).json)
+    val outbound = config.getJSONArray("outbounds").getJSONObject(0)
+    assertEquals("socks", outbound.getString("type"))
+    assertEquals(endpoint.getString("password"), outbound.getString("password"))
+    val routes = rules(config)
+    val dns = routes.indexOfFirst { it.optString("action") == "hijack-dns" }
+    val udp = routes.indexOfFirst { it.optString("network") == "udp" }
+    assertTrue(dns >= 0 && udp > dns)
+    assertEquals("reject", routes[udp].getString("action"))
+    assertEquals("core", config.getJSONObject("route").getString("final"))
+  }
   @Test fun udpHonorsCountryAndFallsBackOnlyWhenThatCountryHasNoLiveNode() {
     val nodes = listOf(node(0).copy(country = "NL"), node(1).copy(country = "FI"))
     fun tags(country: String, nodes: List<DiscoveredNode>): List<String> {

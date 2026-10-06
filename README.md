@@ -26,6 +26,10 @@ Use this as a small trusted-group tool, not as anonymity infrastructure.
 
 ## Clients and requirements
 
+The optional [user-connection pilot](PEER-PILOT.md) adds a separate authenticated WSS catalogue
+and relay. Its central service applies only to this new mode; the PSK-based server discovery
+described above remains independent. Peer mode currently supports TCP web traffic only.
+
 | Component | Current package version | Requirements / guide |
 |---|---|---|
 | Node core and exit | 0.11.1 | Node.js 20.19+; commands below |

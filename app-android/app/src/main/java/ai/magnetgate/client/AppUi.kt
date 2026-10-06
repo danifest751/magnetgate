@@ -1,5 +1,7 @@
 package ai.magnetgate.client
 
+import org.json.JSONObject
+
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -77,6 +79,10 @@ fun AppRoot(
   var relays by remember { mutableStateOf(Settings.relays(context)) }
   var slots by remember { mutableStateOf(Settings.slots(context).joinToString(",")) }
   var country by remember { mutableStateOf(Settings.country(context)) }
+  var peerSource by remember { mutableStateOf(Settings.peerSource(context)) }
+  var peerCountry by remember { mutableStateOf(Settings.peerCountry(context)) }
+  var peerStatus by remember { mutableStateOf(JSONObject()) }
+  var peerError by remember { mutableStateOf("") }
   // What the update card is saying right now: empty while nothing is happening, which is almost always.
   var updateState by remember { mutableStateOf("") }
   var savedRules by remember { mutableStateOf(RoutingDraft.read(context)) }
@@ -229,8 +235,10 @@ fun AppRoot(
   }
 
   fun connect() {
-    if (Settings.psk(context).isBlank()) { open(Screen.ACCESS); return }
-    if (Settings.channel(bootstrapExtra, Settings.bootstrap(context)).isBlank() && Settings.channel(relaysExtra, Settings.relays(context)).isBlank()) {
+    if (!peerSource && Settings.psk(context).isBlank()) { open(Screen.ACCESS); return }
+      if (peerSource && !PeerRuntime.configured(context)) { peerError = ui.text(R.string.peer_unconfigured); return }
+      if (peerSource) peerError = ""
+    if (!peerSource && Settings.channel(bootstrapExtra, Settings.bootstrap(context)).isBlank() && Settings.channel(relaysExtra, Settings.relays(context)).isBlank()) {
       notice = R.string.discovery_required
       return
     }
@@ -240,7 +248,14 @@ fun AppRoot(
 
   LaunchedEffect(Unit) {
     while (true) {
-      status = withContext(Dispatchers.IO) { runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrElse { CoreStatus(error = it.message.orEmpty()) } }
+        peerStatus = withContext(Dispatchers.IO) { PeerRuntime.status() }
+        if (peerStatus.optBoolean("connected")) peerError = ""
+      status = withContext(Dispatchers.IO) { runCatching {
+        if (Settings.peerSource(context)) {
+          val metadata = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(CoreStatus())
+          PeerRuntime.view(peerStatus).copy(update = metadata.update, socksPort = MgVpnService.updatePort())
+        } else CoreStatus.parse(Mgbox.coreStatus())
+      }.getOrElse { CoreStatus(error = it.message.orEmpty()) } }
       vpnUp = MgVpnService.isRunning()
       starting = MgVpnService.isStarting()
       check = Health.lastCheck
@@ -255,6 +270,14 @@ fun AppRoot(
         notice = R.string.check_timeout
       }
       delay(REFRESH_MS)
+    }
+  }
+  LaunchedEffect(peerSource) {
+    if (peerSource && PeerRuntime.configured(context)) {
+      peerError = withContext(Dispatchers.IO) { runCatching { PeerRuntime.ensure(context); "" }.getOrElse {
+        android.util.Log.w(MgVpnService.TAG, "peer directory setup failed", it)
+        ui.text(R.string.peer_directory_wait)
+      } }
     }
   }
 
@@ -377,7 +400,7 @@ fun AppRoot(
     }
   }
 
-  val keySet = Settings.psk(context).isNotBlank()
+  val keySet = peerSource || Settings.psk(context).isNotBlank()
   val presentation = connectionPresentation(status, vpnUp, starting, keySet, check, engineError, now, ui)
   Column(Modifier.fillMaxSize().systemBarsPadding()) {
     AppHeader(screen, onBack = { back() })
@@ -391,7 +414,15 @@ fun AppRoot(
           updateReady = Updates.stagedBuild(context) == Updates.offered(context, status.update)?.versionCode,
           installedBuild = Updates.installedCode(context),
           updateState = updateState,
-          onUpdate = { takeUpdate() })
+          onUpdate = { takeUpdate() }, peerRoute = peerSource,
+          peerContent = {
+            PeerPanel(peerSource, peerCountry, peerStatus, peerError, !vpnUp && !starting && !busy, PeerRuntime.configured(context),
+              onChoice = { enabled, cc ->
+                if (Settings.savePeerChoice(context, enabled, cc)) {
+                  peerSource = enabled; peerCountry = cc; peerError = ""; revision = Settings.revision(context)
+                } else peerError = ui.text(R.string.peer_save_failed)
+              })
+          })
         Screen.RULES -> RulesScreen(rules, savedRules, pending, vpnUp, busy || starting, ui.optional(notice),
           onChange = { rules = it; notice = 0 }, onSave = { saveRules() }, onReconnect = { reconnect() })
         Screen.SETTINGS -> SettingsScreen(keySet, pending, ui.optional(notice), busy || starting, reports, reportsWaiting,

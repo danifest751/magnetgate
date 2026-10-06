@@ -1,0 +1,30 @@
+name: Peer core
+on:
+  push:
+    branches: [main]
+    paths: ['app-android/core/**', '.github/workflows/peer.yml']
+  pull_request:
+    paths: ['app-android/core/**', '.github/workflows/peer.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: app-android/core
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app-android/core/go.mod
+          cache-dependency-path: app-android/core/go.sum
+      - run: go test -race ./... -timeout 90s
+      - run: go vet ./...
+      - run: go build ./cmd/peer-node ./cmd/peer-service

@@ -7,6 +7,18 @@ const { validateConfig, freshEndpoints } = require('../../src/config.cjs')
 const { buildVpnConfig } = require('../vpn-config.cjs')
 const root = path.resolve(__dirname, '../..')
 const native = { t: 'mgt', host: '203.0.113.1', port: 49001, protocol: 4, exitId: 'a' }
+
+test('peer TCP routing intercepts DNS before UDP rejection and preserves direct Split exceptions', () => {
+  const endpoint = { t: 'peer', protocol: 1, username: 'u'.repeat(48), password: 'p'.repeat(48) }
+  const cfg = build({ connectionSource: 'peers', vpnMode: 'split', killSwitch: true, directProcesses: ['browser.exe'], tunnelDomains: ['example.test'] }, [endpoint])
+  const rules = cfg.route.rules
+  const dns = rules.findIndex(r => r.action === 'hijack-dns')
+  const reject = rules.findIndex(r => r.network === 'udp' && r.action === 'reject')
+  const direct = rules.findIndex(r => r.process_name?.includes('browser.exe'))
+  assert.ok(dns >= 0 && reject > dns && direct < reject)
+  assert.equal(cfg.route.final, 'direct')
+  assert.equal(cfg.outbounds.find(r => r.tag === 'proxy').username, endpoint.username)
+})
 function build(cfg, dp = [native]) {
   return buildVpnConfig({
     root,

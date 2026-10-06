@@ -14,7 +14,8 @@ const DEFAULT_CONFIG = {
   killSwitch: false,
   directProcesses: [],
   slots: [],
-  country: ''
+  country: '',
+  connectionSource: 'servers'
 }
 const domains = (list) => {
   if (!Array.isArray(list) || list.length > 10000) throw new Error('invalid domain list')
@@ -88,6 +89,7 @@ function validateConfig(value) {
   )
     throw new Error('invalid mode')
   if (typeof cfg.killSwitch !== 'boolean') throw new Error('invalid killSwitch')
+  if (!['servers','peers'].includes(cfg.connectionSource)) throw new Error('invalid connection source')
   if (!Array.isArray(cfg.exits) || cfg.exits.length > 16) throw new Error('invalid exits')
   cfg.exits = cfg.exits.map((exit, i) => {
     if (!exit || typeof exit.psk !== 'string' || !exit.psk || exit.psk.length > 512)

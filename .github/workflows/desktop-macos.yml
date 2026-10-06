@@ -2,9 +2,9 @@ name: macOS desktop
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'src/**', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
+    paths: ['app/**', 'app-android/core/**', 'src/**', 'scripts/build-peer.cjs', 'THIRD-PARTY-NOTICES.md', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
   pull_request:
-    paths: ['app/**', 'src/**', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
+    paths: ['app/**', 'app-android/core/**', 'src/**', 'scripts/build-peer.cjs', 'THIRD-PARTY-NOTICES.md', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,6 +22,12 @@ jobs:
         with:
           node-version: '22'
       - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app-android/core/go.mod
+          cache-dependency-path: app-android/core/go.sum
+      - run: go test -race ./...
+        working-directory: app-android/core
       - run: bash scripts/get-singbox-macos.sh
       - run: npm test
       - run: npm ci

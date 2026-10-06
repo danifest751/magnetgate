@@ -35,6 +35,22 @@ test('macOS shares current routing policy and lets the OS allocate utun', () => 
   assert.deepEqual(conf, expected)
 })
 
+test('macOS root helper preserves authenticated peer routing and bypasses only the owned carrier', () => {
+  const request = input()
+  request.cfg.connectionSource = 'peers'
+  request.snapshot.exits[0].dp = [{ t: 'peer', protocol: 1, host: '127.0.0.1',
+    port: request.cfg.localPort, username: 'a'.repeat(48), password: 'b'.repeat(48) }]
+  const conf = safeConfig(root, request)
+  const proxy = conf.outbounds.find(d => d.tag === 'proxy')
+  assert.equal(proxy.type, 'socks')
+  assert.equal(proxy.username, 'a'.repeat(48))
+  assert.equal(proxy.password, 'b'.repeat(48))
+  assert.equal(proxy.server_port, request.cfg.localPort)
+  const owned = conf.route.rules.find(rule => rule.process_path)
+  assert.ok(owned.process_path.includes(path.join(root, 'tools', 'peer', 'peer-node')))
+  assert.ok(conf.route.rules.some(rule => rule.network === 'udp' && rule.action === 'reject'))
+})
+
 test('macOS root helper cannot accept arbitrary config paths, commands or privileged ports', () => {
   const request = input()
   request.config = { log: { output: '/etc/hosts' }, experimental: { cache_file: { path: '/etc/passwd' } } }

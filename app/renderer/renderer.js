@@ -74,7 +74,10 @@ function renderStatus() {
   )
   text(
     'serverName',
-    cfg.exits.length === 1
+    cfg.connectionSource === 'peers'
+      ? st.peer?.guestConnected ? 'Соединение пользователя · ' + st.peer.guestCountry
+        : st.peer?.connected ? 'Каталог соединений пользователей доступен' : 'Ожидаем каталог соединений пользователей'
+      : cfg.exits.length === 1
       ? 'Сервер ' + cfg.exits[0].name
       : cfg.exits.length
         ? 'Серверов настроено: ' + cfg.exits.length
@@ -91,7 +94,9 @@ function renderStatus() {
   text('protection', protection)
   text(
     'diagDiscovery',
-    st.clientRunning ? (st.rvReady ? 'Сервер найден' : 'Поиск сервера') : 'Остановлено'
+    cfg.connectionSource === 'peers'
+      ? st.peer?.connected ? 'Каталог доступен' : 'Каталог недоступен'
+      : st.clientRunning ? (st.rvReady ? 'Сервер найден' : 'Поиск сервера') : 'Остановлено'
   )
   text(
     'diagTunnel',
@@ -115,6 +120,9 @@ function renderStatus() {
   text('diagPlanes', st.vpnOn ? planes.length ? planes.join(', ') : 'ожидание трафика' : '—')
   $('traffic').hidden = !view.connected
   renderCountries(st, view)
+  MGPeer.render({ ...st, connectionSource: cfg.connectionSource })
+  $('connectionSource').value = cfg.connectionSource || 'servers'
+  $('connectionSource').disabled = !loaded
   renderNodes(st)
   const stats = st.stats || {}
   text(
@@ -134,13 +142,13 @@ function bytes(value = 0) {
   return value.toFixed(index ? 1 : 0) + ' ' + units[index]
 }
 function renderCountries(st, view) {
-  // the list comes from what the nodes advertise (a two-letter code and how many nodes are behind
-  // it) — never an address. Hidden while disconnected or when no exit publishes a country.
-  const countries = Array.isArray(st.countries) ? st.countries : []
-  $('countryRow').hidden = !view.connected || !countries.length
-  if (!countries.length) return
+  // Country selection stays accessible even when the selected country is absent.
+  const countries = cfg.connectionSource === 'peers' ? st.peer?.countries || []
+    : Array.isArray(st.countries) ? st.countries : []
+  $('countryRow').hidden = false
   const select = $('country')
-  const options = MGView.countryOptions(countries)
+  const selected = cfg.country ?? st.country ?? ''
+  const options = MGView.countryOptions(countries, selected, $('countrySearch').value)
   // rebuild only when the set changed, so an open dropdown is not fought while the user chooses
   const signature = JSON.stringify(options)
   if (select.dataset.options !== signature) {
@@ -150,11 +158,18 @@ function renderCountries(st, view) {
       const option = document.createElement('option')
       option.value = value
       option.textContent = label
+      option.disabled = !!value && !countries.some(row => row.cc === value)
       select.append(option)
     }
   }
-  select.value = st.country || ''
-  text('countryMsg', MGView.countryMessage(st.country, st.countryFallback))
+  select.value = selected
+  text('countryMsg', cfg.connectionSource === 'peers'
+    ? !st.peer?.configured ? 'Сервис соединений пользователей пока не настроен.'
+    : !st.peer.connected ? 'Каталог недоступен. Ожидаем соединения.'
+    : selected && !countries.some(row => row.cc === selected) ? 'Выбранная страна сейчас недоступна.'
+    : st.peer.guestConnected ? 'Сейчас: ' + st.peer.guestCountry
+    : countries.length ? 'Узел в выбранной стране будет выбран автоматически.' : 'Пока нет доступных соединений пользователей.'
+    : MGView.countryMessage(selected, st.countryFallback))
 }
 function renderNodes(st) {
   const rows = MGView.nodeRows(st.nodes)
@@ -383,6 +398,10 @@ async function addSite() {
   }
 }
 window.addEventListener('DOMContentLoaded', async () => {
+  MGPeer.bind(showError)
+  $('countrySearch').oninput = () => renderCountries(st, MGView.connectionView(cfg, st))
+  $('connectionSource').onchange = () => saveChange(current => ({ ...current,
+    connectionSource: $('connectionSource').value })).catch(() => {})
   all('[data-page]').forEach((el) => (el.onclick = () => showPage(el.dataset.page)))
   all('[data-go]').forEach((el) => (el.onclick = () => showPage(el.dataset.go)))
   all('[data-list]').forEach(
@@ -424,7 +443,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       } finally {
         renderStatus()
       }
-    } else if (!cfg.exits.length) {
+    } else if (!cfg.exits.length && cfg.connectionSource !== 'peers') {
       showPage('settings')
       $('serverSettings').open = true
       if (!serverDraft.length) {
