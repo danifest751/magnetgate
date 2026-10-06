@@ -2,9 +2,9 @@ name: macOS desktop
 on:
   push:
     branches: [main]
-    paths: ['app/**', 'app-android/core/**', 'src/**', 'scripts/build-peer.cjs', 'THIRD-PARTY-NOTICES.md', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
+    paths: ['app/**', 'app-android/core/**', 'src/**', 'tests/**', 'scripts/build-peer.cjs', 'THIRD-PARTY-NOTICES.md', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
   pull_request:
-    paths: ['app/**', 'app-android/core/**', 'src/**', 'scripts/build-peer.cjs', 'THIRD-PARTY-NOTICES.md', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
+    paths: ['app/**', 'app-android/core/**', 'src/**', 'tests/**', 'scripts/build-peer.cjs', 'THIRD-PARTY-NOTICES.md', 'scripts/pins.json', 'scripts/get-singbox-macos.sh', 'package*.json', '.github/workflows/desktop-macos.yml']
   workflow_dispatch:
 permissions:
   contents: read

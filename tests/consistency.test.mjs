@@ -8,6 +8,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
+
+const { buildVpnConfig } = createRequire(import.meta.url)('../app/vpn-config.cjs')
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8')
@@ -136,7 +139,7 @@ test('drift: the slot env var is converted before it reaches the validator', () 
   )
 })
 
-test('drift: the phone routes by the same policy as the desktop', () => {
+test('drift: routing policy retains platform DNS and IPv6 guarantees', () => {
   // Every bug found on a phone on 2026-09-17 was one shape: the engine configuration for Android was
   // written by hand as a second copy of app/vpn-config.cjs, and pieces of the policy were simply not
   // carried across - the tun MTU, the IPv6 address and its reject rule, the resolver's address
@@ -149,6 +152,29 @@ test('drift: the phone routes by the same policy as the desktop', () => {
   const android = androidConfig + read('app-android/app/src/main/java/ai/magnetgate/client/RuleSets.kt')
   const desktop = read('app/vpn-config.cjs')
 
+  // DNS/IPv6 differ deliberately on macOS. Check generated configurations,
+  // so conditional defaults cannot silently change Windows or Linux behavior.
+  for (const platform of ['win32', 'linux', 'darwin']) {
+    const conf = buildVpnConfig({
+      root, platform,
+      cfg: { vpnMode: 'full', killSwitch: false, localPort: 1080, probePort: 1081,
+        directDomains: [], tunnelDomains: [] },
+      dp: [{ t: 'mgt', protocol: 4 }], bypass: [],
+      clashPort: 19090, clashSecret: 'routing-fixture', clientPath: process.execPath
+    })
+    assert.equal(conf.dns.strategy, platform === 'darwin' ? 'prefer_ipv4' : 'ipv4_only',
+      `${platform} changed its resolver address strategy`)
+    assert.equal(conf.route.rules.some(rule => rule.ip_version === 6 && rule.action === 'reject'),
+      platform !== 'darwin', `${platform} changed its IPv6 forwarding policy`)
+    if (platform === 'darwin') {
+      assert.deepEqual(conf.inbounds[0].dns_address, ['172.19.0.2'])
+      assert.deepEqual(conf.route.rules.at(-1),
+        { clash_mode: 'Global', action: 'route', outbound: 'proxy' })
+    }
+  }
+  assert.match(androidConfig, /"strategy", "ipv4_only"/, 'the phone lost IPv4-only DNS')
+  assert.match(androidConfig, /"ip_version", 6[\s\S]{0,60}"reject"/, 'the phone lost IPv6 rejection')
+
   const mtu = (text, re) => pick(text, re, 'the tun MTU')
   assert.equal(
     mtu(androidConfig, /"mtu", (\d+)/),
@@ -158,8 +184,6 @@ test('drift: the phone routes by the same policy as the desktop', () => {
 
   for (const [what, inDesktop, inAndroid] of [
     ['a v6 address on the tun, so IPv6 cannot leave unclaimed', /fdfe:[0-9a-f:]+/, /fdfe:[0-9a-f:]+/],
-    ['an IPv6 reject rule', /ip_version: 6[\s\S]{0,40}reject/, /"ip_version", 6[\s\S]{0,60}"reject"/],
-    ['an ipv4-only resolver strategy', /strategy: 'ipv4_only'/, /"strategy", "ipv4_only"/],
     // The first DNS defect of 17.09 was a resolver of type `udp` pointed through a SOCKS entry that
     // refuses UDP on purpose - it could not work in principle, and nothing here noticed. The transport
     // is as much a decision as the strategy is, so it is held too.
