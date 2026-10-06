@@ -309,11 +309,17 @@ fun UpdateCard(update: UpdateRow, installed: Long, state: String, busy: Boolean,
 }
 
 @Composable
-fun CountriesScreen(status: CoreStatus, selected: String, notice: String, onSelect: (String) -> Unit, onBack: () -> Unit) {
+fun CountriesScreen(status: CoreStatus, selected: String, notice: String, searching: Boolean, searchError: String,
+  onRefresh: () -> Unit, onSelect: (String) -> Unit, onBack: () -> Unit) {
   val ui = LocalUiStrings.current
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
     Text(ui.text(R.string.new_connections), style = MaterialTheme.typography.headlineSmall)
     if (notice.isNotBlank()) InfoNotice(notice, true)
+    if (searchError.isNotBlank()) InfoNotice(searchError, true)
+    if (searching) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+      CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+      Text(ui.text(R.string.country_searching), style = MaterialTheme.typography.bodySmall)
+    }
     val codes = (listOf("") + status.countries.map { it.code } + listOfNotNull(selected.takeIf { it.isNotBlank() })).distinct()
     codes.forEach { code ->
       Surface(onClick = { onSelect(code) }, shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surface, border = androidx.compose.foundation.BorderStroke(1.dp, if (selected == code) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) {
@@ -326,7 +332,8 @@ fun CountriesScreen(status: CoreStatus, selected: String, notice: String, onSele
         }
       }
     }
-    if (status.countries.isEmpty()) Text(ui.text(R.string.countries_empty), style = MaterialTheme.typography.bodySmall)
+    if (!searching && status.countries.isEmpty() && searchError.isBlank()) Text(ui.text(R.string.countries_empty), style = MaterialTheme.typography.bodySmall)
+    TextButton(onClick = onRefresh, enabled = !searching) { Text(ui.text(R.string.country_refresh)) }
     InfoNotice(ui.text(R.string.country_preference_hint))
     Text(ui.text(R.string.existing_routes_hint), style = MaterialTheme.typography.bodySmall)
     BottomAction(ui.text(R.string.done), onClick = onBack)

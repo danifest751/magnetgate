@@ -50,7 +50,7 @@
   <string name="connect">Подключить</string>
   <string name="new_connections">Для новых соединений</string>
   <string name="any_country">Любая доступная страна</string>
-  <string name="countries_empty">Страны появятся после поиска серверов.</string>
+  <string name="countries_empty">Серверы не найдены. Проверьте интернет и настройки доступа.</string>
   <string name="country_preference_hint">Это предпочтение, не ограничение. Если страна недоступна, приложение использует другую.</string>
   <string name="existing_routes_hint">Уже открытые соединения сохраняют свой маршрут.</string>
   <string name="done">Готово</string>
@@ -226,4 +226,8 @@
   <string name="traffic_sent">Передано</string>
   <string name="peer_save_failed">Не удалось сохранить выбор подключения.</string>
   <string name="peer_connected_country">Подключено: %1$s</string>
+  <string name="country_searching">Ищем серверы…</string>
+  <string name="country_refresh">Обновить список</string>
+  <string name="country_search_access">Добавьте ключ в настройках доступа, чтобы найти серверы.</string>
+  <string name="country_search_failed">Не удалось найти серверы. Проверьте интернет и настройки доступа.</string>
 </resources>

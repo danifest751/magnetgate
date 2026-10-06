@@ -52,7 +52,7 @@
   <string name="connect">Connect</string>
   <string name="new_connections">For new connections</string>
   <string name="any_country">Any available country</string>
-  <string name="countries_empty">Countries will appear when servers are discovered.</string>
+  <string name="countries_empty">No servers found. Check your internet connection and access settings.</string>
   <string name="country_preference_hint">This is a preference, not a restriction. If the country is unavailable, the app will use another one.</string>
   <string name="existing_routes_hint">Existing connections keep their current route.</string>
   <string name="done">Done</string>
@@ -228,4 +228,8 @@
   <string name="traffic_sent">Uploaded</string>
   <string name="peer_save_failed">Could not save the connection choice.</string>
   <string name="peer_connected_country">Connected: %1$s</string>
+  <string name="country_searching">Finding servers…</string>
+  <string name="country_refresh">Refresh list</string>
+  <string name="country_search_access">Add your key in access settings to find servers.</string>
+  <string name="country_search_failed">Could not find servers. Check your internet connection and access settings.</string>
 </resources>

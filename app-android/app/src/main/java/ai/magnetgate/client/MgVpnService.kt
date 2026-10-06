@@ -58,7 +58,7 @@ class MgVpnService : VpnService() {
     private const val HEALTH_HEADER = "at,ok,tookMs,connectMs,tlsMs,answerMs,pingMs,nodeMs,detail"
     private const val MAX_HEALTH_FILE = 2L * 1024 * 1024
     private const val NOTIFICATION_ID = 1
-    private val nativeLock = Any()
+    internal val nativeLock = Any()
 
     @Volatile
     private var current: MgVpnService? = null
@@ -369,6 +369,7 @@ class MgVpnService : VpnService() {
     val ticket = session.begin() ?: return
     val revision = Settings.revision(this)
     starting = true
+    CountryDiscovery.takeover()
     // a new tunnel must not be judged by the previous one's measurements
     Health.reset()
     startForeground(NOTIFICATION_ID, notification("looking for a node"))

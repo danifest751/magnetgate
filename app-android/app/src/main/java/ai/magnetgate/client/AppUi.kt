@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import ai.magnetgate.core.mgbox.Mgbox
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,6 +84,11 @@ fun AppRoot(
   var peerCountry by remember { mutableStateOf(Settings.peerCountry(context)) }
   var peerStatus by remember { mutableStateOf(JSONObject()) }
   var peerError by remember { mutableStateOf("") }
+  var serverCatalogue by remember { mutableStateOf(CoreStatus()) }
+  var findingCountries by remember { mutableStateOf(false) }
+  var countrySearchError by remember { mutableIntStateOf(0) }
+  var countrySearchAttempt by remember { mutableIntStateOf(0) }
+  var countrySearchGeneration by remember { mutableLongStateOf(0L) }
   // What the update card is saying right now: empty while nothing is happening, which is almost always.
   var updateState by remember { mutableStateOf("") }
   var savedRules by remember { mutableStateOf(RoutingDraft.read(context)) }
@@ -123,6 +129,11 @@ fun AppRoot(
   // channels a run is allowed to use.
   val wantedBootstrap = Settings.channel(bootstrapExtra, bootstrap)
   val wantedRelays = Settings.channel(relaysExtra, relays)
+  val discoveryConfig = remember(revision, wantedBootstrap, wantedRelays) {
+    CoreConfig.json(Settings.psk(context), Settings.slots(context),
+      CoreConfig.splitList(wantedBootstrap), CoreConfig.splitList(wantedRelays))
+  }
+  LaunchedEffect(discoveryConfig) { serverCatalogue = CoreStatus() }
 
   val vpnConsent = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
     if (result.resultCode == Activity.RESULT_OK) {
@@ -250,12 +261,13 @@ fun AppRoot(
     while (true) {
         peerStatus = withContext(Dispatchers.IO) { PeerRuntime.status() }
         if (peerStatus.optBoolean("connected")) peerError = ""
-      status = withContext(Dispatchers.IO) { runCatching {
-        if (Settings.peerSource(context)) {
-          val metadata = runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrDefault(CoreStatus())
-          PeerRuntime.view(peerStatus).copy(update = metadata.update, socksPort = MgVpnService.updatePort())
-        } else CoreStatus.parse(Mgbox.coreStatus())
-      }.getOrElse { CoreStatus(error = it.message.orEmpty()) } }
+      val metadata = withContext(Dispatchers.IO) {
+        runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrElse { CoreStatus(error = it.message.orEmpty()) }
+      }
+      if (metadata.nodes.isNotEmpty()) serverCatalogue = CoreStatus(nodes = metadata.nodes, countries = metadata.countries)
+      status = if (Settings.peerSource(context)) {
+        PeerRuntime.view(peerStatus).copy(update = metadata.update, socksPort = MgVpnService.updatePort())
+      } else metadata
       vpnUp = MgVpnService.isRunning()
       starting = MgVpnService.isStarting()
       check = Health.lastCheck
@@ -278,6 +290,42 @@ fun AppRoot(
         android.util.Log.w(MgVpnService.TAG, "peer directory setup failed", it)
         ui.text(R.string.peer_directory_wait)
       } }
+    }
+  }
+
+  LaunchedEffect(screen, peerSource, discoveryConfig, countrySearchAttempt) {
+    val generation = countrySearchGeneration + 1
+    countrySearchGeneration = generation
+    findingCountries = false
+    if (screen != Screen.COUNTRIES || peerSource || autotest) return@LaunchedEffect
+    countrySearchError = 0
+    if (Settings.psk(context).isBlank()) { countrySearchError = R.string.country_search_access; return@LaunchedEffect }
+    if (wantedBootstrap.isBlank() && wantedRelays.isBlank()) { countrySearchError = R.string.discovery_required; return@LaunchedEffect }
+    var ticket: Any? = null
+    findingCountries = true
+    try {
+      withContext(Dispatchers.IO) {
+        ticket = CountryDiscovery.open(discoveryConfig)
+      }
+      // Bound discovery when the activity is left in the background. Keep found countries for this screen.
+      val expected = Settings.slots(context).ifEmpty { listOf(0) }.toSet()
+      val deadline = android.os.SystemClock.elapsedRealtime() + 30_000
+      while (android.os.SystemClock.elapsedRealtime() < deadline) {
+        val found = withContext(Dispatchers.IO) { CoreStatus.parse(Mgbox.coreStatus()) }
+        if (found.nodes.isNotEmpty()) serverCatalogue = CoreStatus(nodes = found.nodes, countries = found.countries)
+        if (found.nodes.map { it.slot }.toSet().containsAll(expected)) break
+        delay(500)
+      }
+    } catch (error: kotlinx.coroutines.CancellationException) {
+      throw error
+    } catch (error: Exception) {
+      Log.w(TAG, "country discovery failed", error)
+      countrySearchError = R.string.country_search_failed
+    } finally {
+      withContext(NonCancellable + Dispatchers.IO) {
+        runCatching { CountryDiscovery.close(ticket) }.onFailure { Log.w(TAG, "closing country discovery", it) }
+      }
+      if (countrySearchGeneration == generation) findingCountries = false
     }
   }
 
@@ -435,7 +483,8 @@ fun AppRoot(
           onReconnect = { reconnect() })
         Screen.ACCESS -> AccessScreen(psk, bootstrap, relays, slots, busy || starting, ui.optional(notice), Settings.failureText(context),
           onPsk = { psk = it }, onBootstrap = { bootstrap = it }, onRelays = { relays = it }, onSlots = { slots = it }, onSave = { saveAccess() })
-        Screen.COUNTRIES -> CountriesScreen(status, country, ui.optional(notice), onSelect = { code ->
+        Screen.COUNTRIES -> CountriesScreen(serverCatalogue, country, ui.optional(notice), findingCountries,
+          ui.optional(countrySearchError), onRefresh = { countrySearchAttempt++ }, onSelect = { code ->
           runCatching {
             if (vpnUp) Mgbox.setCountry(code)
             Settings.setCountry(context, code)

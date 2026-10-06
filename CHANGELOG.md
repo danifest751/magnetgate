@@ -1,5 +1,12 @@
 # Changelog
 
+### Android: countries before VPN connection (2026-10-06)
+
+- Discover server countries when the location list opens, without starting the VPN. Show search
+  progress, actionable errors and a refresh action; retain found countries for the current app session.
+- Bound discovery to 30 seconds and stop once all configured slots are found. Serialize ownership
+  with VPN startup so closing an old screen cannot replace or stop a VPN-owned core.
+
 ### User connections: Android counters and connection screen (2026-10-06)
 
 - Count sent and received peer TCP payload, retain counters during recovery, and reset them for
