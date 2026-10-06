@@ -90,6 +90,14 @@ type Config struct {
 	// holds the caller for as long as it likes - measured at 15 to 18 seconds on a phone - while the
 	// application on top gives up after three and reports a reset connection. Zero means the default.
 	OpenTimeout time.Duration
+	// HedgeDelay enables two concurrent opens. Zero keeps sequential dialing.
+	HedgeDelay time.Duration
+	// StartupRescueDelay permits one additional native open during the initial
+	// startup window, so stalled engine handshakes cannot occupy both attempts.
+	// Zero disables it; country and health restrictions still apply.
+	StartupRescueDelay time.Duration
+	InitialHint        *Hint
+	OnGood             func(Hint)
 	// FirstByteDeadline is how long a stream may stay silent before its plane is demoted for it. Zero
 	// means health.FirstByteDeadlineMs; tests shorten it so that silence can be observed in milliseconds.
 	FirstByteDeadline time.Duration
@@ -104,10 +112,12 @@ type Pool struct {
 	now  func() time.Time
 	logf func(string, ...any)
 
-	mu      sync.Mutex
-	nodes   map[int]Node
-	rr      int
-	country string
+	mu        sync.Mutex
+	nodes     map[int]Node
+	rr        int
+	country   string
+	bootUntil time.Time
+	hint      *Hint
 	// carried and delivered are every byte this client has sent and received through a plane since the
 	// tunnel came up; see Traffic.
 	sent     int64
@@ -166,10 +176,12 @@ func New(cfg Config) *Pool {
 		cfg.Logf = func(string, ...any) {}
 	}
 	return &Pool{
-		cfg:   cfg,
-		now:   cfg.Now,
-		logf:  cfg.Logf,
-		nodes: make(map[int]Node),
+		cfg:       cfg,
+		now:       cfg.Now,
+		logf:      cfg.Logf,
+		nodes:     make(map[int]Node),
+		bootUntil: cfg.Now().Add(15 * time.Second),
+		hint:      cfg.InitialHint,
 	}
 }
 
@@ -265,6 +277,12 @@ func (p *Pool) Fresh(slot int) bool {
 // preference within each node, a pair that failed recently is skipped instead of retried, and the
 // cooldown grows with consecutive failures.
 func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if p.cfg.HedgeDelay > 0 {
+		return p.dialHedged(ctx, host, port)
+	}
 	target := Target{Host: host, Port: port}
 	candidates := p.Nodes()
 	if len(candidates) == 0 {
@@ -321,13 +339,17 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 				// session.Connect only dials with it), so this cannot pull a live stream down
 				cancel()
 				if err == nil {
-					if took >= slowEnough {
-						demotion := p.cfg.Health.Slow(idOf(node.Slot), plane)
-						p.logf("slow plane: %s slot %d answered in %s, others go first for %s",
-							plane, node.Slot, took.Round(time.Millisecond),
-							time.Duration(demotion.DemoteMs)*time.Millisecond)
-					} else {
-						p.cfg.Health.Ok(idOf(node.Slot), plane)
+					// The engine acknowledges SOCKS before dialing the exit. That local reply must
+					// not clear a first-byte demotion or reset repeated remote failures.
+					if _, throughEngine := connector.(*SocksPlanes); !throughEngine {
+						if took >= slowEnough {
+							demotion := p.cfg.Health.Slow(idOf(node.Slot), plane)
+							p.logf("slow plane: %s slot %d answered in %s, others go first for %s",
+								plane, node.Slot, took.Round(time.Millisecond),
+								time.Duration(demotion.DemoteMs)*time.Millisecond)
+						} else {
+							p.cfg.Health.Ok(idOf(node.Slot), plane)
+						}
 					}
 					p.mu.Lock()
 					p.rr = (start + i + 1) % len(candidates)
@@ -350,6 +372,7 @@ func (p *Pool) Dial(ctx context.Context, host string, port int) (Conn, error) {
 						switch verdict {
 						case health.VerdictOk:
 							p.cfg.Health.Ok(id, plane)
+							p.rememberGood(node, plane)
 						case health.VerdictSlow:
 							demotion := p.cfg.Health.Slow(id, plane)
 							p.logf("slow plane: %s slot %d answered after %s, others go first for %s",

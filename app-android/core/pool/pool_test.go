@@ -446,6 +446,85 @@ func TestPlanesThroughTheEngine(t *testing.T) {
 	}
 }
 
+func TestEngineAcknowledgementDoesNotEraseRemoteFailureHistory(t *testing.T) {
+	echoHost, echoPort := startEchoTarget(t)
+	proxy, err := socks.Listen(0, func(ctx context.Context, host string, port int) (socks.Conn, error) {
+		conn, err := net.Dial("tcp", net.JoinHostPort(echoHost, strconv.Itoa(echoPort)))
+		if err != nil {
+			return nil, err
+		}
+		return socks.WrapConn(conn), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	_, portText, _ := net.SplitHostPort(proxy.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	planes := NewSocksPlanes()
+	planes.Set(0, "reality", port)
+	now := time.Now()
+	h := health.New(func() time.Time { return now })
+	p := New(Config{Preference: []string{"reality"}, Connectors: map[string]Connector{"reality": planes}, Health: h})
+	p.Update(node(t, 0, "reality"))
+	h.Fail("0", "reality")
+	now = now.Add(31 * time.Second)
+	conn, err := p.Dial(context.Background(), echoHost, echoPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.Close() // The application cancelled before receiving any remote bytes.
+	if next := h.Fail("0", "reality"); next.Fails != 2 {
+		t.Fatalf("a local SOCKS acknowledgement reset remote failures: %+v", next)
+	}
+	now = now.Add(121 * time.Second)
+	conn, err = p.Dial(context.Background(), echoHost, echoPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err = conn.Write([]byte("proof")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.ReadFull(conn, make([]byte, 5)); err != nil {
+		t.Fatal(err)
+	}
+	if next := h.Fail("0", "reality"); next.Fails != 1 {
+		t.Fatalf("actual remote bytes did not reset failures: %+v", next)
+	}
+}
+
+func TestEngineAcknowledgementKeepsFirstByteDemotion(t *testing.T) {
+	echoHost, echoPort := startEchoTarget(t)
+	proxy, err := socks.Listen(0, func(ctx context.Context, host string, port int) (socks.Conn, error) {
+		conn, err := net.Dial("tcp", net.JoinHostPort(echoHost, strconv.Itoa(echoPort)))
+		if err != nil {
+			return nil, err
+		}
+		return socks.WrapConn(conn), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	_, portText, _ := net.SplitHostPort(proxy.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	planes := NewSocksPlanes()
+	planes.Set(0, "reality", port)
+	h := health.New(nil)
+	h.Slow("0", "reality")
+	p := New(Config{Preference: []string{"reality"}, Connectors: map[string]Connector{"reality": planes}, Health: h})
+	p.Update(node(t, 0, "reality"))
+	conn, err := p.Dial(context.Background(), echoHost, echoPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if !h.Degraded("0", "reality") {
+		t.Fatal("loopback reply erased a remote first-byte demotion")
+	}
+}
+
 // While the engine has not told us a port for a node's plane, that plane is simply not available and the
 // next one is used.
 func TestEnginePlaneWithoutAPortFallsThrough(t *testing.T) {

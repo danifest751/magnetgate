@@ -44,6 +44,7 @@ type Config struct {
 	Relays     []string `json:"relays"`
 	Preference []string `json:"preference"`
 	LogLines   int      `json:"logLines"`
+	HintFile   string   `json:"hintFile,omitempty"`
 }
 
 // State is what the app renders: whether the core is up, where its SOCKS listener is, what it has
@@ -144,8 +145,13 @@ func (inst *instance) bringUp(logf func(string, ...any)) error {
 	}
 	inst.native = native
 	inst.enginePlanes = pool.NewSocksPlanes()
+	hints := newHintStore(inst.cfg.HintFile, inst.cfg.PSK)
 	inst.planes = pool.New(pool.Config{
-		Preference: inst.cfg.Preference,
+		Preference:         inst.cfg.Preference,
+		HedgeDelay:         250 * time.Millisecond,
+		StartupRescueDelay: time.Second,
+		InitialHint:        hints.load(),
+		OnGood:             hints.save,
 		Connectors: map[string]pool.Connector{
 			// the native mux is ours; the rest the engine speaks for us, one loopback listener per node
 			// and plane, and the app fills in which port belongs to which

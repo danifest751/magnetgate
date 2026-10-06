@@ -48,9 +48,17 @@ func Dial(ctx context.Context, proxyAddr, host string, port int) (*Conn, error) 
 	if deadline, ok := ctx.Deadline(); ok {
 		conn.SetDeadline(deadline)
 	}
+	// DialContext only cancels the TCP open. The SOCKS exchange must also release its
+	// socket promptly when another candidate wins or the caller disconnects.
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	if err := connect(conn, host, port); err != nil {
+		stop()
 		conn.Close()
 		return nil, err
+	}
+	if !stop() || ctx.Err() != nil {
+		conn.Close()
+		return nil, ctx.Err()
 	}
 	conn.SetDeadline(time.Time{})
 	return &Conn{Conn: conn}, nil

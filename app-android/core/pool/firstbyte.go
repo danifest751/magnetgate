@@ -37,7 +37,9 @@ func watchFirstByte(
 	// Silence is evidence too, and nobody will come back to look: a connection that produces nothing is
 	// precisely the one whose Read never returns. So the deadline is a timer rather than a check on the
 	// next read.
+	watched.mu.Lock()
 	watched.timer = time.AfterFunc(deadline, func() { watched.judge(false, false) })
+	watched.mu.Unlock()
 	return watched
 }
 
