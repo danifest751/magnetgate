@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"sync"
+	"sync/atomic"
 
 	"golang.org/x/crypto/nacl/secretbox"
 )
@@ -149,10 +151,11 @@ type Frame struct {
 // Kill() on the first violation. Ordering is guaranteed by the sender's ReliableStream, so a mismatch
 // means tampering or a bug, not jitter.
 type Decoder struct {
+	mu      sync.Mutex // serializes the incremental buffer; callbacks may call Kill
 	key     *[32]byte
 	onFrame func(Frame)
 	onKill  func()
-	killed  bool
+	killed  atomic.Bool
 	seq     uint64
 	buffer  []byte
 	used    int
@@ -163,14 +166,18 @@ func NewDecoder(key *[32]byte, onFrame func(Frame), onKill func()) *Decoder {
 	return &Decoder{key: key, onFrame: onFrame, onKill: onKill, buffer: make([]byte, 4), needed: 4}
 }
 
-func (d *Decoder) Killed() bool { return d.killed }
+func (d *Decoder) Killed() bool { return d.killed.Load() }
 
 func (d *Decoder) Kill() {
-	if d.killed {
+	if !d.killed.CompareAndSwap(false, true) {
 		return
 	}
-	d.killed = true
-	d.buffer = nil
+	// Kill can arrive from Close or synchronously from an onFrame callback.
+	// Never wait for Push here: its defer clears the buffer if it owns the lock.
+	if d.mu.TryLock() {
+		d.buffer = nil
+		d.mu.Unlock()
+	}
 	if d.onKill != nil {
 		d.onKill()
 	}
@@ -178,11 +185,20 @@ func (d *Decoder) Kill() {
 
 // Push feeds newly received bytes. An empty chunk is a no-op, so a transport can call it safely.
 func (d *Decoder) Push(chunk []byte) {
-	if d.killed {
+	d.mu.Lock()
+	defer func() {
+		d.mu.Unlock()
+		if d.killed.Load() {
+			d.mu.Lock()
+			d.buffer = nil
+			d.mu.Unlock()
+		}
+	}()
+	if d.killed.Load() {
 		return
 	}
 	offset := 0
-	for !d.killed && offset < len(chunk) {
+	for !d.killed.Load() && offset < len(chunk) {
 		take := d.needed - d.used
 		if remaining := len(chunk) - offset; remaining < take {
 			take = remaining
@@ -246,7 +262,7 @@ func (d *Decoder) Push(chunk []byte) {
 				d.onFrame(Frame{Type: typ, StreamID: streamID, Plain: plain})
 			}()
 		}
-		if d.killed {
+		if d.killed.Load() {
 			return
 		}
 	}
