@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5177",
     "build": "vite build",
+    "build:admin": "vite build --config vite.admin.config.js",
+    "dev:admin": "vite --config vite.admin.config.js",
+    "test:admin": "python3 -m unittest test_admin.py",
     "preview": "vite preview --host 127.0.0.1 --port 5177"
   },
   "dependencies": {
