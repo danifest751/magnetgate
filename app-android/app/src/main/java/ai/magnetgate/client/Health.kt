@@ -48,8 +48,8 @@ object Health {
      */
     val pingMs: Long? = null,
     /**
-     * The TCP handshake to the node that carried this measurement - the first half of [pingMs], and the
-     * only number here that is about our own machine rather than about the destination.
+     * Round trip to the node that carried this measurement: a TCP handshake for private TCP planes,
+     * or an ICMP echo for a confirmed public QUIC exit. This measures our node, not the destination.
      *
      * The two side by side are what a person is actually asking when they ask whether it is slow: a
      * node 40 ms away and a whole path of 800 ms says the far side is slow, while 400 and 800 says the
@@ -57,8 +57,8 @@ object Health {
      *
      * Measured outside the tunnel on purpose - the app excludes itself from its own VPN - because a
      * handshake that went through the tunnel would be measuring the tunnel, which is the other number.
-     * Null when the node's plane is hy2: there is no TCP handshake to time in a transport made of
-     * datagrams, and inventing one would be worse than a dash.
+     * Null when no node measurement is available. Public QUIC measurements are attached by the
+     * service after matching the observed exit against the authenticated node list.
      */
     val nodeMs: Long? = null,
   ) {

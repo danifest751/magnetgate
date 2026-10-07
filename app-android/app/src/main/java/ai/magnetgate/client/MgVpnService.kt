@@ -130,6 +130,19 @@ class MgVpnService : VpnService() {
    */
   private var checkPort = 0
   private val traffic = EngineTraffic()
+  private var cpuWake: android.os.PowerManager.WakeLock? = null
+  private var renewWakeAt = 0L
+
+  /** Foreground alone does not keep QUIC keepalives and recovery running during CPU sleep. */
+  private fun renewCpuWake() {
+    val now = android.os.SystemClock.elapsedRealtime()
+    if (cpuWake?.isHeld == true && now < renewWakeAt) return
+    if (cpuWake == null) cpuWake = getSystemService(android.os.PowerManager::class.java)
+      .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "MagnetGate:tunnel")
+      .apply { setReferenceCounted(false) }
+    cpuWake?.acquire(120_000L)
+    renewWakeAt = now + 30_000L
+  }
 
   /** The packages the tunnel must leave alone - or carry, and only them - read when it comes up. */
   private var excludedPackages: List<String> = emptyList()
@@ -381,6 +394,7 @@ class MgVpnService : VpnService() {
       try {
         session.use(ticket) { PeerRuntime.suspendForVpn() }
         val selectedPublicRoute = !coreless && PublicAccess.enabled(this)
+        if (selectedPublicRoute) session.use(ticket) { renewCpuWake() }
         if (selectedPublicRoute) PublicAccess.refresh(this)
         val selectedPeerRoute = !coreless && !selectedPublicRoute && Settings.peerSource(this)
         val selectedPeerCountry = Settings.peerCountry(this)
@@ -625,14 +639,18 @@ class MgVpnService : VpnService() {
     var checkedAt = 0L
     val recovery = PublicRecovery()
     while (session.current(ticket)) {
+      session.use(ticket) { renewCpuWake() }
       val interval = if (Health.lastCheck?.ok == false) CHECK_RETRY_INTERVAL_MS else 15_000L
       if (checkRequested || System.nanoTime() - checkedAt >= interval * 1_000_000) {
         checkRequested = false
-        val measured = Health.measure(checkPort, CHECK_URL, emptyMap())
+        val raw = Health.measure(checkPort, CHECK_URL, emptyMap())
+        val nodes = PublicAccess.nodes()
+        val usedNode = nodes.firstOrNull { node -> node.planes.any { it.optString("host") == raw.detail.trim() } }
+        val nodeMs = if (raw.ok && usedNode != null) NodePing.measure(raw.detail.trim()) else null
+        val measured = raw.copy(legs = raw.legs?.copy(nodeMs = nodeMs))
         checkedAt = System.nanoTime()
         if (!session.commit(ticket) { Health.record(measured); recordCheck(measured); trimEngineLog() }) return
-        val nodes = PublicAccess.nodes()
-        val used = nodes.firstOrNull { node -> node.planes.any { it.optString("host") == measured.detail.trim() } }?.slot
+        val used = usedNode?.slot
         val next = recovery.observe(measured.ok, used, nodes.map { it.slot }, android.os.SystemClock.elapsedRealtime())
         if (next != null) {
           // Recreate stale QUIC/DNS connections on the alternate authenticated node.
@@ -858,6 +876,9 @@ class MgVpnService : VpnService() {
   }
 
   private fun closeTunnel() {
+    cpuWake?.let { if (it.isHeld) it.release() }
+    cpuWake = null
+    renewWakeAt = 0L
     traffic.attach(0, "")
     running = false
     starting = false

@@ -39,4 +39,5 @@ app-android/libs/
 app-android/local.properties
 app-android/app/build/
 app-android/.gradle/
+app-android/.kotlin/
 app-android/build/
