@@ -1,8 +1,26 @@
 # magnetgate desktop 0.3.4
 
-The desktop app manages a sing-box TUN process and a discovery/native SOCKS client.
-Reality and pinned hysteria2 run directly in sing-box; native is a fallback through the Node client.
-Multiple fresh exits participate in selection. Node is bundled through Electron.
+The shared Windows/macOS app manages a sing-box TUN process. Personal public access uses
+pinned Hysteria2 with individual device credentials. In private PSK mode, a discovery/native
+SOCKS client provides Reality/Hysteria2 endpoints and native fallback. Node is bundled through Electron.
+
+## Connect with a personal code
+
+1. Download the Windows ZIP or the matching macOS DMG from [magnet.norma.so](https://magnet.norma.so/#start).
+   On Windows extract the complete ZIP. On macOS move the app to Applications.
+2. Get and save a personal `MG1-…` code on the same website.
+3. With the VPN off, open **Настройки → Личный доступ MagnetGate**, paste the code and select
+   **Подключить личный доступ**. Activation selects the public connection source.
+4. Return to **Подключение**, select the desired routing mode and connect. Accept the system
+   administrator prompt needed to create the VPN interface.
+
+Both Mac architectures support the same personal-code flow. Mac builds are experimental,
+unsigned and unnotarized; see the validation limits below. Public access carries TCP and UDP
+but needs a reachable UDP/4443 transport. It has no Reality/native fallback and does not use
+the owner's PSK. Limits and revocation are described in the [project overview](../README.md).
+
+Codes are saved through OS-backed Electron secure storage, separate from ordinary configuration.
+Do not share your code or the private files in the app's userData directory.
 
 ## Build and develop
 
@@ -33,7 +51,8 @@ For the pinned electron-builder 26.15.3, `portable.unpackDirName: true` omits `U
 and selects `$PLUGINSDIR/app`. Its implementation differs from the online documentation's
 description of `false`; check this behavior before changing the builder version.
 
-Builds use the valid empty example config by default. Add PSKs under Настройки → Серверы и ключи доступа.
+Builds use the valid empty example config by default. Activate a personal code as above, or
+add your own private-group PSKs under Настройки → Серверы и ключи доступа.
 `MAGNETGATE_PERSONAL_BUILD=1` deliberately embeds the local `magnetgate.config.json`; such an artifact
 contains credentials and is for private use. The resource allowlist excludes local sing-box JSON
 configs and logs. Store user settings in Electron userData; use Open config folder to find it.

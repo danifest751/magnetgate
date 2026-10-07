@@ -1,50 +1,128 @@
-# magnetgate
+# MagnetGate
 
-> A censorship-resistant tunnel with **no broker and a rendezvous that has no fixed address**: the
-> client finds the exit on its own over two independent channels, then connects through a camouflaged
-> data plane. Each exit still exposes network endpoints — see below.
+**Free, open-source VPN access for websites, video and calls.**
 
-**RU:** [README.ru.md](README.ru.md)
+[Get the app and a personal code](https://magnet.norma.so/#start) · [Connection guide](https://magnet.norma.so/#guide) · [Русский](README.ru.md)
 
-**0.11 migration:** native sessions and sealed rendezvous envelopes now use wire version 4.
-Update clients and exits together; older releases cannot discover the new envelopes.
-Node.js 20.19+ is required (22.12+ to build the desktop app). Run `npm test` before rollout.
-The optional desktop firewall guard still needs an elevated Windows failure/recovery field test;
-`strict_route` alone does not protect traffic after the engine exits.
+MagnetGate connects your device to ready-to-use nodes in Finland and the Netherlands.
+You can also run your own nodes for a trusted group. These are separate access modes:
+ordinary users do not need a server, a shared group key or command-line tools.
 
-An exit node publishes a signed and encrypted **offer** into public infrastructure; a client
-discovers it from a shared secret (PSK) and connects — preferring a strongly camouflaged data plane
-(Reality / hysteria2) and falling back to magnetgate's own forward-secret channel. There is no
-centralized broker: rendezvous rides the BitTorrent Mainline DHT **and** a pool of Nostr relays, and
-the data plane looks like ordinary TLS / QUIC to a real website.
+## Get connected
 
-**Scope.** Discovery has no single central broker, but DHT bootstrap nodes, Nostr relays and exit
-endpoints are still network addresses that can be blocked. Several exits can share one PSK through
-rendezvous slots. Credential rotation does not move their IP addresses; fail-over helps only while
-another usable endpoint exists. The entry/egress overlay is a proposal, not an implemented feature.
-Use this as a small trusted-group tool, not as anonymity infrastructure.
+1. Open **[magnet.norma.so](https://magnet.norma.so/#start)** and download the app for your device.
+2. Complete the human verification on the website and save your personal `MG1-…` code.
+   Codes are issued automatically when capacity is available; no payment card is needed.
+3. With the VPN disconnected, open the app's settings and activate the code in
+   **«Личный доступ MagnetGate»**. On Android this is inside **Настройки → Доступ к группе**.
+   On desktop use **«Подключить личный доступ»**.
+4. Return to the connection screen, choose full or selective routing, and connect.
+   Accept the operating system's VPN/administrator prompt when requested.
 
-## Clients and requirements
+Keep the code private. It grants access to your devices and can be revoked on the
+[website](https://magnet.norma.so/#questions). Revocation disconnects its active sessions
+when the node next checks access. Public access does not require entering the node owner's PSK.
 
-The optional [user-connection pilot](PEER-PILOT.md) adds a separate authenticated WSS catalogue
-and relay. Its central service applies only to this new mode; the PSK-based server discovery
-described above remains independent. Peer mode currently supports TCP web traffic only.
+## Downloads and platforms
 
-| Component | Current package version | Requirements / guide |
+Use the current download links on the **[official website](https://magnet.norma.so/#start)**.
+Installers are served there; a GitHub tag alone does not indicate a current installer.
+
+| Platform | Download / installation | Status |
 |---|---|---|
-| Node core and exit | 0.11.1 | Node.js 20.19+; commands below |
-| Windows desktop | 0.3.3 | Windows x64; Node.js 22.12+ for building; [desktop guide](app/README.md) |
-| Android | 0.1.0 | Android 8.0+ (API 26); `arm64-v8a` phones or `x86_64` emulator; [Android guide](app-android/README.md) |
+| Windows x64 | ZIP: extract all files, run `magnetgate.exe` | Desktop 0.3.4; administrator access for VPN |
+| macOS, Apple Silicon | ARM64 DMG: move the app to Applications | Desktop 0.3.4; experimental, unsigned and unnotarized |
+| macOS, Intel | x64 DMG: move the app to Applications | Desktop 0.3.4; experimental, unsigned and unnotarized |
+| Android 8+ | ARM64 APK: allow installation from the browser/file manager | Native client; build identifier is shown in Settings |
+| Linux | Node.js CLI / self-hosted exit from source | No public-code desktop installer |
+| iOS | — | No app available |
 
-These package versions are independent. The current native protocol and sealed envelopes use wire
-v4; offer JSON uses schema v3. Changes on `main` are described under Unreleased in the changelog;
-a version label does not imply a published installer or an app-store release.
+**Which Mac build?** Apple menu → About This Mac: an Apple M-series chip means Apple Silicon;
+an Intel processor means Intel. Both builds contain the same personal-code functionality.
+macOS CI builds and automated checks pass on both architectures; interactive installation,
+VPN authorization, real TUN connectivity and sleep/wake still need testing on real Macs.
+Only authorize an unsigned build after verifying its source.
 
-Android has **Home / Rules / Settings**, a visible **RU / EN** switch, website and application
-rules, country preference and connection diagnostics. Language changes preserve the VPN and drafts.
-The Windows interface is currently Russian; its guide describes its own controls and save behavior.
+Desktop currently uses Russian labels. Android has RU/EN, with the new personal-access panel
+currently in Russian. Windows/macOS and Android have separate interfaces.
 
-## How it works
+## What public access includes
+
+- **TCP and UDP**, including the transport needed by voice and video calls. There is no
+  separate call ban. Actual call quality depends on the network and the calling application.
+- Full-device routing or selective routing; app-specific exclusions are available on Android.
+- Nodes in **Finland and the Netherlands**, with country selection.
+- An individual access code and separate device credentials; the owner's group PSK is never
+  included in the public app, page or issued connection profile.
+
+On Android, reconnect after changing the country for an active public connection.
+
+| Initial public beta limit | Value |
+|---|---|
+| Price | Free |
+| Code lifetime | 30 days |
+| Devices | Up to 2 per code |
+| Daily traffic | 5 GiB total across those devices, reset at 00:00 UTC |
+| Connection bandwidth | Up to 20 Mbit/s in each direction; not a guaranteed speed |
+
+Capacity is shared. Human verification, registration limits, per-node connection limits and a
+global traffic budget prevent mass registrations and overload. New codes may temporarily be
+unavailable. A large shared network can reach its registration limit before you request a code.
+Traffic accounting is periodic, so quota enforcement is approximate rather than byte-exact.
+
+**Network requirement:** public access uses Hysteria2 over UDP/4443. It carries both TCP and
+UDP application traffic, but it cannot connect when the underlying network blocks this UDP
+transport entirely. The public mode does not currently fall back to Reality/native TCP.
+
+## How personal access protects the owner's key
+
+```text
+Website + human verification → personal code
+App + code + device ID       → HTTPS profile service → device credentials + pinned certificate
+App                         → Hysteria2 public listener → Internet (TCP + UDP)
+Node                        → access and quota service → allow / reject / disconnect
+```
+
+This mode uses a centralized HTTPS control service and a separate public listener on each node.
+It does not use PSK discovery through DHT/Nostr. Revoking one code does not rotate the owner's
+private key or interrupt other accounts. Codes are stored server-side as keyed digests;
+device credentials are separate from the owner's PSK.
+
+A user's own code and connection credentials necessarily exist on that user's device and can
+be copied by its owner. This is individual, revocable access, not a way to hide a shared secret
+inside an app. Desktop uses Electron's OS-backed secure storage; Android uses encrypted settings.
+The access service stores account/device identifiers, expiry and traffic totals; the issuer
+uses a daily keyed network identifier for registration limits. It does not collect browsing
+history in its access database. Cloudflare processes website/control requests and human verification;
+VPN traffic travels to the nodes. This is not an anonymity service or a guarantee against all leaks.
+
+## Three distinct modes
+
+| Mode | Credentials and discovery | Traffic |
+|---|---|---|
+| **Personal public access** | Website code; centralized HTTPS profiles | TCP + UDP through public Hysteria2 nodes |
+| **Your own trusted group** | Shared PSK; Mainline DHT + Nostr | Reality / Hysteria2 / native fallback according to client and transport |
+| **Peer pilot** | Separate authenticated WSS catalogue/relay and roles | Experimental TCP web traffic on ports 80/443; not the public-code service |
+
+See [PEER-PILOT.md](PEER-PILOT.md) for peer sharing. Peer restrictions do not apply to personal
+access to the public nodes. Do not distribute an owner-configured private build as a public installer.
+
+## Self-hosting: trusted-group architecture
+
+The following architecture, data-plane, CLI, discovery and rotation sections describe **your own
+PSK-based group**. They are not required to connect using a website code.
+
+The Node core/exit version is **0.11.1**, desktop is **0.3.4**, and Android uses a separate
+git-derived build identifier. Node.js 20.19+ is required for the core; desktop builds need 22.12+.
+Native sessions and sealed rendezvous envelopes use **wire v4**, and offer JSON uses schema v3.
+Update private clients and exits together when migrating from older wire versions.
+
+In this mode an exit publishes a signed, encrypted offer to Mainline DHT and Nostr; clients find
+it with the shared PSK. There is no central discovery broker for this mode. Bootstrap nodes,
+relays and exit addresses can still be blocked, and key rotation does not change server IPs.
+Use a strong random PSK for a small trusted group. The proposed entry/egress overlay is not implemented.
+
+## Private mode: how it works
 
 ```
 Application ─▶ SOCKS5 127.0.0.1:1080  (magnetgate client, split-tunnel rules: direct vs proxy)
@@ -67,7 +145,7 @@ channel adds a forward-secret handshake (ephemeral X25519 authenticated under th
 protected), so a later PSK compromise does not decrypt past recorded native traffic; Reality and
 hysteria2 bring their own well-studied camouflage and transport.
 
-## Data planes
+## Private mode: data planes
 
 The offer advertises a list (`dp`) of data-plane endpoints. The client picks by preference and
 fails over on error:
@@ -83,7 +161,7 @@ with pinned SHA-256 checksums; magnetgate generates its configuration and superv
 Android embeds the core and engine in one AAR managed by its VPN service.
 `MAGNETGATE_DATA_PLANE=mgt` forces the Node client to use the native channel only.
 
-## Quick start
+## Private mode: CLI quick start
 
 **Exit (a VPS with a public IPv4):**
 ```bash
@@ -217,7 +295,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-client-windows.ps1 -Con
 Linux autostart: adapt `scripts/magnetgate-client.service` as `magnetgate-client@.service`
 and enable an instance for the intended user; verify its working directory and config permissions.
 
-## Credential rotation
+## Private mode: credential rotation
 
 `scripts/rotate-dp.mjs` (daily systemd timer, installed by `setup-singbox.sh`) rotates the Reality
 shortId+uuid and the hysteria2 password, keeping the previous generation valid for one interval
@@ -237,7 +315,7 @@ validation. Routing while an engine runs is not protection after it exits.
 `scripts/vpn-windows.ps1` (tun2proxy) and `scripts/vpn-singbox-windows.ps1` are deprecated reference
 launchers. They do not enable the persistent guard. Do not run them alongside the desktop VPN.
 
-## Deployment
+## Private mode: deployment
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers Linux provisioning, required ports, multi-node settings,
 rotation, backups and pull-based updates. `magnetgate-deploy.timer` checks `origin/main` every
@@ -250,7 +328,7 @@ commits. This is separate from the runtime service sandboxes.
 ## Documentation
 
 - [Android guide](app-android/README.md) · [Русская инструкция Android](app-android/README.ru.md)
-- [Windows desktop guide](app/README.md)
+- [Windows and macOS desktop guide](app/README.md)
 - [Linux deployment](DEPLOYMENT.md)
 - [Development and validation](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md) · [Roadmap](ROADMAP.md)
@@ -260,7 +338,9 @@ Public instructions live in the tracked files above. Internal design notes and d
 
 ## Status
 
-Implemented; validation scope differs by component (see the client guides):
+Public TCP/UDP connectivity has been checked against both nodes with HTTPS, UDP DNS and STUN.
+This does not replace an end-to-end call test or real-device testing on every platform.
+The remaining list describes the private group mode; validation scope differs by component:
 
 - **Rendezvous** over two independent channels — Mainline DHT (BEP 44) + Nostr — with automatic
   merge/fail-over; offers signed + encrypted under the PSK.
@@ -288,7 +368,7 @@ who holds — or brute-forces a weak — PSK can locate the exit: **use a ≥128
 
 [ROADMAP.md](ROADMAP.md) separates completed work from remaining plans. Android, multi-node
 discovery, per-plane health and the desktop TUN are implemented. Remaining work includes broader
-device coverage, controlled desktop firewall failure/recovery tests, release distribution,
+device coverage, controlled desktop firewall failure/recovery tests, signed release distribution,
 commit-signing operations and automatic slot allocation. Entry/egress overlay, a third discovery
 channel, WebRTC, multipath and store-and-forward remain proposals.
 
