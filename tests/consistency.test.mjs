@@ -251,8 +251,9 @@ test("drift: every client tries a node's planes in the same order", async () => 
 
 test('drift: the phone gives UDP a road that is not the core', () => {
   const android = read('app-android/app/src/main/java/ai/magnetgate/client/SingBoxConfig.kt')
-  assert.match(android, /planes\.filter \{ it\.plane == "hy2" && it\.slot in selectedSlots \}/)
-  assert.match(android, /matching\.ifEmpty \{ nodes \}/)
+  assert.match(android, /it\.plane in listOf\("hy2", "reality"\)/)
+  assert.match(android, /matching \+ nodes\.filter \{ it !in matching \}/)
+  assert.match(android, /"interrupt_exist_connections", false/)
   assert.match(android, /\.put\("type", "urltest"\)\.put\("tag", "udp-proxy"\)/)
   assert.match(android, /udpTags\.isEmpty\(\)\) udp\.put\("action", "reject"\)/)
   assert.match(android, /udp\.put\("outbound", "udp-proxy"\)/)
