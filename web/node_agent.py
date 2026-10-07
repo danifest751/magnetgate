@@ -4,18 +4,33 @@ import os
 import threading
 import time
 import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
+def retry_central(send):
+    """Retry transient transport failures once; auth decisions and quotas are unchanged."""
+    for attempt in range(2):
+        try:
+            return send()
+        except (urllib.error.URLError, TimeoutError) as error:
+            if attempt or isinstance(error, urllib.error.HTTPError) and error.code < 500:
+                raise
+            time.sleep(0.25)
+
+
 def run(config):
+    central_base = config.get('centralBase', 'https://magnet.norma.so/api/')
+    if central_base not in ('https://magnet.norma.so/api/', 'http://127.0.0.1:3410/api/'):
+        raise ValueError('invalid central endpoint')
     lock = threading.Lock()
     state = {'healthy': False, 'online': {}, 'pending': {}, 'epoch': ''}
 
-    def request(url, data=None, secret=''):
+    def request(url, data=None, secret='', timeout=6):
         raw = json.dumps(data).encode() if data is not None else None
         req = urllib.request.Request(url, data=raw, headers={'Content-Type': 'application/json', 'Authorization': secret, 'User-Agent': 'MagnetGate-Node/1.0'})
-        with urllib.request.urlopen(req, timeout=6) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             payload = response.read(131073)
             if len(payload) > 131072:
                 raise ValueError('oversized response')
@@ -25,7 +40,7 @@ def run(config):
         return request('http://127.0.0.1:3412/' + path, data, config['statsSecret'])
 
     def central(path, data):
-        return request('https://magnet.norma.so/api/' + path, data, 'Bearer ' + config['nodeKey'])
+        return retry_central(lambda: request(central_base + path, data, 'Bearer ' + config['nodeKey'], timeout=3))
 
     def monitor():
         while True:
@@ -37,11 +52,14 @@ def run(config):
                 traffic = stats('traffic')
                 report = central('node-report', {'online': online, 'traffic': traffic, 'epoch': epoch})
                 if report.get('kick'):
+                    print('central policy requested disconnection', flush=True)
                     stats('kick', report['kick'])
                 with lock:
                     state.update(healthy=True, online=online, epoch=epoch)
                     state['pending'] = {k: t for k, t in state['pending'].items() if t > time.monotonic() and k not in online}
-            except Exception:
+            except Exception as error:
+                # Do not log response bodies, identities, addresses or credentials.
+                print('accounting unavailable: ' + type(error).__name__, flush=True)
                 with lock:
                     state['healthy'] = False
                 # При потере учёта новые входы закрываются, текущие отключаются.

@@ -16,6 +16,7 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
 ) {
   val ui = LocalUiStrings.current
   val context = LocalContext.current
+  val publicRoute = PublicAccess.enabled(context)
   var nodesOpen by rememberSaveable { mutableStateOf(false) }
   var liveOpen by rememberSaveable { mutableStateOf(false) }
   var logOpen by rememberSaveable { mutableStateOf(false) }
@@ -32,43 +33,44 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
         latencyPair(check?.takeIf { vpnUp && it.ok }?.legs) ?: ui.text(R.string.not_measured),
       )
       ValueRow(ui.text(R.string.https_request), check?.takeIf { vpnUp }?.let { ui.durationOf(it.tookMs) } ?: ui.text(R.string.not_measured))
-      ValueRow(ui.text(R.string.last_check_ip), check?.takeIf { vpnUp && it.ok }?.detail ?: ui.text(R.string.not_confirmed))
       Text(ui.text(R.string.check_scope_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     item { BottomAction(if (checking) ui.text(R.string.checking_action) else ui.text(R.string.check_again), enabled = vpnUp && !checking, secondary = true, onClick = onTest) }
-    if (engineError.isNotBlank()) item { InfoNotice(engineError, true) }
-    if (status.error.isNotBlank()) item { InfoNotice(status.error, true) }
-    if (check != null && !check.ok && vpnUp) item { InfoNotice(check.detail, true) }
+    if (engineError.isNotBlank()) item { InfoNotice(diagnosticText(engineError), true) }
+    if (status.error.isNotBlank()) item { InfoNotice(diagnosticText(status.error), true) }
+    if (check != null && !check.ok && vpnUp) item { InfoNotice(diagnosticText(check.detail), true) }
     item {
       HorizontalDivider()
-      ActionRow(ui.text(R.string.servers_transports), ui.text(R.string.server_relay_count, status.nodes.size, status.relays.count { it.answering }, status.relays.size)) { nodesOpen = !nodesOpen }
+      ActionRow(ui.text(R.string.servers_transports), if (publicRoute) ui.text(R.string.public_nodes_count, status.nodes.size) else ui.text(R.string.server_relay_count, status.nodes.size, status.relays.count { it.answering }, status.relays.size)) { nodesOpen = !nodesOpen }
     }
     if (nodesOpen) {
       if (status.nodes.isEmpty()) item { Text(ui.text(R.string.servers_empty)) }
       items(status.nodes, key = { "${it.slot}:${it.name}" }) { node ->
         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-          Text(node.title, style = MaterialTheme.typography.titleMedium)
+          Text(diagnosticText(node.title), style = MaterialTheme.typography.titleMedium)
           Text(ui.text(R.string.country_slot, ui.countryName(node.country), node.slot), style = MaterialTheme.typography.bodySmall)
-          node.planes.forEach { plane -> ValueRow(plane.type, plane.endpoint.ifBlank { ui.text(R.string.address_missing) }) }
+          node.planes.forEach { plane -> Text(plane.type, style = MaterialTheme.typography.bodySmall) }
           node.paused.filter { it.remainingMs(System.currentTimeMillis()) > 0 }.forEach { pause ->
             InfoNotice(ui.text(R.string.transport_pause, pause.type, ui.text(if (pause.slow) R.string.transport_slow else R.string.transport_failed), pause.remainingMs(System.currentTimeMillis()) / 1000))
           }
           HorizontalDivider()
         }
       }
-      item { SectionLabel(ui.text(R.string.discovery_relays)) }
+      if (!publicRoute) item { SectionLabel(ui.text(R.string.discovery_relays)) }
       items(status.relays, key = { it.url }) { relay ->
-        ValueRow(relay.host, when { relay.answering -> ui.text(R.string.responses_received); relay.error.isNotEmpty() -> relay.error; relay.connected -> ui.text(R.string.connected_no_responses); else -> ui.text(R.string.not_connected) })
+        ValueRow(diagnosticText(relay.host), diagnosticText(when { relay.answering -> ui.text(R.string.responses_received); relay.error.isNotEmpty() -> relay.error; relay.connected -> ui.text(R.string.connected_no_responses); else -> ui.text(R.string.not_connected) }))
       }
       item {
-        SectionLabel(ui.text(R.string.core_measurements))
+        SectionLabel(ui.text(if (publicRoute) R.string.public_connection_details else R.string.core_measurements))
         // Which build is this? The first question asked about any bug, and until now the screen could
         // not answer it: the core's version is a constant, and the app's was 1 for every build ever
         // made. This one names the commit, and says so when the tree it was built from was dirty.
         ValueRow(ui.text(R.string.app_build), appBuild(LocalContext.current))
-        ValueRow(ui.text(R.string.core_version), status.version.ifBlank { ui.text(R.string.unknown) })
-        ValueRow("SOCKS", if (status.socksPort > 0) "127.0.0.1:${status.socksPort}" else ui.text(R.string.not_running))
-        ValueRow(ui.text(R.string.slots), status.slots.joinToString(", ").ifBlank { ui.text(R.string.none) })
+        if (!publicRoute) {
+          ValueRow(ui.text(R.string.core_version), status.version.ifBlank { ui.text(R.string.unknown) })
+          ValueRow("SOCKS", ui.text(if (status.socksPort > 0) R.string.running else R.string.not_running))
+          ValueRow(ui.text(R.string.slots), status.slots.joinToString(", ").ifBlank { ui.text(R.string.none) })
+        }
         ValueRow(ui.text(R.string.rule_generation), RuleSets.generation(context).toString())
         ValueRow(ui.text(R.string.sent_received), "${ui.bytes(status.sent)} / ${ui.bytes(status.received)}")
         check?.takeIf { vpnUp }?.legs?.let {
@@ -76,18 +78,18 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
         }
       }
     }
-    item {
+    if (!publicRoute) item {
       HorizontalDivider()
       ActionRow(ui.text(R.string.connections), ui.text(R.string.connection_counts, status.live.count { it.open }, status.live.size)) { liveOpen = !liveOpen }
     }
-    if (liveOpen) {
+    if (!publicRoute && liveOpen) {
       if (status.live.isEmpty()) item { Text(ui.text(R.string.connections_empty), style = MaterialTheme.typography.bodySmall) }
-      items(status.live.take(20)) { live -> ValueRow(live.where, ui.text(R.string.connection_detail, ui.text(if (live.open) R.string.connection_open else R.string.connection_closed), live.plane, live.slot, ui.bytes(live.sent), ui.bytes(live.received))) }
+      items(status.live.take(20)) { live -> ValueRow(diagnosticText(live.where), ui.text(R.string.connection_detail, ui.text(if (live.open) R.string.connection_open else R.string.connection_closed), live.plane, live.slot, ui.bytes(live.sent), ui.bytes(live.received))) }
     }
-    item { HorizontalDivider(); ActionRow(ui.text(R.string.core_log), ui.text(R.string.core_log_hint)) { logOpen = !logOpen } }
-    if (logOpen) {
+    if (!publicRoute) item { HorizontalDivider(); ActionRow(ui.text(R.string.core_log), ui.text(R.string.core_log_hint)) { logOpen = !logOpen } }
+    if (!publicRoute && logOpen) {
       if (status.logs.isEmpty()) item { Text(ui.text(R.string.log_empty)) }
-      items(status.logs) { line -> Text(line, style = MaterialTheme.typography.bodySmall, fontFamily = Mono) }
+      items(status.logs) { line -> Text(diagnosticText(line), style = MaterialTheme.typography.bodySmall, fontFamily = Mono) }
     }
   }
 }

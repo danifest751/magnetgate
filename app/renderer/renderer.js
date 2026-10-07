@@ -34,7 +34,7 @@ function showError(err) {
   renderStatus()
 }
 function text(id, value) {
-  $(id).textContent = value
+  $(id).textContent = MGPrivacy.diagnosticText(value)
 }
 function renderStatus() {
   const view = MGView.connectionView(cfg, st)
@@ -84,7 +84,6 @@ function renderStatus() {
         ? 'Серверов настроено: ' + cfg.exits.length
         : 'Сервер не настроен'
   )
-  text('proxyIp', st.vpnOn ? st.proxyEgress || '—' : '—')
   const protection = st.trafficProtected
     ? 'Строгая защита проверена'
     : st.guardRecoveryRequired
@@ -114,8 +113,6 @@ function renderStatus() {
     view.connected ? 'Проверен' : st.vpnOn ? 'Ещё не подтверждён' : 'Не проверяется'
   )
   text('diagMode', st.vpnOn ? names[st.activeMode] || 'Ещё не применён' : '—')
-  text('diagSystem', st.vpnOn ? st.egress || '—' : '—')
-  text('diagProxy', st.vpnOn ? st.proxyEgress || '—' : '—')
   text('diagGuard', protection)
   const planes = st.stats && Array.isArray(st.stats.planes) ? st.stats.planes : []
   text('diagPlanes', st.vpnOn ? planes.length ? planes.join(', ') : 'ожидание трафика' : '—')
@@ -373,7 +370,7 @@ function fillAdvanced() {
 function appendLog(line) {
   const el = $('log'),
     atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 24
-  el.textContent = (el.textContent + '\n' + line).split('\n').slice(-500).join('\n')
+    el.textContent = (el.textContent + '\n' + MGPrivacy.diagnosticText(line)).split('\n').slice(-500).join('\n')
   if (atBottom) el.scrollTop = el.scrollHeight
 }
 async function addSite() {

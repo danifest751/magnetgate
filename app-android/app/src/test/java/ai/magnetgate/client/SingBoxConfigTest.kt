@@ -6,6 +6,19 @@ import org.junit.Test
 import java.io.File
 
 class SingBoxConfigTest {
+  @Test fun listenersUseDistinctPortsAcrossAllAdvertisedNodes() {
+    val config = JSONObject(SingBoxConfig.build(1080, false, (0..15).map { node(it) }, publicRoute = true).json)
+    val inbounds = config.getJSONArray("inbounds")
+    val ports = (0 until inbounds.length()).map { inbounds.getJSONObject(it) }
+      .filter { it.has("listen_port") }.map { it.getInt("listen_port") }
+    val api = config.getJSONObject("experimental").getJSONObject("clash_api")
+    assertTrue(api.getString("external_controller").startsWith("127.0.0.1:"))
+    assertTrue(api.getString("secret").length >= 32)
+    assertFalse(ports.contains(api.getString("external_controller").substringAfterLast(':').toInt()))
+    assertEquals(17, ports.size)
+    assertEquals(ports.size, ports.toSet().size)
+    assertFalse(ports.contains(1080))
+  }
   @Test fun publicAccessCarriesBothTcpAndUdpWithoutPskOrNativeCore() {
     val config = JSONObject(SingBoxConfig.build(0, false, listOf(node(0), node(1)), publicRoute = true).json)
     val outbounds = config.getJSONArray("outbounds")
@@ -136,6 +149,7 @@ class SingBoxConfigTest {
     org.junit.Assume.assumeTrue("Install the pinned engine with scripts/get-singbox.ps1", root != null)
     val built = SingBoxConfig.build(1080, false, listOf(node(0)))
     val config = JSONObject(built.json)
+    config.getJSONObject("log").put("level", "info")
     val inbounds = config.getJSONArray("inbounds")
     inbounds.remove(0) // Run the actual loopback plane, without requiring a Windows tun driver.
     val outbounds = config.getJSONArray("outbounds")
@@ -155,7 +169,10 @@ class SingBoxConfigTest {
       val limit = System.nanoTime() + 5_000_000_000L
       var socket: java.net.Socket? = null
       while (socket == null && System.nanoTime() < limit && engine.isAlive) {
-        socket = runCatching { java.net.Socket("127.0.0.1", built.planes.single().port) }.getOrNull()
+        // A bound listener can accept before the engine has finished starting its router.
+        if (log.readText().contains("sing-box started")) {
+          socket = runCatching { java.net.Socket("127.0.0.1", built.planes.single().port) }.getOrNull()
+        }
         if (socket == null) Thread.sleep(30)
       }
       assertNotNull(log.readText(), socket)
@@ -164,7 +181,10 @@ class SingBoxConfigTest {
         val input = it.getInputStream()
         val output = it.getOutputStream()
         output.write(byteArrayOf(5, 1, 0)); output.flush()
-        assertEquals(5, input.read()); assertEquals(0, input.read())
+        val greetingVersion = input.read()
+        val greetingMethod = input.read()
+        assertEquals(log.readText(), 5, greetingVersion)
+        assertEquals(log.readText(), 0, greetingMethod)
         val unreachable = java.net.ServerSocket(0).use { server -> server.localPort }
         output.write(byteArrayOf(5, 1, 0, 1, 127, 0, 0, 1,
           (unreachable shr 8).toByte(), unreachable.toByte())); output.flush()

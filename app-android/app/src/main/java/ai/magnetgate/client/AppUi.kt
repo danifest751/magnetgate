@@ -266,7 +266,7 @@ fun AppRoot(
     while (true) {
         peerStatus = withContext(Dispatchers.IO) { PeerRuntime.status() }
         if (peerStatus.optBoolean("connected")) peerError = ""
-      val metadata = withContext(Dispatchers.IO) {
+      val metadata = if (PublicAccess.enabled(context)) CoreStatus() else withContext(Dispatchers.IO) {
         runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrElse { CoreStatus(error = it.message.orEmpty()) }
       }
       if (metadata.nodes.isNotEmpty()) serverCatalogue = CoreStatus(nodes = metadata.nodes, countries = metadata.countries)

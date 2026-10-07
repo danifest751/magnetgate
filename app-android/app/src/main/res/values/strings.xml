@@ -130,7 +130,6 @@
   <string name="not_checked">Not checked yet</string>
   <string name="not_measured">Not measured</string>
   <string name="https_request">Full HTTPS request</string>
-  <string name="last_check_ip">Last check IP address</string>
   <string name="not_confirmed">Not confirmed</string>
   <string name="check_scope_hint">The last check does not determine the route of every concurrent connection.</string>
   <string name="checking_action">Checking…</string>
@@ -246,4 +245,6 @@
   <string name="peer_share_guests">Simultaneous users</string>
   <string name="peer_share_quota">Today: %1$d / 1024 MiB; month: %2$d / 20480 MiB</string>
   <string name="peer_share_save">Save</string>
+    <string name="public_connection_details">Connection details</string>
+    <string name="public_nodes_count">Available nodes: %1$d</string>
 </resources>

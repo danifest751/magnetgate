@@ -106,9 +106,9 @@ geographic restriction.
 
 A running VPN interface alone does not mean the internet works. The app's working state requires
 a fresh successful DNS/HTTPS check through the engine's proxy path. Diagnostics separates tunnel
-latency from full request time and shows the last check's IP, discovery relays, servers/transports,
+latency from full request time and shows discovery relays, servers/transports,
 connection counters and recent core events. The last check does not establish the exit IP or route
-of every concurrent connection.
+of every concurrent connection. IP addresses are hidden in the interface and displayed logs.
 
 For Android's system-level blocking while the VPN is unavailable, configure **Always-on VPN** and
 **Block connections without VPN** in Android VPN settings where supported. This can also block

@@ -36,6 +36,7 @@ object PublicAccess {
   }
   fun status(context: Context) = CoreStatus(
     running = MgVpnService.isRunning(), country = Settings.country(context),
+    sent = MgVpnService.publicTraffic().sent, received = MgVpnService.publicTraffic().received,
     countries = nodes().map { CountryRow(it.country, 1) },
     nodes = nodes().map { NodeRow(it.slot, "MagnetGate", "Личный доступ", it.country, listOf(Plane("hy2", "")), emptyList()) },
   )

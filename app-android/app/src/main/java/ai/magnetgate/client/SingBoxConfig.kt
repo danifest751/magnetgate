@@ -39,7 +39,8 @@ object SingBoxConfig {
    * The configuration, the plane-to-port mapping the core has to be told about, and the loopback port
    * the health check goes through. [checkPort] is 0 when there is no engine path to check.
    */
-  data class Built(val json: String, val planes: List<EnginePlane>, val checkPort: Int = 0)
+  data class Built(val json: String, val planes: List<EnginePlane>, val checkPort: Int = 0,
+    val statsPort: Int = 0, val statsSecret: String = "")
 
   fun build(
     socksPort: Int,
@@ -86,6 +87,7 @@ object SingBoxConfig {
     val planeInbounds = JSONArray()
     val rules = JSONArray()
     val planes = mutableListOf<EnginePlane>()
+    val allocatedPorts = mutableSetOf(socksPort)
 
     // These two come first, before anything is routed anywhere, exactly as in app/vpn-config.cjs.
     //
@@ -115,7 +117,7 @@ object SingBoxConfig {
         outbounds.put(outbound)
 
         // the core reaches that plane through this listener, and only this listener
-        val port = freePort()
+        val port = freePort(allocatedPorts)
         val inbound = "in-${node.slot}-$type"
         planeInbounds.put(
           JSONObject()
@@ -253,7 +255,7 @@ object SingBoxConfig {
     // with the resolver and the strategy configured above - so a resolver that cannot work (a UDP one
     // behind a SOCKS entry that refuses UDP), or one handing back AAAA records that the rule below
     // rejects, fails the check instead of quietly costing the user their afternoon.
-    val checkPort = if (coreless) 0 else freePort()
+    val checkPort = if (coreless) 0 else freePort(allocatedPorts)
     if (checkPort != 0) {
       // straight into `inbounds`: the plane list was copied into it further up, and adding to that list
       // here would leave this listener out of the configuration without a word
@@ -327,7 +329,11 @@ object SingBoxConfig {
         // own resolver - outside the tunnel, and visible to it.
         .put("default_domain_resolver", "remote"),
     )
-    return Built(config.toString(2), planes, checkPort)
+    val statsPort = if (publicRoute) freePort(allocatedPorts) else 0
+    val statsSecret = if (publicRoute) java.util.UUID.randomUUID().toString() else ""
+    if (publicRoute) config.put("experimental", JSONObject().put("clash_api", JSONObject()
+      .put("external_controller", "127.0.0.1:$statsPort").put("secret", statsSecret)))
+    return Built(config.toString(2), planes, checkPort, statsPort, statsSecret)
   }
 
   /**
@@ -413,5 +419,15 @@ object SingBoxConfig {
   }
 
   /** A free loopback port for a plane's listener: taken now, bound by the engine when it starts. */
-  private fun freePort(): Int = ServerSocket(0).use { it.localPort }
+  private fun freePort(allocated: MutableSet<Int>): Int {
+    val reservations = mutableListOf<ServerSocket>()
+    try {
+      while (true) {
+        val socket = ServerSocket(0).also { reservations.add(it) }
+        if (allocated.add(socket.localPort)) return socket.localPort
+      }
+    } finally {
+      reservations.forEach { it.close() }
+    }
+  }
 }

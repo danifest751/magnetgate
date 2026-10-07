@@ -128,7 +128,6 @@
   <string name="not_checked">Ещё не выполнена</string>
   <string name="not_measured">Не измерен</string>
   <string name="https_request">Полный HTTPS-запрос</string>
-  <string name="last_check_ip">IP последней проверки</string>
   <string name="not_confirmed">Не подтверждён</string>
   <string name="check_scope_hint">Последняя проверка не определяет маршрут всех параллельных соединений.</string>
   <string name="checking_action">Проверяем…</string>
@@ -244,4 +243,6 @@
   <string name="peer_share_guests">Пользователей одновременно</string>
   <string name="peer_share_quota">За день: %1$d / 1024 МиБ; за месяц: %2$d / 20480 МиБ</string>
   <string name="peer_share_save">Сохранить</string>
+    <string name="public_connection_details">Состояние подключения</string>
+    <string name="public_nodes_count">Доступных узлов: %1$d</string>
 </resources>

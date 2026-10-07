@@ -65,6 +65,7 @@ class MgVpnService : VpnService() {
 
     /** Whether a tunnel is up, for the screen. */
     fun isRunning(): Boolean = current?.running == true
+    internal fun publicTraffic(): EngineTraffic.Totals = current?.traffic?.totals ?: EngineTraffic.Totals()
 
     fun isStarting(): Boolean = current?.let { it.starting && !it.running } == true
     fun hasInstance(): Boolean = current != null
@@ -128,6 +129,7 @@ class MgVpnService : VpnService() {
    * never remembered across one.
    */
   private var checkPort = 0
+  private val traffic = EngineTraffic()
 
   /** The packages the tunnel must leave alone - or carry, and only them - read when it comes up. */
   private var excludedPackages: List<String> = emptyList()
@@ -422,8 +424,11 @@ class MgVpnService : VpnService() {
           Mgbox.startEngine(built.json, MgTunPlatform(this))
           engineNodeSignature = nodeSignature(nodes, port, country)
           enginePlanes = built.planes
-          for (plane in built.planes) {
-            Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+          // Public access routes directly through the engine, without a PSK discovery core.
+          if (!coreless && !selectedPeerRoute && !selectedPublicRoute) {
+            for (plane in built.planes) {
+              Mgbox.setPlaneSocksPort(plane.slot.toLong(), plane.plane, plane.port.toLong())
+            }
           }
           // The country the user prefers is told to the core once it is up: it changes which node the next
           // stream prefers, not how anything is built, so it never needs a reconnect.
@@ -434,6 +439,7 @@ class MgVpnService : VpnService() {
           running = true
           corePort = port
           checkPort = built.checkPort
+          traffic.attach(built.statsPort, built.statsSecret, newSession = true)
           Log.i(
             TAG,
             "tunnel up (engine ${Mgbox.coreVersion()}, core $port, engine planes ${built.planes.size}, " +
@@ -609,13 +615,46 @@ class MgVpnService : VpnService() {
   }
 
   private fun watchPublic(ticket: Long) {
+    Thread({
+      while (session.current(ticket)) {
+        runCatching { traffic.poll() }
+          .onFailure { if (session.current(ticket)) Log.w(TAG, "engine traffic unavailable: ${it.javaClass.simpleName}") }
+        try { Thread.sleep(1500) } catch (_: InterruptedException) { return@Thread }
+      }
+    }, "public-traffic").apply { isDaemon = true; start() }
     var checkedAt = 0L
+    val recovery = PublicRecovery()
     while (session.current(ticket)) {
-      if (checkRequested || System.nanoTime() - checkedAt >= CHECK_INTERVAL_MS * 1_000_000) {
+      val interval = if (Health.lastCheck?.ok == false) CHECK_RETRY_INTERVAL_MS else 15_000L
+      if (checkRequested || System.nanoTime() - checkedAt >= interval * 1_000_000) {
         checkRequested = false
         val measured = Health.measure(checkPort, CHECK_URL, emptyMap())
         checkedAt = System.nanoTime()
         if (!session.commit(ticket) { Health.record(measured); recordCheck(measured); trimEngineLog() }) return
+        val nodes = PublicAccess.nodes()
+        val used = nodes.firstOrNull { node -> node.planes.any { it.optString("host") == measured.detail.trim() } }?.slot
+        val next = recovery.observe(measured.ok, used, nodes.map { it.slot }, android.os.SystemClock.elapsedRealtime())
+        if (next != null) {
+          // Recreate stale QUIC/DNS connections on the alternate authenticated node.
+          // Never substitute a direct outbound when both nodes fail.
+          try {
+            session.use(ticket) {
+              val selected = nodes.filter { it.slot == next }
+              val built = SingBoxConfig.build(0, false, selected, excludedPackages,
+                policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
+                brokenSlot, appsMode, Settings.country(this), null, true)
+              Mgbox.reloadEngine(built.json)
+              traffic.attach(built.statsPort, built.statsSecret)
+              checkPort = built.checkPort
+              enginePlanes = built.planes
+              Log.i(TAG, "public tunnel recovery: rebuilt authenticated route")
+            }
+          } catch (cancelled: InterruptedException) {
+            throw cancelled
+          } catch (error: Throwable) {
+            Log.w(TAG, "public tunnel recovery failed: ${error.javaClass.simpleName}")
+          }
+        }
       }
       Thread.sleep(NODE_WATCH_INTERVAL_MS)
     }
@@ -819,6 +858,7 @@ class MgVpnService : VpnService() {
   }
 
   private fun closeTunnel() {
+    traffic.attach(0, "")
     running = false
     starting = false
     Health.reset()
