@@ -20,6 +20,15 @@ def retry_central(send):
             time.sleep(0.25)
 
 
+def refresh_presence(state, online, now):
+    state['online'] = online
+    # A reservation is fulfilled only when the connection count grows beyond its baseline.
+    # An older live session must not erase the reservation for a reconnect still in flight.
+    state['pending'] = {identity: (count, deadline)
+                        for identity, (count, deadline) in state['pending'].items()
+                        if deadline > now and online.get(identity, 0) <= count}
+
+
 def run(config):
     central_base = config.get('centralBase', 'https://magnet.norma.so/api/')
     if central_base not in ('https://magnet.norma.so/api/', 'http://127.0.0.1:3410/api/'):
@@ -55,8 +64,8 @@ def run(config):
                     print('central policy requested disconnection', flush=True)
                     stats('kick', report['kick'])
                 with lock:
-                    state.update(healthy=True, online=online, epoch=epoch)
-                    state['pending'] = {k: t for k, t in state['pending'].items() if t > time.monotonic() and k not in online}
+                    state.update(healthy=True, epoch=epoch)
+                    refresh_presence(state, online, time.monotonic())
             except Exception as error:
                 # Do not log response bodies, identities, addresses or credentials.
                 print('accounting unavailable: ' + type(error).__name__, flush=True)
@@ -88,14 +97,18 @@ def run(config):
                         raise ValueError('capacity')
                 result = central('node-auth', {'auth': data.get('auth')})
                 if result.get('ok'):
+                    # Fresh local presence avoids a five-second lockout between a successful
+                    # connection and the monitor's next accounting tick.
+                    online = stats('online')
                     with lock:
+                        refresh_presence(state, online, time.monotonic())
                         identity = result['id']
                         # A mobile reconnect may arrive before the dead QUIC session expires.
                         # One overlapping session avoids locking out the same device after a drop.
                         if state['online'].get(identity, 0) >= 2 or identity in state['pending'] or sum(state['online'].values()) + len(state['pending']) >= config.get('maxConnections', 10):
                             result = {'ok': False}
                         else:
-                            state['pending'][identity] = time.monotonic() + 12
+                            state['pending'][identity] = (online.get(identity, 0), time.monotonic() + 12)
             except Exception:
                 result = {'ok': False}
             body = json.dumps(result).encode()

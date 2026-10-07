@@ -1,10 +1,25 @@
 import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
-from node_agent import retry_central
+from node_agent import retry_central, refresh_presence
 
 
 class RetryTests(unittest.TestCase):
+    def test_reconnect_reservation_waits_for_new_session(self):
+        state = {'pending': {'device': (0, 20)}}
+        refresh_presence(state, {'device': 1}, 10)
+        self.assertEqual({}, state['pending'])
+        state['pending']['device'] = (1, 22)
+        refresh_presence(state, {'device': 1}, 11)
+        self.assertIn('device', state['pending'])
+        refresh_presence(state, {'device': 2}, 12)
+        self.assertEqual({}, state['pending'])
+
+    def test_failed_handshake_reservation_expires(self):
+        state = {'pending': {'device': (1, 20)}}
+        refresh_presence(state, {'device': 1}, 20)
+        self.assertEqual({}, state['pending'])
+
     @patch('node_agent.time.sleep')
     def test_transient_failure_retries_once(self, _):
         send = Mock(side_effect=[URLError('temporary'), {'kick': []}])
