@@ -302,7 +302,7 @@ fun AppRoot(
     val generation = countrySearchGeneration + 1
     countrySearchGeneration = generation
     findingCountries = false
-    if (screen != Screen.COUNTRIES || peerSource || autotest) return@LaunchedEffect
+    if (screen != Screen.COUNTRIES || autotest) return@LaunchedEffect
     if (PublicAccess.enabled(context)) {
       countrySearchError = 0
       runCatching { withContext(Dispatchers.IO) { PublicAccess.refresh(context) } }
@@ -310,6 +310,7 @@ fun AppRoot(
         .onFailure { countrySearchError = R.string.country_search_access }
       return@LaunchedEffect
     }
+    if (peerSource) return@LaunchedEffect
     countrySearchError = 0
     if (Settings.psk(context).isBlank()) { countrySearchError = R.string.country_search_access; return@LaunchedEffect }
     if (wantedBootstrap.isBlank() && wantedRelays.isBlank()) { countrySearchError = R.string.discovery_required; return@LaunchedEffect }
@@ -500,10 +501,10 @@ fun AppRoot(
         Screen.COUNTRIES -> CountriesScreen(serverCatalogue, country, ui.optional(notice), findingCountries,
           ui.optional(countrySearchError), onRefresh = { countrySearchAttempt++ }, onSelect = { code ->
           runCatching {
-            if (vpnUp) Mgbox.setCountry(code)
+            if (vpnUp && !publicRoute) Mgbox.setCountry(code)
             Settings.setCountry(context, code)
             country = code
-            notice = 0
+            notice = if (vpnUp && publicRoute) R.string.settings_reconnect_hint else 0
           }.onFailure { notice = R.string.country_save_failed }
         }, onBack = { back() })
         Screen.DIAGNOSTICS -> DiagnosticsScreen(status, vpnUp, check, presentation, engineError, checkingSince != 0L, ui.optional(notice),
