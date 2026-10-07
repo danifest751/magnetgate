@@ -1,5 +1,15 @@
 # Changelog
 
+### macOS: opt-in internet sharing (2026-10-07)
+
+- Enable the existing sharing checkbox and owner limits on macOS. The IPv4 exit adapter
+  checks physical routes, interface addresses and macOS scoped DNS; unused system utuns
+  do not prevent sharing. Routed tunnels, local DNS proxies and uncertain snapshots pause it.
+- Bind guest TCP sockets to the verified physical interface with IP_BOUND_IF. Starting
+  the owner's VPN suspends sharing; speed/guest caps, quotas and public-target guards remain.
+- Add route/DNS regression tests and native snapshot/socket-binding smoke on ARM/Intel CI.
+  Real Mac installation and end-to-end guest traffic still require field validation.
+
 ### Peer connections: complete cold session setup (2026-10-06)
 
 - Use the existing eight-second connection budget for both peers and their inner TLS/lease

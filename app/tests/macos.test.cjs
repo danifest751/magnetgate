@@ -190,6 +190,14 @@ test('macOS root helper starts a real utun and restores the default route on dis
     request.cfg.vpnMode = 'split'
     const child = await broker.start(request)
     await waitForEngineReady(child, safeConfig(root, request), abort.signal)
+    // The same physical-network adapter packaged with the app must refuse
+    // sharing while these real TUN routes are installed.
+    const peerTest = await command('go', ['test', './cmd/peer-node',
+      '-run', '^TestMacNativeSnapshotRejectsActiveTunnel$', '-count=1'], {
+      cwd: path.join(root, 'app-android', 'core'),
+      env: { ...process.env, MAGNETGATE_MAC_PEER_EXPECT_TUN: '1' }
+    }, 45000)
+    assert.match(peerTest, /ok\s+magnetgate\/core\/cmd\/peer-node/)
     await stopChild(child)
     await broker.close()
     const after = await command('/sbin/route', ['-n', 'get', 'default'])

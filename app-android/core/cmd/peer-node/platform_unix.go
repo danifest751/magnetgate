@@ -17,12 +17,12 @@ func dropPrivileges(bool) (bool, error) {
 	return false, nil
 }
 func networkSnapshot(ctx context.Context) (string, error) {
+	if runtime.GOOS == "darwin" {
+		return macNetworkSnapshot(ctx)
+	}
 	interfaces, err := interfaceSnapshot()
 	if err != nil {
 		return "", err
-	}
-	if runtime.GOOS == "darwin" {
-		return "", errors.New("macOS exit route adapter awaits real-device validation")
 	}
 	if runtime.GOOS != "linux" {
 		return "", errors.New("unsupported exit platform")

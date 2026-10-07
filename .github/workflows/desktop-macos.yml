@@ -28,6 +28,8 @@ jobs:
           cache-dependency-path: app-android/core/go.sum
       - run: go test -race ./...
         working-directory: app-android/core
+        env:
+          MAGNETGATE_MAC_PEER_SMOKE: '1'
       - run: bash scripts/get-singbox-macos.sh
       - run: npm test
       - run: npm ci

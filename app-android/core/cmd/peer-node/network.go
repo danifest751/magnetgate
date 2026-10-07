@@ -99,7 +99,9 @@ func (n *physicalNetwork) Ready() bool {
 	return peer.PublicTarget(observed) && n.valid.Load() && !n.suspended.Load() && n.ctx.Err() == nil
 }
 
-func (*physicalNetwork) CanShare() bool { return runtime.GOOS == "windows" || runtime.GOOS == "linux" }
+func (*physicalNetwork) CanShare() bool {
+	return runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+}
 func (n *physicalNetwork) SetObserved(value string) {
 	a, _ := netip.ParseAddr(value)
 	n.mu.Lock()
@@ -126,7 +128,10 @@ func (n *physicalNetwork) Dial(ctx context.Context, address string) (net.Conn, e
 	if !n.check(ctx) {
 		return nil, errors.New("physical route changed before dial")
 	}
-	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", address)
+	n.mu.Lock()
+	baseline := n.baseline
+	n.mu.Unlock()
+	conn, err := dialPhysical(ctx, address, baseline)
 	if err == nil && !n.check(ctx) {
 		conn.Close()
 		return nil, errors.New("route changed while dialing")
