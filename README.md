@@ -10,6 +10,10 @@ ordinary users do not need a server, a shared group key or command-line tools.
 
 ## Get connected
 
+Operators: the optional [private analytics admin](web/ADMIN.md) provides read-only
+personal-access metrics and chart drilldowns. Until authentication is integrated,
+it is available only over SSH forwarding, never through the public website.
+
 1. Open **[magnet.norma.so](https://magnet.norma.so/#start)** and download the app for your device.
 2. Complete the human verification on the website and save your personal `MG1-…` code.
    Codes are issued automatically when capacity is available; no payment card is needed.

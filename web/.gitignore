@@ -1,4 +1,6 @@
 dist/
+dist-admin/
+admin-private/
 node_modules/
 __pycache__/
 *.sqlite*

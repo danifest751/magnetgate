@@ -12,11 +12,13 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from admin_metrics import RequestMetrics
 
 
 class AccessError(Exception):
-    def __init__(self, status, message):
+    def __init__(self, status, message, reason='http_error'):
         self.status, self.message = status, message
+        self.reason = reason
 
 
 class AccessStore:
@@ -25,6 +27,7 @@ class AccessStore:
         self.lock = threading.RLock()
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.db.execute('PRAGMA journal_mode=WAL')
+        self.metrics = RequestMetrics(config['analyticsDatabase']) if config.get('analyticsDatabase') else None
         self.db.executescript('''
           CREATE TABLE IF NOT EXISTS accounts(id TEXT PRIMARY KEY, token TEXT UNIQUE, expires INTEGER, revoked INTEGER DEFAULT 0);
           CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY, account TEXT, token TEXT UNIQUE);
@@ -67,11 +70,11 @@ class AccessStore:
             active = self.db.execute('SELECT count(*) FROM accounts WHERE expires>? AND revoked=0', (now,)).fetchone()[0]
             ready = self.db.execute('SELECT count(*) FROM nodes WHERE seen>? AND online<?', (now - 20, self.config.get('nodeConnections', 10))).fetchone()[0]
             if not ready:
-                raise AccessError(503, 'Сейчас нет свободных нод. Попробуйте немного позже.')
+                raise AccessError(503, 'Сейчас нет свободных нод. Попробуйте немного позже.', 'no_capacity')
             if count >= self.config.get('dailyAccounts', 20) or active >= self.config.get('maxAccounts', 100):
-                raise AccessError(429, 'На сегодня выдача новых кодов приостановлена. Действующие коды продолжают работать.')
+                raise AccessError(429, 'На сегодня выдача новых кодов приостановлена. Действующие коды продолжают работать.', 'daily_limit')
             if local and local[0] >= 2:
-                raise AccessError(429, 'С этой сети уже получены коды на сегодня. Используйте сохранённый код или вернитесь завтра.')
+                raise AccessError(429, 'С этой сети уже получены коды на сегодня. Используйте сохранённый код или вернитесь завтра.', 'network_limit')
             code = 'MG1-' + secrets.token_hex(32)
             expires = now + 30 * 86400
             self.db.execute('INSERT INTO accounts(id,token,expires) VALUES(?,?,?)', (secrets.token_hex(16), self.digest(code), expires))
@@ -96,7 +99,7 @@ class AccessStore:
             password = self.digest('device:' + identity)
             if not self.db.execute('SELECT 1 FROM devices WHERE id=?', (identity,)).fetchone():
                 if self.db.execute('SELECT count(*) FROM devices WHERE account=?', (account,)).fetchone()[0] >= 2:
-                    raise AccessError(409, 'Этот код уже используется на двух устройствах.')
+                    raise AccessError(409, 'Этот код уже используется на двух устройствах.', 'device_limit')
                 self.db.execute('INSERT INTO devices VALUES(?,?,?)', (identity, account, self.digest(password)))
             endpoints = []
             for index, node in enumerate(self.config['nodes']):
@@ -188,6 +191,10 @@ def handler(store, config):
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            if store.metrics:
+                reason = getattr(self, 'metric_reason', None) or ('denied' if data.get('ok') is False else 'ok' if status < 400 else 'http_error')
+                elapsed = (time.monotonic() - getattr(self, 'request_started', time.monotonic())) * 1000
+                store.metrics.record(self.path, status, reason, elapsed)
 
         def limited(self, ip):
             bucket = int(time.time() // 60)
@@ -202,12 +209,16 @@ def handler(store, config):
                 return limiter[key] > 20
 
         def do_GET(self):
+            self.request_started = time.monotonic()
+            self.metric_reason = None
             if self.path == '/api/info':
                 self.reply(200, store.info())
             else:
                 self.reply(404, {'error': 'Не найдено'})
 
         def do_POST(self):
+            self.request_started = time.monotonic()
+            self.metric_reason = None
             try:
                 self.connection.settimeout(10)
                 if self.headers.get('Transfer-Encoding'):
@@ -229,13 +240,13 @@ def handler(store, config):
                     # Только локальный cloudflared обращается к этому слушателю.
                     ip = str(ipaddress.ip_address(self.headers.get('CF-Connecting-IP', self.client_address[0])))
                     if self.limited(ip):
-                        raise AccessError(429, 'Слишком много запросов. Подождите минуту.')
+                        raise AccessError(429, 'Слишком много запросов. Подождите минуту.', 'rate_limit')
                 data = json.loads(self.rfile.read(length))
                 if not isinstance(data, dict):
                     raise AccessError(400, 'Некорректный запрос.')
                 if self.path == '/api/access':
                     if origin != 'https://' + config['hostname'] or not verify_turnstile(config, data.get('challenge'), ip):
-                        raise AccessError(403, 'Пройдите проверку на странице и попробуйте снова.')
+                        raise AccessError(403, 'Пройдите проверку на странице и попробуйте снова.', 'challenge')
                     result = store.issue(ip)
                 elif self.path == '/api/profile':
                     result = store.profile(data.get('code'), data.get('device'))
@@ -249,10 +260,13 @@ def handler(store, config):
                     raise AccessError(404, 'Не найдено')
                 self.reply(200, result)
             except AccessError as error:
+                self.metric_reason = error.reason
                 self.reply(error.status, {'error': error.message})
             except (ValueError, KeyError, TypeError):
+                self.metric_reason = 'invalid'
                 self.reply(400, {'error': 'Некорректный запрос.'})
             except Exception:
+                self.metric_reason = 'internal'
                 self.reply(503, {'error': 'Сервис временно недоступен. Попробуйте позже.'})
     return Handler
 

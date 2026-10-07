@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add a private, read-only personal-access analytics dashboard with chart
+  drilldowns, paginated tables, quota totals, node heartbeat history and CSV.
+- Keep analytics history separate from the source database and credentials;
+  provide opt-in aggregate HTTP telemetry without request contents or identities.
+- Require SSH forwarding until public authentication is implemented. Deployment
+  must first verify the existing website/API on the intended host.
+
 ### Личный публичный доступ и сайт (2026-10-07)
 
 - Добавлен сайт MagnetGate с выдачей личных кодов, инструкциями и загрузками.
