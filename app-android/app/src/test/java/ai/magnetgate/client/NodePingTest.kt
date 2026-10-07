@@ -10,6 +10,9 @@ class NodePingTest {
     assertNull(NodePing.parse("1 packets transmitted, 0 received, 100% packet loss"))
     assertNull(NodePing.parse("ping: Operation not permitted"))
   }
+  @Test fun measuresReceivedRepliesDespitePartialPacketLoss() {
+    assertEquals(85L, NodePing.parse("64 bytes: time=80.0 ms\n64 bytes: time=90.0 ms\n3 packets transmitted, 2 received, 33% packet loss"))
+  }
   @Test fun acceptsOnlyNumericEndpointAddresses() {
     assertTrue(NodePing.validAddress("192.0.2.1"))
     for (bad in listOf("example.com", "-f", "192.0.2.256", "192.0.2.1;id", "192.0.2"))
