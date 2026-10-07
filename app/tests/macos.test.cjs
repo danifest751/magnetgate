@@ -192,7 +192,7 @@ test('macOS root helper starts a real utun and restores the default route on dis
     await waitForEngineReady(child, safeConfig(root, request), abort.signal)
     // The same physical-network adapter packaged with the app must refuse
     // sharing while these real TUN routes are installed.
-    const peerTest = await command('go', ['test', './cmd/peer-node',
+    const peerTest = await command('go', ['test', '-race', './cmd/peer-node',
       '-run', '^TestMacNativeSnapshotRejectsActiveTunnel$', '-count=1'], {
       cwd: path.join(root, 'app-android', 'core'),
       env: { ...process.env, MAGNETGATE_MAC_PEER_EXPECT_TUN: '1' }

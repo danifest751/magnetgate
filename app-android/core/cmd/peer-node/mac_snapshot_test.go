@@ -39,6 +39,17 @@ resolver #1
   reach : 0x00000002 (Reachable)
 `
 
+func TestMacFallbackDNSRejectsLocalAndIPv6Proxies(t *testing.T) {
+	if err := macFallbackDNS([]byte("# generated\nsearch lan\nnameserver 192.168.1.1 # router\nnameserver 9.9.9.9\n")); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{"", "search lan", "nameserver", "nameserver 127.0.0.1", "nameserver ::1", "nameserver 2001:4860:4860::8888", "nameserver 0.0.0.0", "nameserver invalid"} {
+		if macFallbackDNS([]byte(input)) == nil {
+			t.Fatal("unsafe fallback DNS accepted", input)
+		}
+	}
+}
+
 func TestMacRoutesPreservePhysicalGenerationAcrossCacheChanges(t *testing.T) {
 	a, device, err := macRoutes([]byte(macRouteFixture))
 	if err != nil || device != "en0" {

@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 var macPhysicalName = regexp.MustCompile(`^(en|bridge|bond|vlan)[0-9]+$`)
@@ -129,6 +130,8 @@ func macDNS(data []byte) (string, error) {
 }
 
 func macNetworkSnapshot(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	routes, err := exec.CommandContext(ctx, "/usr/sbin/netstat", "-rn", "-f", "inet").Output()
 	if err != nil {
 		return "", errors.New("cannot inspect macOS IPv4 routes")
@@ -181,5 +184,32 @@ func macNetworkSnapshot(ctx context.Context) (string, error) {
 	if err != nil || len(fallbackDNS) > 65536 {
 		return "", errors.New("cannot inspect fallback DNS")
 	}
+	if err := macFallbackDNS(fallbackDNS); err != nil {
+		return "", err
+	}
 	return "mac-interface=" + device + "\n" + strings.Join(rows, "\n") + "\n" + table + "\n" + resolvers + "\n" + string(fallbackDNS), nil
+}
+
+func macFallbackDNS(data []byte) error {
+	found := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		line, _, _ = strings.Cut(line, ";")
+		fields := strings.Fields(line)
+		if len(fields) == 0 || fields[0] != "nameserver" {
+			continue
+		}
+		if len(fields) != 2 {
+			return errors.New("invalid fallback nameserver")
+		}
+		ip, err := netip.ParseAddr(fields[1])
+		if err != nil || !ip.Is4() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
+			return errors.New("fallback DNS is not a physical IPv4 resolver")
+		}
+		found = true
+	}
+	if !found {
+		return errors.New("no fallback IPv4 DNS server")
+	}
+	return nil
 }
