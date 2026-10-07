@@ -246,6 +246,11 @@ fun AppRoot(
   }
 
   fun connect() {
+    if (PublicAccess.enabled(context)) {
+      val consent = VpnService.prepare(context)
+      if (consent != null) vpnConsent.launch(consent) else startVpn(context, bootstrapExtra, relaysExtra, coreless, modeExtra, engineLogExtra, breakSlotExtra)
+      return
+    }
     if (!peerSource && Settings.psk(context).isBlank()) { open(Screen.ACCESS); return }
       if (peerSource && !PeerRuntime.configured(context)) { peerError = ui.text(R.string.peer_unconfigured); return }
       if (peerSource) peerError = ""
@@ -265,7 +270,7 @@ fun AppRoot(
         runCatching { CoreStatus.parse(Mgbox.coreStatus()) }.getOrElse { CoreStatus(error = it.message.orEmpty()) }
       }
       if (metadata.nodes.isNotEmpty()) serverCatalogue = CoreStatus(nodes = metadata.nodes, countries = metadata.countries)
-      status = if (Settings.peerSource(context)) {
+      status = if (PublicAccess.enabled(context)) PublicAccess.status(context) else if (Settings.peerSource(context)) {
         PeerRuntime.view(peerStatus).copy(update = metadata.update, socksPort = MgVpnService.updatePort())
       } else metadata
       vpnUp = MgVpnService.isRunning()
@@ -298,6 +303,13 @@ fun AppRoot(
     countrySearchGeneration = generation
     findingCountries = false
     if (screen != Screen.COUNTRIES || peerSource || autotest) return@LaunchedEffect
+    if (PublicAccess.enabled(context)) {
+      countrySearchError = 0
+      runCatching { withContext(Dispatchers.IO) { PublicAccess.refresh(context) } }
+        .onSuccess { serverCatalogue = PublicAccess.status(context) }
+        .onFailure { countrySearchError = R.string.country_search_access }
+      return@LaunchedEffect
+    }
     countrySearchError = 0
     if (Settings.psk(context).isBlank()) { countrySearchError = R.string.country_search_access; return@LaunchedEffect }
     if (wantedBootstrap.isBlank() && wantedRelays.isBlank()) { countrySearchError = R.string.discovery_required; return@LaunchedEffect }
@@ -448,7 +460,8 @@ fun AppRoot(
     }
   }
 
-  val keySet = peerSource || Settings.psk(context).isNotBlank()
+  val publicRoute = PublicAccess.enabled(context)
+  val keySet = publicRoute || peerSource || Settings.psk(context).isNotBlank()
   val presentation = connectionPresentation(status, vpnUp, starting, keySet, check, engineError, now, ui)
   Column(Modifier.fillMaxSize().systemBarsPadding()) {
     AppHeader(screen, onBack = { back() })
@@ -462,9 +475,10 @@ fun AppRoot(
           updateReady = Updates.stagedBuild(context) == Updates.offered(context, status.update)?.versionCode,
           installedBuild = Updates.installedCode(context),
           updateState = updateState,
-          onUpdate = { takeUpdate() }, peerRoute = peerSource,
+          onUpdate = { takeUpdate() }, peerRoute = peerSource && !publicRoute,
           peerContent = {
-            PeerPanel(peerSource, peerCountry, peerStatus, peerError, !vpnUp && !starting && !busy, PeerRuntime.configured(context),
+            if (publicRoute) androidx.compose.material3.Text("Личный доступ MagnetGate · TCP и UDP", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+            else PeerPanel(peerSource, peerCountry, peerStatus, peerError, !vpnUp && !starting && !busy, PeerRuntime.configured(context),
               onChoice = { enabled, cc ->
                 if (Settings.savePeerChoice(context, enabled, cc)) {
                   peerSource = enabled; peerCountry = cc; peerError = ""; revision = Settings.revision(context)

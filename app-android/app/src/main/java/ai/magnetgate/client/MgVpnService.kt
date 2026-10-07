@@ -378,7 +378,9 @@ class MgVpnService : VpnService() {
       val guestToken = java.util.UUID.randomUUID().toString()
       try {
         session.use(ticket) { PeerRuntime.suspendForVpn() }
-        val selectedPeerRoute = !coreless && Settings.peerSource(this)
+        val selectedPublicRoute = !coreless && PublicAccess.enabled(this)
+        if (selectedPublicRoute) PublicAccess.refresh(this)
+        val selectedPeerRoute = !coreless && !selectedPublicRoute && Settings.peerSource(this)
         val selectedPeerCountry = Settings.peerCountry(this)
         session.use(ticket) { peerRoute = selectedPeerRoute; peerCountry = selectedPeerCountry }
         val preparedPeer = if (selectedPeerRoute) {
@@ -389,7 +391,7 @@ class MgVpnService : VpnService() {
             Log.i(TAG, "peer route prepared in ${TunnelProbe.elapsed(began)}ms")
           }
         } else null
-        val port = preparedPeer?.getInt("port") ?: if (coreless) 0 else startCoreAndWaitForNode(ticket, bootstrap, relays)
+        val port = preparedPeer?.getInt("port") ?: if (coreless || selectedPublicRoute) 0 else startCoreAndWaitForNode(ticket, bootstrap, relays)
         // urltest and QUIC outbounds may dial during StartEngine itself. Seed the
         // binding's initial interface before it starts those probes, rather than
         // waiting until the tunnel and its first outbound sockets already exist.
@@ -398,7 +400,7 @@ class MgVpnService : VpnService() {
         networkReady?.await(1, java.util.concurrent.TimeUnit.SECONDS)
         session.use(ticket) {
           peerEndpoint = preparedPeer
-          val nodes = if (coreless || selectedPeerRoute) emptyList() else discoveredNodes()
+          val nodes = if (selectedPublicRoute) PublicAccess.nodes() else if (coreless || selectedPeerRoute) emptyList() else discoveredNodes()
           val country = if (selectedPeerRoute) selectedPeerCountry else Settings.country(this)
           excludedPackages = Settings.excluded(this)
           appsMode = Settings.apps(this)
@@ -413,7 +415,7 @@ class MgVpnService : VpnService() {
           val built = SingBoxConfig.build(
             port, coreless, nodes, excludedPackages,
             policy.mode, policy.directDomains, policy.tunnelDomains, policy.ruleSets, engineLog, engineLogLevel,
-            brokenSlot, appsMode, country, preparedPeer,
+            brokenSlot, appsMode, country, preparedPeer, selectedPublicRoute,
           )
 
           Mgbox.setupEngine(filesDir.absolutePath, filesDir.absolutePath, cacheDir.absolutePath, 300L, false)
@@ -425,7 +427,7 @@ class MgVpnService : VpnService() {
           }
           // The country the user prefers is told to the core once it is up: it changes which node the next
           // stream prefers, not how anything is built, so it never needs a reconnect.
-          if (!selectedPeerRoute) runCatching { Mgbox.setCountry(Settings.country(this)) }
+          if (!selectedPeerRoute && !selectedPublicRoute) runCatching { Mgbox.setCountry(Settings.country(this)) }
             .onFailure { Log.w(TAG, "the country preference did not reach the core: ${it.message}") }
           activeRouting = RoutingDraft(policy.mode, appsMode, excludedPackages.toSet(), policy.directDomains, policy.tunnelDomains)
           appliedRevision = revision
@@ -442,7 +444,7 @@ class MgVpnService : VpnService() {
           starting = false
         }
         if (selectedPeerRoute) session.use(ticket) { startUpdateDiscovery(bootstrap, relays) }
-        if (selectedPeerRoute) watchPeer(ticket, guestToken) else watchNodes(ticket)
+        if (selectedPublicRoute) watchPublic(ticket) else if (selectedPeerRoute) watchPeer(ticket, guestToken) else watchNodes(ticket)
       } catch (_: InterruptedException) {
         // Disconnect is a decision, not an engine failure. An old worker owns no new session.
         session.stop(ticket) { closeTunnel(); stopSelf() }
@@ -603,6 +605,19 @@ class MgVpnService : VpnService() {
           Health.recordEngineError("the engine was not reloaded: ${error.message}")
         }
       }
+    }
+  }
+
+  private fun watchPublic(ticket: Long) {
+    var checkedAt = 0L
+    while (session.current(ticket)) {
+      if (checkRequested || System.nanoTime() - checkedAt >= CHECK_INTERVAL_MS * 1_000_000) {
+        checkRequested = false
+        val measured = Health.measure(checkPort, CHECK_URL, emptyMap())
+        checkedAt = System.nanoTime()
+        if (!session.commit(ticket) { Health.record(measured); recordCheck(measured); trimEngineLog() }) return
+      }
+      Thread.sleep(NODE_WATCH_INTERVAL_MS)
     }
   }
 

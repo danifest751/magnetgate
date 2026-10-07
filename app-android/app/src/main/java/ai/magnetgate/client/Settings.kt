@@ -125,6 +125,14 @@ object Settings {
 
   fun setPsk(context: Context, value: String) = put(context, KEY_PSK, value.trim())
 
+  fun publicCode(context: Context) = get(context, "public_code")
+  fun publicDevice(context: Context) = get(context, "public_device")
+  fun savePublicDevice(context: Context, value: String) = open(context)?.edit()?.putString("public_device", value)?.commit() == true
+  fun savePublicCode(context: Context, value: String): Boolean = synchronized(this) {
+    val prefs = open(context) ?: return false
+    prefs.edit().putString("public_code", value).putLong(KEY_REVISION, prefs.getLong(KEY_REVISION, 0L) + 1).commit()
+  }
+
   /** True when the PSK only exists as the plain file the acceptance scripts push. */
   fun pskFromFile(context: Context): Boolean = get(context, KEY_PSK).isBlank() && legacyPsk(context).isNotBlank()
 

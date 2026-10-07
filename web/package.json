@@ -1,0 +1,24 @@
+{
+  "name": "magnetgate-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5177",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5177"
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "2.1.10",
+    "motion": "14.0.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "@vitejs/plugin-react": "6.1.2",
+    "sharp": "0.35.5",
+    "tailwindcss": "4.3.3",
+    "vite": "8.3.3"
+  }
+}

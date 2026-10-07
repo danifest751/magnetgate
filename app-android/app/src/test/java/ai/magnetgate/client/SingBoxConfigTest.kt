@@ -6,6 +6,15 @@ import org.junit.Test
 import java.io.File
 
 class SingBoxConfigTest {
+  @Test fun publicAccessCarriesBothTcpAndUdpWithoutPskOrNativeCore() {
+    val config = JSONObject(SingBoxConfig.build(0, false, listOf(node(0), node(1)), publicRoute = true).json)
+    val outbounds = config.getJSONArray("outbounds")
+    val items = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
+    assertEquals("urltest", items.single { it.getString("tag") == "core" }.getString("type"))
+    assertFalse(items.any { it.optString("type") == "socks" })
+    assertEquals("udp-proxy", rules(config).single { it.optString("network") == "udp" }.getString("outbound"))
+    assertEquals("core", config.getJSONObject("route").getString("final"))
+  }
   @Test fun peerGuestUsesAuthenticatedLoopbackAndRejectsUdpAfterDnsWithoutServerFallback() {
     val endpoint = JSONObject().put("port", 12080).put("username", "a".repeat(48)).put("password", "b".repeat(48))
     val config = JSONObject(SingBoxConfig.build(12080, false, peerEndpoint = endpoint).json)

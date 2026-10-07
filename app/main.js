@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, shell, safeStorage } = require('electron')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
@@ -11,6 +11,7 @@ const { switchMode, engineSignature } = require('./mode.cjs')
 const { rotatingLog } = require('./log.cjs')
 const { accumulate, rate } = require('./stats.cjs')
 const { PeerHost } = require('./peer-host.cjs')
+const { PublicAccess } = require('./public-access.cjs')
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
 const PLATFORM = process.platform || 'win32'
 const { platformConfig, platformPaths, macTunnel } = require('./platform.cjs')
@@ -26,6 +27,7 @@ const { DEFAULT_CONFIG, validateConfig, freshEndpoints } = require(
   path.join(RES, 'src', 'config.cjs')
 )
 const CONFIG = path.join(app.getPath('userData'), 'magnetgate.config.json')
+const publicAccess = new PublicAccess(app.getPath('userData'), safeStorage)
 const DP_FILE = path.join(app.getPath('userData'), 'current-dp.json')
 // holds every exit PSK while the client child runs, so it must not outlive the session
 const RUNTIME_FILE = path.join(app.getPath('userData'), 'runtime-client.json')
@@ -240,6 +242,7 @@ function saveConfig(cfg) {
   return clean
 }
 function readDp() {
+  if (state.connectionSource === 'public') return publicAccess.endpoints()
   if (state.connectionSource === 'peers') {
     const e = peerHost.endpoint
     return e && peerHost.state.guestConnected ? [{ t: 'peer', protocol: 1, host: '127.0.0.1',
@@ -339,6 +342,14 @@ async function checkOtherTunnel() {
 async function startClient() {
   const cfg = loadConfig()
   state.connectionSource = cfg.connectionSource
+  if (cfg.connectionSource === 'public') {
+    if (clientProc) await stopClient()
+    await peerHost.disconnect()
+    await publicAccess.refresh()
+    state.clientRunning = true
+    state.rvReady = true
+    return
+  }
   if (cfg.connectionSource === 'peers') {
     if (clientProc) await stopClient()
     await peerHost.suspend(true)
@@ -831,6 +842,16 @@ function handle(name, fn) {
   })
 }
 handle('getState', () => ({ ...state }))
+handle('activatePublic', async code => {
+  if (state.vpnOn || clientStarting) throw new Error('Отключите VPN перед сменой доступа.')
+  await publicAccess.activate(code)
+  const cfg = await saveConfig({ ...loadConfig(), connectionSource: 'public', country: '' })
+  state.connectionSource = 'public'
+  state.countries = summarizeCountries(publicAccess.endpoints())
+  state.nodes = summarizeNodes(publicAccess.endpoints())
+  pushStatus()
+  return cfg
+})
 handle('setPeerPolicy', policy => peerHost.policy(policy))
 handle('getLog', () => logs.slice())
 handle('getConfig', loadConfig)

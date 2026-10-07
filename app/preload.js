@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('mg', {
   getState: () => ipcRenderer.invoke('getState'),
+  activatePublic: (code) => ipcRenderer.invoke('activatePublic', code),
   getLog: () => ipcRenderer.invoke('getLog'),
   getConfig: () => ipcRenderer.invoke('getConfig'),
   saveConfig: (cfg) => ipcRenderer.invoke('saveConfig', cfg),

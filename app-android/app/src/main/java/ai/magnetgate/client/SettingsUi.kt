@@ -66,6 +66,7 @@ fun AccessScreen(psk: String, bootstrap: String, relays: String, slots: String, 
     Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
       Text(ui.text(R.string.group_key_title), style = MaterialTheme.typography.headlineSmall)
       Text(ui.text(R.string.group_key_hint), style = MaterialTheme.typography.bodyMedium)
+      PublicAccessPanel()
       OutlinedTextField(psk, onPsk, label = { Text(ui.text(R.string.shared_key)) }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
       ActionRow(ui.text(R.string.discovery_options), if (advanced) ui.text(R.string.hide_advanced) else ui.text(R.string.discovery_summary)) { advanced = !advanced }
       if (advanced) {

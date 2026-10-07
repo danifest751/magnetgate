@@ -77,6 +77,7 @@ function renderStatus() {
     cfg.connectionSource === 'peers'
       ? st.peer?.guestConnected ? 'Соединение пользователя · ' + st.peer.guestCountry
         : st.peer?.connected ? 'Каталог соединений пользователей доступен' : 'Ожидаем каталог соединений пользователей'
+      : cfg.connectionSource === 'public' ? 'Личный доступ MagnetGate · сайты, видео и звонки'
       : cfg.exits.length === 1
       ? 'Сервер ' + cfg.exits[0].name
       : cfg.exits.length
@@ -398,6 +399,18 @@ async function addSite() {
   }
 }
 window.addEventListener('DOMContentLoaded', async () => {
+  $('activatePublic').onclick = async () => {
+    $('activatePublic').disabled = true
+    text('publicMessage', 'Проверяем код и получаем настройки…')
+    try {
+      await saveQueue
+      cfg = await window.mg.activatePublic($('publicCode').value.trim())
+      $('publicCode').value = ''
+      text('publicMessage', 'Готово. Откройте «Подключение» и нажмите «Подключить».')
+      renderStatus()
+    } catch (error) { text('publicMessage', error.message) }
+    finally { $('activatePublic').disabled = false }
+  }
   MGPeer.bind(showError)
   $('countrySearch').oninput = () => renderCountries(st, MGView.connectionView(cfg, st))
   $('connectionSource').onchange = () => saveChange(current => ({ ...current,
@@ -443,7 +456,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       } finally {
         renderStatus()
       }
-    } else if (!cfg.exits.length && cfg.connectionSource !== 'peers') {
+    } else if (!cfg.exits.length && !['peers', 'public'].includes(cfg.connectionSource)) {
       showPage('settings')
       $('serverSettings').open = true
       if (!serverDraft.length) {

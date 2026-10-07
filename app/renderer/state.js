@@ -16,7 +16,7 @@
       state.engineReady !== false &&
       !pending
     )
-    const empty = config.connectionSource !== 'peers' && !config.exits?.length && !needsDisconnect(state)
+    const empty = !['peers', 'public'].includes(config.connectionSource) && !config.exits?.length && !needsDisconnect(state)
     let title = 'Не подключено',
       detail = 'Сейчас используется обычное подключение.'
     if (connected) {

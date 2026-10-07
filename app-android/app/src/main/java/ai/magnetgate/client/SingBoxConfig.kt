@@ -74,6 +74,7 @@ object SingBoxConfig {
     appsMode: Settings.Apps = Settings.Apps.EXCEPT,
     country: String = "",
     peerEndpoint: JSONObject? = null,
+    publicRoute: Boolean = false,
   ): Built {
     if (peerEndpoint != null) {
       require(peerEndpoint.getInt("port") == socksPort && socksPort in 1024..65535)
@@ -152,7 +153,11 @@ object SingBoxConfig {
       rules.put(match.put("outbound", "core"))
     }
 
-    outbounds.put(
+    if (publicRoute) {
+      require(udpTags.isNotEmpty()) { "Нет узлов личного доступа." }
+      outbounds.put(JSONObject().put("type", "urltest").put("tag", "core").put("outbounds", JSONArray(udpTags))
+        .put("url", "https://api.ipify.org").put("interval", "30s").put("interrupt_exist_connections", false))
+    } else outbounds.put(
       JSONObject()
         .put("type", "socks")
         .put("tag", "core")

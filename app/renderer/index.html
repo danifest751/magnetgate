@@ -81,6 +81,7 @@
               <label for="connectionSource">Соединение через
                 <select id="connectionSource" class="mg-country-select">
                   <option value="servers">Серверы MagnetGate</option>
+                  <option value="public">Личный доступ MagnetGate</option>
                   <option value="peers">Соединения пользователей</option>
                 </select>
               </label>
@@ -170,6 +171,13 @@
                 восстановления интернета нажмите «Отключить» на экране подключения.
               </p>
             </div>
+            <section class="mg-setting" aria-labelledby="publicHeading">
+              <h3 id="publicHeading">Личный доступ MagnetGate</h3>
+              <p class="mg-caption">Получите бесплатный код на magnet.norma.so и вставьте его сюда. Сайты, видео и звонки работают через ваши личные учётные данные.</p>
+              <label for="publicCode">Личный код<input id="publicCode" type="password" placeholder="MG1-…" autocomplete="off" spellcheck="false" maxlength="68" /></label>
+              <button class="mg-action" id="activatePublic">Подключить личный доступ</button>
+              <p id="publicMessage" class="mg-flash" role="status"></p>
+            </section>
             <details id="serverSettings" class="mg-setting">
               <summary>Серверы и ключи доступа</summary>
               <div id="exits" class="mg-exits"></div>
