@@ -90,7 +90,9 @@ def run(config):
                 if result.get('ok'):
                     with lock:
                         identity = result['id']
-                        if identity in state['online'] or identity in state['pending'] or sum(state['online'].values()) + len(state['pending']) >= config.get('maxConnections', 10):
+                        # A mobile reconnect may arrive before the dead QUIC session expires.
+                        # One overlapping session avoids locking out the same device after a drop.
+                        if state['online'].get(identity, 0) >= 2 or identity in state['pending'] or sum(state['online'].values()) + len(state['pending']) >= config.get('maxConnections', 10):
                             result = {'ok': False}
                         else:
                             state['pending'][identity] = time.monotonic() + 12

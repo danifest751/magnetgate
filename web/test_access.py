@@ -46,6 +46,18 @@ class AccessTests(unittest.TestCase):
         with self.assertRaises(AccessError): self.store.profile(code, '1' * 64)
         self.assertEqual([identity], self.store.report('fi', {'traffic': {}, 'online': {identity: 1}, 'epoch': 'test'})['kick'])
 
+    def test_reconnect_overlap_keeps_quota_and_connection_limits(self):
+        code = self.store.issue('198.51.100.4')['code']
+        password = self.store.profile(code, '1' * 64)['endpoints'][0]['pw']
+        identity = self.store.authenticate(password)['id']
+        report = {'traffic': {}, 'online': {identity: 2}, 'epoch': 'test'}
+        self.assertEqual([], self.store.report('fi', report)['kick'])
+        report['online'][identity] = 3
+        self.assertEqual([identity], self.store.report('fi', report)['kick'])
+        report['online'][identity] = 2
+        report['traffic'][identity] = {'tx': 600, 'rx': 400}
+        self.assertEqual([identity], self.store.report('fi', report)['kick'])
+
     def test_quota_aggregates_nodes_and_repeated_reports_are_idempotent(self):
         code = self.store.issue('198.51.100.4')['code']
         password = self.store.profile(code, '1' * 64)['endpoints'][0]['pw']

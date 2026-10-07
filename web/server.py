@@ -142,7 +142,9 @@ class AccessStore:
             kick = []
             for device, connections in online.items():
                 row = self.db.execute('SELECT account FROM devices WHERE id=?', (device,)).fetchone()
-                if not row or connections > 1 or not self.allowed(row[0], now):
+                # Two transport sessions may overlap during a device reconnect. Both are billed
+                # to the same device/account; registration, device and node capacity limits remain.
+                if not row or connections > 2 or not self.allowed(row[0], now):
                     kick.append(device)
             return {'kick': kick}
         return self.transaction(commit)
