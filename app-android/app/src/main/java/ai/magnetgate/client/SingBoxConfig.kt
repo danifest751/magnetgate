@@ -128,17 +128,22 @@ object SingBoxConfig {
       }
     }
 
-    // UDP bypasses the TCP-only core, but stays inside an authenticated tunnel. Probe all
-    // advertised hy2 roads so losing the first discovered node does not strand datagrams.
+    // UDP bypasses the TCP-only core, but stays inside an authenticated tunnel.
+    // Country is a preference, just as in the TCP pool: an advertised but unreachable
+    // country must not strand calls while another node works. REALITY carries XUDP
+    // over TCP when a network blocks QUIC; neither path falls back to direct traffic.
     val preferred = country.uppercase(java.util.Locale.ROOT)
     val matching = nodes.filter { preferred.isNotEmpty() && it.country.uppercase(java.util.Locale.ROOT) == preferred }
-    val selectedSlots = (matching.ifEmpty { nodes }).map { it.slot }.toSet()
-    val udpTags = planes.filter { it.plane == "hy2" && it.slot in selectedSlots }
-      .map { "exit-${it.slot}-${it.plane}" }
+    val orderedSlots = (matching + nodes.filter { it !in matching }).map { it.slot }
+    val udpTags = orderedSlots.flatMap { slot ->
+      planes.filter { it.slot == slot && it.plane in listOf("hy2", "reality") }
+        .sortedBy { if (it.plane == "hy2") 0 else 1 }
+        .map { "exit-${it.slot}-${it.plane}" }
+    }
     if (udpTags.isNotEmpty()) {
       outbounds.put(JSONObject().put("type", "urltest").put("tag", "udp-proxy")
         .put("outbounds", JSONArray(udpTags)).put("url", "https://api.ipify.org")
-        .put("interval", "1m").put("tolerance", 100))
+        .put("interval", "30s").put("tolerance", 100).put("interrupt_exist_connections", false))
     }
     fun tunnelRule(match: JSONObject) {
       val udp = JSONObject(match.toString()).put("network", "udp")

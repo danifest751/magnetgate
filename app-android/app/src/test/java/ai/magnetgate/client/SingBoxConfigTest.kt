@@ -19,7 +19,7 @@ class SingBoxConfigTest {
     assertEquals("reject", routes[udp].getString("action"))
     assertEquals("core", config.getJSONObject("route").getString("final"))
   }
-  @Test fun udpHonorsCountryAndFallsBackOnlyWhenThatCountryHasNoLiveNode() {
+  @Test fun udpRanksPreferredCountryFirstAndRetainsOtherCountriesForFailure() {
     val nodes = listOf(node(0).copy(country = "NL"), node(1).copy(country = "FI"))
     fun tags(country: String, nodes: List<DiscoveredNode>): List<String> {
       val config = JSONObject(SingBoxConfig.build(1080, false, nodes, country = country).json)
@@ -29,11 +29,24 @@ class SingBoxConfigTest {
       val tags = group.getJSONArray("outbounds")
       return (0 until tags.length()).map { tags.getString(it) }
     }
-    assertEquals(listOf("exit-0-hy2"), tags("NL", nodes))
-    assertEquals(listOf("exit-1-hy2"), tags("FI", nodes))
+    assertEquals(listOf("exit-0-hy2", "exit-1-hy2"), tags("NL", nodes))
+    assertEquals(listOf("exit-1-hy2", "exit-0-hy2"), tags("FI", nodes))
     assertEquals(listOf("exit-0-hy2", "exit-1-hy2"), tags("DE", nodes))
-    assertEquals(emptyList<String>(), tags("NL", listOf(
+    assertEquals(listOf("exit-1-hy2"), tags("NL", listOf(
       DiscoveredNode(0, emptyList(), "NL"), node(1).copy(country = "FI"))))
+  }
+  @Test fun udpCanUseRealityWhenQuicIsUnavailableAndKeepsExistingSessions() {
+    val reality = JSONObject().put("t", "reality").put("host", "192.0.2.1").put("port", 443)
+      .put("uuid", "a34c7c8b-9c81-4a12-90cf-b029437b3e4d").put("sni", "example.com")
+      .put("pbk", "test-public-key").put("sid", "test-short-id")
+    val config = JSONObject(SingBoxConfig.build(1080, false,
+      listOf(DiscoveredNode(0, listOf(reality), "NL")), country = "NL").json)
+    val outbounds = config.getJSONArray("outbounds")
+    val group = (0 until outbounds.length()).map { outbounds.getJSONObject(it) }
+      .single { it.optString("tag") == "udp-proxy" }
+    assertEquals("exit-0-reality", group.getJSONArray("outbounds").getString(0))
+    assertFalse(group.getBoolean("interrupt_exist_connections"))
+    assertEquals("udp-proxy", rules(config).single { it.optString("network") == "udp" }.getString("outbound"))
   }
   private fun node(slot: Int) = DiscoveredNode(slot, listOf(JSONObject()
     .put("t", "hy2").put("host", "192.0.2.${slot + 1}").put("port", 443)

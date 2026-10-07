@@ -238,6 +238,13 @@ func (s *Service) control(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				s.mu.Unlock()
+				if !credential.Claims.Exit || !validCountry(cc) {
+					// Withdrawing readiness needs no verified exit location. A device
+					// with both roles may use its guest role from an unlocated network.
+					s.Catalog.Remove(device, c.path, time.Now())
+					s.reply(c, message{Type: "presence-ack", Epoch: m.Epoch, Revision: m.Revision})
+					continue
+				}
 			}
 			if !credential.Claims.Exit || !validCountry(cc) {
 				s.reply(c, message{Type: "error", ID: m.ID, Error: "exit location is not verified"})
@@ -254,7 +261,10 @@ func (s *Service) control(w http.ResponseWriter, r *http.Request) {
 				current, _ := s.Country(net.ParseIP(host))
 				if current != cc || !validCountry(current) {
 					s.Catalog.Remove(device, c.path, time.Now())
-					if credential.Claims.Exit {
+					// Unknown -> unknown cannot invalidate an admitted exit: this
+					// control was never allowed to advertise one. Preserve its guest
+					// role; a verified location change still closes existing pairs.
+					if credential.Claims.Exit && (validCountry(cc) || validCountry(current)) {
 						return
 					}
 				}

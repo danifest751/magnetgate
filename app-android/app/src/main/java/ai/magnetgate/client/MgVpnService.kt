@@ -382,9 +382,12 @@ class MgVpnService : VpnService() {
         val selectedPeerCountry = Settings.peerCountry(this)
         session.use(ticket) { peerRoute = selectedPeerRoute; peerCountry = selectedPeerCountry }
         val preparedPeer = if (selectedPeerRoute) {
+          val began = System.nanoTime()
           PeerRuntime.ensure(this)
           session.use(ticket) { PeerRuntime.attach(this); PeerRuntime.begin(guestToken) }
-          PeerRuntime.connect(selectedPeerCountry, guestToken)
+          PeerRuntime.connect(selectedPeerCountry, guestToken).also {
+            Log.i(TAG, "peer route prepared in ${TunnelProbe.elapsed(began)}ms")
+          }
         } else null
         val port = preparedPeer?.getInt("port") ?: if (coreless) 0 else startCoreAndWaitForNode(ticket, bootstrap, relays)
         // urltest and QUIC outbounds may dial during StartEngine itself. Seed the
@@ -605,13 +608,18 @@ class MgVpnService : VpnService() {
 
   private fun watchPeer(ticket: Long, guestToken: String) {
     var checkedAt = 0L
+    var first = true
     while (session.current(ticket)) {
-      Thread.sleep(NODE_WATCH_INTERVAL_MS)
+      if (!first) Thread.sleep(NODE_WATCH_INTERVAL_MS)
+      first = false
       if (!session.current(ticket)) return
       if (!PeerRuntime.status().optBoolean("guestConnected")) {
         // Keep the captured route while retrying the SAME requested country.
         // No server/native fallback is introduced by peer recovery.
-        val next = runCatching { PeerRuntime.connect(peerCountry, guestToken) }.getOrNull()
+        val began = System.nanoTime()
+        val next = runCatching { PeerRuntime.connect(peerCountry, guestToken) }
+          .onFailure { if (session.current(ticket)) Log.w(TAG, "peer recovery failed: ${it.message}") }
+          .getOrNull()
         if (next == null) continue
         session.use(ticket) {
           peerEndpoint = next
@@ -622,9 +630,11 @@ class MgVpnService : VpnService() {
           Mgbox.reloadEngine(built.json)
           checkPort = built.checkPort
           Health.reset()
+          checkedAt = 0L
+          Log.i(TAG, "peer tunnel restored in ${TunnelProbe.elapsed(began)}ms")
         }
       }
-      val interval = if (Health.lastCheck?.ok == false) CHECK_RETRY_INTERVAL_MS else CHECK_INTERVAL_MS
+      val interval = if (Health.lastCheck?.let { !it.ok || it.slow } == true) CHECK_RETRY_INTERVAL_MS else CHECK_INTERVAL_MS
       if (checkRequested || System.nanoTime() - checkedAt >= interval * 1_000_000) {
         checkRequested = false
         val measured = Health.measure(checkPort, CHECK_URL, emptyMap())
