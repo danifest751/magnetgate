@@ -1,4 +1,5 @@
 const { spawn } = require('node:child_process')
+const I18n = require('./renderer/i18n.js')
 const { createInterface } = require('node:readline')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
@@ -20,7 +21,7 @@ class PeerHost {
   async start() {
     if (this.starting) return this.starting
     if (this.child) return this.state
-    if (!fs.existsSync(this.executable)) throw new Error('Модуль соединений пользователей не собран.')
+    if (!fs.existsSync(this.executable)) throw new Error(I18n.t('peerHost.notBuilt'))
     this.starting = new Promise((resolve, reject) => {
       const child = this.spawnChild(this.executable, ['--profile', this.profile], {
         windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
@@ -28,7 +29,7 @@ class PeerHost {
       this.child = child
       let first = true
       const timer = setTimeout(() => {
-        reject(new Error('Модуль соединений пользователей не ответил.'))
+        reject(new Error(I18n.t('peerHost.noAnswer')))
         child.stdin.destroy()
       }, 12000)
       const lines = createInterface({ input: child.stdout })

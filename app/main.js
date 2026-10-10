@@ -12,6 +12,8 @@ const { rotatingLog } = require('./log.cjs')
 const { accumulate, rate } = require('./stats.cjs')
 const { PeerHost } = require('./peer-host.cjs')
 const { PublicAccess } = require('./public-access.cjs')
+// messages the main process shows to the user follow the language the renderer chose
+const I18n = require('./renderer/i18n.js')
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
 const PLATFORM = process.platform || 'win32'
 const { platformConfig, platformPaths, macTunnel } = require('./platform.cjs')
@@ -247,7 +249,7 @@ function readDp() {
     const e = peerHost.endpoint
     return e && peerHost.state.guestConnected ? [{ t: 'peer', protocol: 1, host: '127.0.0.1',
       port: e.port, username: e.username, password: e.password,
-      exitId: 'peer', country: e.country, node: 'Пользователь' }] : []
+      exitId: 'peer', country: e.country, node: I18n.t('main.peerNode') }] : []
   }
   try {
     return freshEndpoints(JSON.parse(fs.readFileSync(DP_FILE, 'utf8')))
@@ -484,7 +486,7 @@ async function applyVpn() {
   if (sig === lastSig && engine.running && !state.modePending) return
   if (Date.now() < retryAt) return
   if (selection.fallback)
-    pushLog(`Страна ${cfg.country}: живых выходов нет — используется любая`)
+    pushLog(`Country ${cfg.country}: no live exits; using any`)
   const engineSig = engineSignature(cfg, chosen)
   const token = intent
   const startedAt = Date.now()
@@ -842,8 +844,9 @@ function handle(name, fn) {
   })
 }
 handle('getState', () => ({ ...state }))
+handle('setLanguage', language => I18n.setLanguage(language))
 handle('activatePublic', async code => {
-  if (state.vpnOn || clientStarting) throw new Error('Отключите VPN перед сменой доступа.')
+  if (state.vpnOn || clientStarting) throw new Error(I18n.t('main.disconnectFirst'))
   await publicAccess.activate(code)
   const cfg = await saveConfig({ ...loadConfig(), connectionSource: 'public', country: '' })
   state.connectionSource = 'public'

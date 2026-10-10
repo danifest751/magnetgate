@@ -20,7 +20,8 @@ let applying = false,
 let serverDraft = []
 let serverRevision = 0,
   advancedRevision = 0
-const names = { full: 'Весь интернет', split: 'Только выбранное' }
+const t = (key, vars) => MGI18n.t(key, vars)
+const modeName = (mode) => ({ full: t('mode.full'), split: t('mode.split') })[mode]
 
 function showPage(page) {
   all('[data-view]').forEach((el) => (el.hidden = el.dataset.view !== page))
@@ -43,79 +44,79 @@ function renderStatus() {
   ).forEach((el) => (el.disabled = !loaded))
   $('killSwitch').disabled = !loaded || st.killSwitchSupported === false
   $('macGuardNote').hidden = st.killSwitchSupported !== false
-  text('platformLabel', 'magnetgate для ' + (st.platform === 'darwin' ? 'macOS' : 'Windows'))
+  text('platformLabel', t('app.platform', { os: st.platform === 'darwin' ? 'macOS' : 'Windows' }))
   $('mg-app').dataset.state = view.connected ? 'connected' : 'idle'
   text('phase', view.title)
   text('statusDetail', view.detail)
   text(
     'windowStatus',
-    view.connected ? 'Подключено' : view.recovery ? 'Нужно восстановление' : ''
+    view.connected ? t('view.connected') : view.recovery ? t('conn.recoveryNeeded') : ''
   )
   text('btnConnect', view.button)
   $('btnConnect').disabled = !loaded && !MGView.needsDisconnect(st)
   $('progress').hidden = !view.busy
-  text('activeMode', st.vpnOn && st.activeMode ? 'Сейчас: ' + names[st.activeMode] : '')
-  text('modeMsg', applying || view.pending ? 'Применяем…' : '')
+  text('activeMode', st.vpnOn && st.activeMode ? t('conn.now', { value: modeName(st.activeMode) }) : '')
+  text('modeMsg', applying || view.pending ? t('conn.applying') : '')
   const error = uiError || (!view.connected ? st.lastError : '')
   $('globalError').hidden = !error
   text(
     'errorSummary',
     view.recovery
-      ? 'Отключение не завершено. Повторите его на экране подключения.'
-      : 'Не удалось выполнить действие. Подробности доступны ниже.'
+      ? t('error.recovery')
+      : t('error.generic')
   )
   text('errorDetail', error || '')
   $('tunWarn').hidden = !st.otherTunnel
   text(
     'tunWarn',
     st.otherTunnel
-      ? 'Включён ' + st.otherTunnel + '. Отключите его, затем нажмите «Повторить».'
+      ? t('conn.otherTunnel', { name: st.otherTunnel })
       : ''
   )
   text(
     'serverName',
     cfg.connectionSource === 'peers'
-      ? st.peer?.guestConnected ? 'Соединение пользователя · ' + st.peer.guestCountry
-        : st.peer?.connected ? 'Каталог соединений пользователей доступен' : 'Ожидаем каталог соединений пользователей'
-      : cfg.connectionSource === 'public' ? 'Личный доступ MagnetGate · сайты, видео и звонки'
+      ? st.peer?.guestConnected ? t('server.peerGuest', { country: st.peer.guestCountry })
+        : st.peer?.connected ? t('server.peerCatalogue') : t('server.peerWaiting')
+      : cfg.connectionSource === 'public' ? t('server.public')
       : cfg.exits.length === 1
-      ? 'Сервер ' + cfg.exits[0].name
+      ? t('server.one', { name: cfg.exits[0].name })
       : cfg.exits.length
-        ? 'Серверов настроено: ' + cfg.exits.length
-        : 'Сервер не настроен'
+        ? t('server.many', { count: cfg.exits.length })
+        : t('server.none')
   )
   const protection = st.trafficProtected
-    ? 'Строгая защита проверена'
+    ? t('protection.verified')
     : st.guardRecoveryRequired
-      ? 'Нужно восстановить правила защиты'
+      ? t('protection.restore')
       : st.vpnOn && cfg.killSwitch && cfg.vpnMode === 'full'
-        ? 'Строгая защита ещё не подтверждена'
-        : 'Блокировка при обрыве не активна'
+        ? t('protection.unconfirmed')
+        : t('protection.inactive')
   text('protection', protection)
   text(
     'diagDiscovery',
     cfg.connectionSource === 'peers'
-      ? st.peer?.connected ? 'Каталог доступен' : 'Каталог недоступен'
-      : st.clientRunning ? (st.rvReady ? 'Сервер найден' : 'Поиск сервера') : 'Остановлено'
+      ? st.peer?.connected ? t('diag.catalogueUp') : t('diag.catalogueDown')
+      : st.clientRunning ? (st.rvReady ? t('diag.serverFound') : t('diag.serverSearching')) : t('diag.stopped')
   )
   text(
     'diagTunnel',
     st.stopRecoveryRequired
-      ? 'Ожидает остановки'
+      ? t('diag.waitingStop')
       : st.engineReady
-        ? 'Готов'
+        ? t('diag.ready')
         : st.vpnOn
-          ? 'Подготавливается'
-          : 'Не запущен'
+          ? t('diag.starting')
+          : t('diag.notRunning')
   )
   text(
     'diagHealth',
-    view.connected ? 'Проверен' : st.vpnOn ? 'Ещё не подтверждён' : 'Не проверяется'
+    view.connected ? t('diag.verified') : st.vpnOn ? t('diag.notConfirmed') : t('diag.notChecked')
   )
-  text('diagMode', st.vpnOn ? names[st.activeMode] || 'Ещё не применён' : '—')
+  text('diagMode', st.vpnOn ? modeName(st.activeMode) || t('diag.notApplied') : '—')
   text('diagGuard', protection)
   const planes = st.stats && Array.isArray(st.stats.planes) ? st.stats.planes : []
-  text('diagPlanes', st.vpnOn ? planes.length ? planes.join(', ') : 'ожидание трафика' : '—')
+  text('diagPlanes', st.vpnOn ? planes.length ? planes.join(', ') : t('diag.waitingTraffic') : '—')
   $('traffic').hidden = !view.connected
   renderCountries(st, view)
   MGPeer.render({ ...st, connectionSource: cfg.connectionSource })
@@ -125,13 +126,17 @@ function renderStatus() {
   const stats = st.stats || {}
   text(
     'traffic',
-    `Трафик ↑ ${bytes(stats.upTotal)} / ↓ ${bytes(stats.downTotal)}` +
-      ` · скорость ↑ ${bytes(stats.upBps)}/с / ↓ ${bytes(stats.downBps)}/с` +
-      ` · Соединений: ${stats.conns || 0}`
+    t('traffic.line', {
+      up: bytes(stats.upTotal),
+      down: bytes(stats.downTotal),
+      upRate: bytes(stats.upBps),
+      downRate: bytes(stats.downBps),
+      conns: stats.conns || 0
+    })
   )
 }
 function bytes(value = 0) {
-  const units = ['Б', 'КБ', 'МБ', 'ГБ']
+  const units = [t('unit.b'), t('unit.kb'), t('unit.mb'), t('unit.gb')]
   let index = 0
   while (value >= 1024 && index < units.length - 1) {
     value /= 1024
@@ -162,11 +167,11 @@ function renderCountries(st, view) {
   }
   select.value = selected
   text('countryMsg', cfg.connectionSource === 'peers'
-    ? !st.peer?.configured ? 'Сервис соединений пользователей пока не настроен.'
-    : !st.peer.connected ? 'Каталог недоступен. Ожидаем соединения.'
-    : selected && !countries.some(row => row.cc === selected) ? 'Выбранная страна сейчас недоступна.'
-    : st.peer.guestConnected ? 'Сейчас: ' + st.peer.guestCountry
-    : countries.length ? 'Узел в выбранной стране будет выбран автоматически.' : 'Пока нет доступных соединений пользователей.'
+    ? !st.peer?.configured ? t('country.peerNotSetUp')
+    : !st.peer.connected ? t('country.peerNoCatalogue')
+    : selected && !countries.some(row => row.cc === selected) ? t('country.selectedUnavailable')
+    : st.peer.guestConnected ? t('conn.now', { value: st.peer.guestCountry })
+    : countries.length ? t('country.peerAuto') : t('country.peerNone')
     : MGView.countryMessage(selected, st.countryFallback))
 }
 function renderNodes(st) {
@@ -198,32 +203,32 @@ function renderRules() {
   all('[data-list]').forEach((el) => el.setAttribute('aria-pressed', el.dataset.list === list))
   text(
     'fullDescription',
-    cfg.killSwitch ? 'Все сайты, без прямых исключений' : 'Кроме сайтов в исключениях'
+    cfg.killSwitch ? t('mode.fullStrict') : t('mode.fullDesc')
   )
   const preview = cfg.vpnMode === 'full' ? 'directDomains' : 'tunnelDomains'
-  text('previewTitle', cfg.vpnMode === 'full' ? 'Исключения из VPN' : 'Сайты через VPN')
+  text('previewTitle', cfg.vpnMode === 'full' ? t('preview.exclusions') : t('preview.viaVpn'))
   const domains = cfg[preview] || []
   text(
     'previewSites',
     cfg.vpnMode === 'full' && cfg.killSwitch
-      ? 'Не действуют при строгой защите'
+      ? t('preview.strict')
       : domains.length
         ? domains.slice(0, 3).join(', ') +
-          (domains.length > 3 ? ' и ещё ' + (domains.length - 3) : '')
-        : 'Пользовательский список пока пуст'
+          (domains.length > 3 ? t('preview.more', { count: domains.length - 3 }) : '')
+        : t('preview.empty')
   )
   text(
     'listHint',
     list === 'directDomains'
-      ? 'Исключения для режима «Весь интернет».'
-      : 'Сайты для режима «Только выбранное».'
+      ? t('sites.hintDirect')
+      : t('sites.hintSplit')
   )
   $('listWarning').hidden = list !== 'directDomains' || !cfg.killSwitch
   text(
     'builtInNote',
     list === 'directDomains'
-      ? 'В режиме «Весь интернет» сайты для прямого доступа добавляете вы. Изменения сохраняются автоматически.'
-      : 'Встроенные списки дополняют выбранные сайты в режиме «Только выбранное». Изменения сохраняются автоматически.'
+      ? t('sites.noteDirect')
+      : t('sites.noteSplit')
   )
   $('killSwitch').checked = st.killSwitchSupported === false ? false : cfg.killSwitch
   $('guardNote').hidden = !cfg.killSwitch
@@ -232,7 +237,7 @@ function renderRules() {
   if (!cfg[list]?.length) {
     const empty = document.createElement('p')
     empty.className = 'mg-empty'
-    empty.textContent = 'В этом списке пока нет сайтов. Добавьте первый выше.'
+    empty.textContent = t('sites.empty')
     box.append(empty)
   }
   for (const domain of cfg[list] || []) {
@@ -243,8 +248,8 @@ function renderRules() {
     label.textContent = domain
     const remove = document.createElement('button')
     remove.className = 'mg-remove'
-    remove.textContent = 'Убрать'
-    remove.setAttribute('aria-label', 'Убрать ' + domain)
+    remove.textContent = t('sites.remove')
+    remove.setAttribute('aria-label', t('sites.removeAria', { domain }))
     const key = list
     remove.onclick = () =>
       saveChange(
@@ -272,7 +277,7 @@ function scheduleApply() {
   }, 350)
 }
 function saveChange(update, messageId) {
-  if (!loaded) return Promise.reject(new Error('Сначала дождитесь загрузки настроек.'))
+  if (!loaded) return Promise.reject(new Error(t('save.waitLoad')))
   const result = saveQueue.then(async () => {
     try {
       const candidate = update(structuredClone(cfg))
@@ -281,11 +286,11 @@ function saveChange(update, messageId) {
       renderRules()
       renderStatus()
       if (messageId)
-        text(messageId, 'Сохранено' + (st.vpnOn ? ' · применяем к подключению' : '') + '.')
+        text(messageId, st.vpnOn ? t('save.savedApplying') : t('save.saved'))
       scheduleApply()
       return cfg
     } catch (err) {
-      if (messageId) text(messageId, 'Не сохранено. Проверьте введённые значения.')
+      if (messageId) text(messageId, t('save.notSaved'))
       showError(err)
       renderRules()
       throw err
@@ -300,7 +305,7 @@ function renderServers() {
   if (!serverDraft.length) {
     const p = document.createElement('p')
     p.className = 'mg-empty'
-    p.textContent = 'Добавьте сервер и вставьте его ключ доступа.'
+    p.textContent = t('servers.empty')
     box.append(p)
   }
   serverDraft.forEach((server, index) => {
@@ -314,11 +319,11 @@ function renderServers() {
       input.value = value
       input.autocomplete = 'off'
       input.spellcheck = false
-      input.setAttribute('aria-label', labelText + ' · сервер ' + (index + 1))
+      input.setAttribute('aria-label', t('servers.fieldAria', { label: labelText, number: index + 1 }))
       input.oninput = () => {
         serverDraft[index][key] = input.value
         serverRevision++
-        text('serversMessage', 'Есть несохранённые изменения.')
+        text('serversMessage', t('save.unsaved'))
       }
       label.append(input)
       return label
@@ -327,7 +332,7 @@ function renderServers() {
     buttons.className = 'mg-actions'
     const generate = document.createElement('button')
     generate.className = 'mg-secondary'
-    generate.textContent = 'Создать ключ'
+    generate.textContent = t('servers.generate')
     generate.onclick = async () => {
       try {
         const key = await window.mg.genPsk()
@@ -337,7 +342,7 @@ function renderServers() {
         renderServers()
         text(
           'serversMessage',
-          'Новый ключ нужно также настроить на сервере. Сохраните изменения.'
+          t('servers.newKey')
         )
       } catch (err) {
         showError(err)
@@ -345,17 +350,17 @@ function renderServers() {
     }
     const remove = document.createElement('button')
     remove.className = 'mg-remove'
-    remove.textContent = 'Удалить сервер'
+    remove.textContent = t('servers.remove')
     remove.onclick = () => {
       serverDraft.splice(index, 1)
       serverRevision++
       renderServers()
-      text('serversMessage', 'Удаление применится после сохранения.')
+      text('serversMessage', t('servers.removePending'))
     }
     buttons.append(generate, remove)
     row.append(
-      field('Название', server.name || '', 'text', 'name'),
-      field('Ключ доступа', server.psk || '', 'password', 'psk'),
+      field(t('servers.name'), server.name || '', 'text', 'name'),
+      field(t('servers.key'), server.psk || '', 'password', 'psk'),
       buttons
     )
     box.append(row)
@@ -376,7 +381,7 @@ function appendLog(line) {
 async function addSite() {
   const raw = $('domain').value.trim()
   try {
-    if (!raw) throw new Error('Введите адрес сайта.')
+    if (!raw) throw new Error(t('sites.enterAddress'))
     const url = new URL(raw.includes('://') ? raw : 'https://' + raw.replace(/^\*\./, ''))
     const domain = url.hostname.toLowerCase().replace(/\.$/, '')
     if (
@@ -384,10 +389,10 @@ async function addSite() {
       !domain.includes('.') ||
       !/^([a-z0-9-]+\.)+[a-z0-9-]+$/.test(domain)
     )
-      throw new Error('Введите домен, например example.com.')
+      throw new Error(t('sites.enterDomain'))
     const key = list
     await saveChange((current) => {
-      if (current[key].includes(domain)) throw new Error('Этот сайт уже есть в списке.')
+      if (current[key].includes(domain)) throw new Error(t('sites.duplicate'))
       return { ...current, [key]: [...current[key], domain] }
     }, 'siteMessage')
     $('domain').value = ''
@@ -395,15 +400,42 @@ async function addSite() {
     text('siteMessage', err.message)
   }
 }
+// The UI language: English unless the user chose another one (kept per device).
+const LANGUAGE_KEY = 'magnetgate.language'
+function savedLanguage() {
+  try {
+    return localStorage.getItem(LANGUAGE_KEY)
+  } catch {
+    return null
+  }
+}
+function useLanguage(language) {
+  const chosen = MGI18n.setLanguage(language)
+  try {
+    localStorage.setItem(LANGUAGE_KEY, chosen)
+  } catch {}
+  MGI18n.apply(document)
+  $('language').value = chosen
+  window.mg.setLanguage?.(chosen).catch?.(() => {})
+  if ($('country')) $('country').dataset.options = ''
+  renderRules()
+  renderServers()
+  renderStatus()
+}
 window.addEventListener('DOMContentLoaded', async () => {
+  MGI18n.setLanguage(MGI18n.detect(savedLanguage()))
+  MGI18n.apply(document)
+  $('language').value = MGI18n.language()
+  window.mg.setLanguage?.(MGI18n.language()).catch?.(() => {})
+  $('language').onchange = () => useLanguage($('language').value)
   $('activatePublic').onclick = async () => {
     $('activatePublic').disabled = true
-    text('publicMessage', 'Проверяем код и получаем настройки…')
+    text('publicMessage', t('public.checking'))
     try {
       await saveQueue
       cfg = await window.mg.activatePublic($('publicCode').value.trim())
       $('publicCode').value = ''
-      text('publicMessage', 'Готово. Откройте «Подключение» и нажмите «Подключить».')
+      text('publicMessage', t('public.done'))
       renderStatus()
     } catch (error) { text('publicMessage', error.message) }
     finally { $('activatePublic').disabled = false }
@@ -487,17 +519,17 @@ window.addEventListener('DOMContentLoaded', async () => {
     serverDraft.push({ name: '', psk: '' })
     serverRevision++
     renderServers()
-    text('serversMessage', 'Есть несохранённые изменения.')
+    text('serversMessage', t('save.unsaved'))
   }
   $('btnSaveServers').onclick = async () => {
     const exits = structuredClone(serverDraft)
     const revision = serverRevision
     if (exits.some((e) => !e.psk.trim())) {
-      text('serversMessage', 'Укажите ключ для каждого сервера.')
+      text('serversMessage', t('servers.keyRequired'))
       return
     }
     try {
-      text('serversMessage', 'Сохраняем…')
+      text('serversMessage', t('save.saving'))
       await saveChange((current) => ({ ...current, exits }))
       if (revision === serverRevision) {
         serverDraft = structuredClone(cfg.exits)
@@ -506,17 +538,17 @@ window.addEventListener('DOMContentLoaded', async () => {
       text(
         'serversMessage',
         revision === serverRevision
-          ? 'Серверы сохранены.'
-          : 'Предыдущие изменения сохранены. Есть новые несохранённые изменения.'
+          ? t('servers.saved')
+          : t('save.newUnsaved')
       )
     } catch {
-      text('serversMessage', 'Серверы не сохранены. Проверьте значения и повторите.')
+      text('serversMessage', t('servers.notSaved'))
     }
   }
   for (const id of ['localPort', 'singboxPort', 'probePort', 'bootstrap', 'directProcesses', 'slots'])
     $(id).oninput = () => {
       advancedRevision++
-      text('advancedMessage', 'Есть несохранённые изменения.')
+      text('advancedMessage', t('save.unsaved'))
     }
   $('btnSaveAdvanced').onclick = async () => {
     const fields = {}
@@ -524,7 +556,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     for (const name of ['localPort', 'singboxPort', 'probePort']) {
       fields[name] = Number($(name).value)
       if (!Number.isInteger(fields[name]) || fields[name] < 1024 || fields[name] > 65535) {
-        text('advancedMessage', 'Порты должны быть целыми числами от 1024 до 65535.')
+        text('advancedMessage', t('advanced.ports'))
         return
       }
     }
@@ -542,17 +574,17 @@ window.addEventListener('DOMContentLoaded', async () => {
       .filter(Boolean)
       .map(Number)
     try {
-      text('advancedMessage', 'Сохраняем…')
+      text('advancedMessage', t('save.saving'))
       await saveChange((current) => ({ ...current, ...fields }))
       if (revision === advancedRevision) fillAdvanced()
       text(
         'advancedMessage',
         revision === advancedRevision
-          ? 'Параметры сохранены.'
-          : 'Предыдущие изменения сохранены. Есть новые несохранённые изменения.'
+          ? t('advanced.saved')
+          : t('save.newUnsaved')
       )
     } catch {
-      text('advancedMessage', 'Параметры не сохранены. Проверьте значения и повторите.')
+      text('advancedMessage', t('advanced.notSaved'))
     }
   }
   $('btnOpenDir').onclick = () => window.mg.openConfigDir().catch(showError)
@@ -563,20 +595,20 @@ window.addEventListener('DOMContentLoaded', async () => {
   clearBtn.onclick = async () => {
     if (!clearArmed) {
       clearArmed = true
-      clearBtn.textContent = 'Точно очистить? Нажмите ещё раз'
+      clearBtn.textContent = t('diag.clearConfirm')
       setTimeout(() => {
         clearArmed = false
-        clearBtn.textContent = 'Очистить журнал'
+        clearBtn.textContent = t('diag.clearLog')
       }, 5000)
       return
     }
     clearArmed = false
-    clearBtn.textContent = 'Очистить журнал'
+    clearBtn.textContent = t('diag.clearLog')
     try {
       await window.mg.clearLog()
       const box = $('log')
       if (box) box.textContent = ''
-      text('diagMessage', 'Журнал очищен.')
+      text('diagMessage', t('diag.cleared'))
     } catch (err) {
       showError(err)
     }
@@ -587,7 +619,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       const snapshot = await window.mg.getState()
       if (version === statusVersion) st = snapshot
       renderStatus()
-      text('diagMessage', 'Состояние обновлено.')
+      text('diagMessage', t('diag.refreshed'))
     } catch (err) {
       showError(err)
     }
@@ -620,13 +652,13 @@ window.addEventListener('DOMContentLoaded', async () => {
     renderStatus()
   } catch (err) {
     showError(err)
-    if (!MGView.needsDisconnect(st)) text('phase', 'Не удалось загрузить настройки')
-    text('windowStatus', 'Ошибка настроек')
+    if (!MGView.needsDisconnect(st)) text('phase', t('error.loadSettings'))
+    text('windowStatus', t('error.settings'))
   }
   try {
     for (const line of await window.mg.getLog()) appendLog(line)
   } catch (err) {
-    text('diagMessage', 'Не удалось прочитать журнал: ' + err.message)
+    text('diagMessage', t('error.readLog', { message: err.message }))
   }
   try {
     text('logPath', await window.mg.getLogPath())

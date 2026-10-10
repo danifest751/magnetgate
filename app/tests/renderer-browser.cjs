@@ -59,7 +59,10 @@ async function fixture(options = {}) {
         onStatus?.(clone(f.state))
       }
       f.log = (line) => onLog?.(line)
+      // this suite checks the Russian interface; English is the default (tests/i18n.test.cjs)
+      localStorage.setItem('magnetgate.language', 'ru')
       window.mg = {
+        setLanguage: async (language) => language,
         getConfig: async () => {
           if (configError) throw new Error('fixture config error')
           return clone(f.config)
