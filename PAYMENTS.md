@@ -167,9 +167,33 @@ can spend them.
   a node's `fullEndpoint` instead of its `endpoint` when the node has one. `/api/node-auth` takes an
   optional `listener` (`free` or `full`); the `full` listener admits paid accounts only.
 
-Not done yet: the node side (separate free and full Hysteria2 listeners with the free speed limit and
-`listener` in the agent's auth call), the payment screen in the apps, admin-panel editing of these
-parameters, and English for the service's older error messages.
+**Nodes** (`web/node_agent.py`). A node without `listeners` in its agent config works as today: one
+Hysteria2 instance, auth at `/auth`. A node with the two tiers runs two instances, the free one with
+Hysteria2's per-client `bandwidth` limit:
+
+```yaml
+# free: hysteria-free.yaml                     # full: hysteria-full.yaml
+listen: :443                                   # listen: :8443
+bandwidth: {up: 3 mbps, down: 3 mbps}          # (no bandwidth limit)
+auth:
+  type: http
+  http: {url: http://127.0.0.1:3411/auth/free} #   url: http://127.0.0.1:3411/auth/full
+trafficStats: {listen: 127.0.0.1:3412, secret: <free secret>}   # 127.0.0.1:3413, <full secret>
+```
+
+```json
+"listeners": [
+  {"name": "free", "pidFile": "/run/magnetgate-public/hysteria.pid", "statsPort": 3412, "statsSecret": "..."},
+  {"name": "full", "pidFile": "/run/magnetgate-public/hysteria-full.pid", "statsPort": 3413, "statsSecret": "..."}
+]
+```
+
+The agent passes the listener's name to `/api/node-auth`, sums online counts over both instances and
+reports their traffic as one counter, so a restart of either instance adds only its new traffic. In
+the service's `nodes`, such a node gets `fullEndpoint` (the 8443 endpoint) next to `endpoint`.
+
+Not done yet: the payment screen in the apps, admin-panel editing of these parameters, and English for
+the service's older error messages.
 
 ## 5. Phase 2: peer exits earn RQT
 
