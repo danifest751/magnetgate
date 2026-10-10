@@ -10,7 +10,7 @@ function validateProfile(value) {
     throw new Error(I18n.t('publicAccess.badProfile'))
   if (value.tier !== undefined && !['free', 'full'].includes(value.tier)) throw new Error(I18n.t('publicAccess.badProfile'))
   for (const d of value.endpoints) {
-    if (d.t !== 'hy2' || !net.isIPv4(d.host) || /^(0|10|127|169\.254|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(d.host) || ![4443, 8443].includes(d.port) ||
+    if (d.t !== 'hy2' || !net.isIPv4(d.host) || /^(0|10|127|169\.254|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(d.host) || ![4443, 4444].includes(d.port) ||
         !/^[a-f0-9]{64}$/.test(d.pw) || !/^[a-f0-9]{64}$/.test(d.obfs) ||
         !['FI', 'NL'].includes(d.country) || d.sni !== 'magnet.norma.so' ||
         typeof d.ca !== 'string' || d.ca.length > 4096 || !d.ca.startsWith('-----BEGIN CERTIFICATE-----'))

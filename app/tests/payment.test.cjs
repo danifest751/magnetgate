@@ -34,7 +34,7 @@ test('the code goes only to the trusted service; no payments there is not an err
 })
 
 test('the full tier listener port is accepted in a profile', () => {
-  const endpoint = { t: 'hy2', host: '192.0.2.1', port: 8443, pw: 'a'.repeat(64), obfs: 'b'.repeat(64), country: 'FI',
+  const endpoint = { t: 'hy2', host: '192.0.2.1', port: 4444, pw: 'a'.repeat(64), obfs: 'b'.repeat(64), country: 'FI',
     sni: 'magnet.norma.so', ca: '-----BEGIN CERTIFICATE-----\nx' }
   const profile = { version: 1, expires: Math.floor(Date.now() / 1000) + 60, tier: 'full', endpoints: [endpoint] }
   assert.equal(validateProfile(profile).tier, 'full')

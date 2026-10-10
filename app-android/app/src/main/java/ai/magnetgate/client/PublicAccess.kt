@@ -75,8 +75,8 @@ object PublicAccess {
       require(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}").matches(host))
       val address = java.net.InetAddress.getByName(host)
       require(!address.isAnyLocalAddress && !address.isLoopbackAddress && !address.isLinkLocalAddress && !address.isSiteLocalAddress && !address.isMulticastAddress)
-      // 4443: the free listener (and today's nodes); 8443: the full tier's
-      require(item.getString("t") == "hy2" && item.getInt("port") in listOf(4443, 8443))
+      // 4443: the free listener (and today's nodes); 4444: the full tier's
+      require(item.getString("t") == "hy2" && item.getInt("port") in listOf(4443, 4444))
       require(item.getString("country") in listOf("NL", "FI") && item.getString("sni") == "magnet.norma.so")
       require(Regex("[a-f0-9]{64}").matches(item.getString("pw")) && Regex("[a-f0-9]{64}").matches(item.getString("obfs")))
       require(item.getString("ca").startsWith("-----BEGIN CERTIFICATE-----") && item.getString("ca").length <= 4096)
