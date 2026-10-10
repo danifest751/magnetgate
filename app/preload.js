@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('mg', {
   getState: () => ipcRenderer.invoke('getState'),
   setLanguage: (language) => ipcRenderer.invoke('setLanguage', language),
   activatePublic: (code) => ipcRenderer.invoke('activatePublic', code),
+  getPayment: () => ipcRenderer.invoke('getPayment'),
   getLog: () => ipcRenderer.invoke('getLog'),
   getConfig: () => ipcRenderer.invoke('getConfig'),
   saveConfig: (cfg) => ipcRenderer.invoke('saveConfig', cfg),

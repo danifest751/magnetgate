@@ -6,6 +6,9 @@ import java.net.URL
 import java.security.SecureRandom
 import javax.net.ssl.HttpsURLConnection
 
+/** An error answer of the access service, with its HTTP status. */
+class ServiceError(val status: Int, message: String) : IllegalStateException(message)
+
 /** Личный доступ не использует общий ключ частной группы. */
 object PublicAccess {
   @Volatile private var profile: JSONObject? = null
@@ -42,10 +45,48 @@ object PublicAccess {
       NodeRow(it.slot, "MagnetGate", uiResources(context).getString(R.string.public_node), it.country, listOf(Plane("hy2", "")), emptyList())
     },
   )
+  /** The account's deposit address, tier and balance; null without a code or when the service takes no payments. */
+  fun payment(context: Context): PaymentInfo? {
+    if (!enabled(context)) return null
+    val json = try {
+      post(context, "payment", JSONObject().put("code", checkCode(context, Settings.publicCode(context))))
+    } catch (error: ServiceError) {
+      if (error.status == 404) return null
+      throw error
+    }
+    val info = runCatching { Payments.parse(json) }.getOrElse { error(uiResources(context).getString(R.string.payment_invalid)) }
+    // paid days change the endpoints (the full tier's listener): fetch the profile again
+    if (info.full != (profile?.optString("tier") == "full")) runCatching { refresh(context) }
+    return info
+  }
+  private fun checkCode(context: Context, code: String): String {
+    require(Regex("MG1-[a-f0-9]{64}").matches(code)) { uiResources(context).getString(R.string.public_bad_code) }
+    return code
+  }
   private fun fetch(context: Context, code: String, device: String): JSONObject {
+    val result = post(context, "profile", JSONObject().put("code", checkCode(context, code)).put("device", device))
+    require(result.optInt("version") == 1 && result.optLong("expires") > System.currentTimeMillis() / 1000)
+    require(result.optString("tier", "free") in listOf("free", "full"))
+    val endpoints = result.getJSONArray("endpoints")
+    require(endpoints.length() in 1..4)
+    for (index in 0 until endpoints.length()) {
+      val item = endpoints.getJSONObject(index)
+      val host = item.getString("host")
+      require(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}").matches(host))
+      val address = java.net.InetAddress.getByName(host)
+      require(!address.isAnyLocalAddress && !address.isLoopbackAddress && !address.isLinkLocalAddress && !address.isSiteLocalAddress && !address.isMulticastAddress)
+      // 4443: the free listener (and today's nodes); 8443: the full tier's
+      require(item.getString("t") == "hy2" && item.getInt("port") in listOf(4443, 8443))
+      require(item.getString("country") in listOf("NL", "FI") && item.getString("sni") == "magnet.norma.so")
+      require(Regex("[a-f0-9]{64}").matches(item.getString("pw")) && Regex("[a-f0-9]{64}").matches(item.getString("obfs")))
+      require(item.getString("ca").startsWith("-----BEGIN CERTIFICATE-----") && item.getString("ca").length <= 4096)
+    }
+    return result
+  }
+  /** POST a JSON body to the access service; a bounded JSON answer, or [ServiceError]. */
+  private fun post(context: Context, path: String, body: JSONObject): JSONObject {
     val strings = uiResources(context)
-    require(Regex("MG1-[a-f0-9]{64}").matches(code)) { strings.getString(R.string.public_bad_code) }
-    val connection = URL("https://magnet.norma.so/api/profile").openConnection() as HttpsURLConnection
+    val connection = URL("https://magnet.norma.so/api/$path").openConnection() as HttpsURLConnection
     connection.instanceFollowRedirects = false
     connection.connectTimeout = 15000
     connection.readTimeout = 15000
@@ -53,7 +94,7 @@ object PublicAccess {
     connection.doOutput = true
     connection.setRequestProperty("Content-Type", "application/json")
     try {
-      connection.outputStream.use { it.write(JSONObject().put("code", code).put("device", device).toString().toByteArray()) }
+      connection.outputStream.use { it.write(body.toString().toByteArray()) }
       val success = connection.responseCode == 200
       val stream = if (success) connection.inputStream else connection.errorStream
       val bytes = stream?.use {
@@ -69,21 +110,7 @@ object PublicAccess {
       } ?: error(strings.getString(R.string.public_unavailable))
       require(bytes.size <= 24000) { strings.getString(R.string.public_too_large) }
       val result = JSONObject(String(bytes, Charsets.UTF_8))
-      check(success) { result.optString("error", strings.getString(R.string.public_unavailable)).take(240) }
-      require(result.optInt("version") == 1 && result.optLong("expires") > System.currentTimeMillis() / 1000)
-      val endpoints = result.getJSONArray("endpoints")
-      require(endpoints.length() in 1..4)
-      for (index in 0 until endpoints.length()) {
-        val item = endpoints.getJSONObject(index)
-        val host = item.getString("host")
-        require(Regex("(?:[0-9]{1,3}\\.){3}[0-9]{1,3}").matches(host))
-        val address = java.net.InetAddress.getByName(host)
-        require(!address.isAnyLocalAddress && !address.isLoopbackAddress && !address.isLinkLocalAddress && !address.isSiteLocalAddress && !address.isMulticastAddress)
-        require(item.getString("t") == "hy2" && item.getInt("port") == 4443)
-        require(item.getString("country") in listOf("NL", "FI") && item.getString("sni") == "magnet.norma.so")
-        require(Regex("[a-f0-9]{64}").matches(item.getString("pw")) && Regex("[a-f0-9]{64}").matches(item.getString("obfs")))
-        require(item.getString("ca").startsWith("-----BEGIN CERTIFICATE-----") && item.getString("ca").length <= 4096)
-      }
+      if (!success) throw ServiceError(connection.responseCode, result.optString("error", strings.getString(R.string.public_unavailable)).take(240))
       return result
     } finally { connection.disconnect() }
   }

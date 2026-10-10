@@ -308,6 +308,21 @@ body {
   color: var(--mg-muted);
   font-size: 12px;
 }
+#mg-app .mg-payment {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--mg-line);
+}
+#mg-app .mg-payment-address code {
+  font-family: Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  user-select: all;
+}
+#mg-app .mg-payment-prices {
+  margin: 8px 0;
+  padding-left: 18px;
+}
 #mg-app .mg-note {
   padding: 13px 15px;
   border-left: 2px solid var(--mg-green);

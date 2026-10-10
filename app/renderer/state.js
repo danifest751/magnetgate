@@ -99,7 +99,36 @@
       }
     })
   }
-  const api = { needsDisconnect, connectionView, countryOptions, countryMessage, nodeRows }
+  // RQT from atoms (10^8 per RQT), without trailing zeros
+  function formatRqt(atoms) {
+    const whole = Math.floor(atoms / 1e8)
+    const part = String(atoms % 1e8).padStart(8, '0').replace(/0+$/, '')
+    return part ? whole + '.' + part : String(whole)
+  }
+  // The payment block: tier, deposit address and the price of the discount steps.
+  function paymentView(p, now = Date.now()) {
+    if (!p) return null
+    const full = p.tier === 'full' && p.paidUntil * 1000 > now
+    const date = (s) => new Date(s * 1000).toLocaleDateString(I18n.language() === 'ru' ? 'ru-RU' : 'en-GB')
+    const cost = (days) => {
+      const off = Math.max(0, ...p.discounts.filter((d) => days >= d[0]).map((d) => d[1]))
+      return { days, off, atoms: Math.ceil((p.priceAtomsPerDay * days * (100 - off)) / 100) }
+    }
+    const steps = [1, ...p.discounts.map((d) => d[0])].filter((d, i, a) => a.indexOf(d) === i).sort((a, b) => a - b)
+    return {
+      status: full ? t('payment.fullUntil', { date: date(p.paidUntil) }) : t('payment.free'),
+      full,
+      address: p.address,
+      network: p.network === 'main' ? '' : t('payment.testNetwork'),
+      prices: steps.map(cost).map((c) => c.off
+        ? t('payment.priceOff', { days: c.days, amount: formatRqt(c.atoms), off: c.off })
+        : t('payment.price', { days: c.days, amount: formatRqt(c.atoms) })),
+      balance: p.balanceAtoms ? t('payment.balance', { amount: formatRqt(p.balanceAtoms) }) : '',
+      note: t('payment.note', { confirmations: p.confirmations }),
+      expires: t('payment.codeExpires', { date: date(p.expires) })
+    }
+  }
+  const api = { needsDisconnect, connectionView, countryOptions, countryMessage, nodeRows, formatRqt, paymentView }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.MGView = api
 })(globalThis)

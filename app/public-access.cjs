@@ -8,8 +8,9 @@ function validateProfile(value) {
   if (value?.version !== 1 || !Number.isSafeInteger(value.expires) || value.expires * 1000 <= Date.now() ||
       !Array.isArray(value.endpoints) || !value.endpoints.length || value.endpoints.length > 4)
     throw new Error(I18n.t('publicAccess.badProfile'))
+  if (value.tier !== undefined && !['free', 'full'].includes(value.tier)) throw new Error(I18n.t('publicAccess.badProfile'))
   for (const d of value.endpoints) {
-    if (d.t !== 'hy2' || !net.isIPv4(d.host) || /^(0|10|127|169\.254|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(d.host) || d.port !== 4443 ||
+    if (d.t !== 'hy2' || !net.isIPv4(d.host) || /^(0|10|127|169\.254|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(d.host) || ![4443, 8443].includes(d.port) ||
         !/^[a-f0-9]{64}$/.test(d.pw) || !/^[a-f0-9]{64}$/.test(d.obfs) ||
         !['FI', 'NL'].includes(d.country) || d.sni !== 'magnet.norma.so' ||
         typeof d.ca !== 'string' || d.ca.length > 4096 || !d.ca.startsWith('-----BEGIN CERTIFICATE-----'))
@@ -18,12 +19,29 @@ function validateProfile(value) {
   return value
 }
 
-async function requestProfile(code, device, fetcher = fetch) {
-  if (typeof code !== 'string' || !/^MG1-[a-f0-9]{64}$/.test(code.trim()))
-    throw new Error(I18n.t('publicAccess.badCode'))
-  const reply = await fetcher('https://magnet.norma.so/api/profile', {
+// A Requant address (bech32m; the service checks the checksum against its own list).
+const ADDRESS = /^(trq|rqrt|rq)1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,80}$/
+const atoms = v => Number.isSafeInteger(v) && v >= 0
+
+function validatePayment(value) {
+  const ok = value && ADDRESS.test(value.address) && ['free', 'full'].includes(value.tier) &&
+    value.currency === 'RQT' && ['test', 'regtest', 'main'].includes(value.network) &&
+    atoms(value.priceAtomsPerDay) && value.priceAtomsPerDay > 0 && atoms(value.balanceAtoms) &&
+    atoms(value.paidUntil) && atoms(value.expires) && Number.isSafeInteger(value.confirmations) &&
+    Array.isArray(value.discounts) && value.discounts.length <= 10 &&
+    value.discounts.every(d => Array.isArray(d) && d.length === 2 && Number.isSafeInteger(d[0]) && d[0] > 0 &&
+      Number.isSafeInteger(d[1]) && d[1] >= 0 && d[1] < 100) &&
+    Array.isArray(value.credits) && value.credits.length <= 20 &&
+    value.credits.every(c => /^[a-f0-9]{64}$/.test(c?.txid) && atoms(c.atoms) && atoms(c.days))
+  if (!ok) throw new Error(I18n.t('publicAccess.badPayment'))
+  return value
+}
+
+// POST a JSON body to the access service and read a bounded JSON answer.
+async function post(pathname, body, fetcher) {
+  const reply = await fetcher('https://magnet.norma.so/api/' + pathname, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
-    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code.trim(), device })
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   })
   const reader = reply.body.getReader()
   const chunks = []
@@ -38,8 +56,32 @@ async function requestProfile(code, device, fetcher = fetch) {
     }
   } finally { await reader.cancel() }
   const value = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-  if (!reply.ok) throw new Error(typeof value.error === 'string' ? value.error.slice(0, 240) : I18n.t('publicAccess.unavailable'))
-  return validateProfile(value)
+  if (!reply.ok) {
+    const error = new Error(typeof value.error === 'string' ? value.error.slice(0, 240) : I18n.t('publicAccess.unavailable'))
+    error.status = reply.status
+    throw error
+  }
+  return value
+}
+
+function checkCode(code) {
+  if (typeof code !== 'string' || !/^MG1-[a-f0-9]{64}$/.test(code.trim()))
+    throw new Error(I18n.t('publicAccess.badCode'))
+  return code.trim()
+}
+
+async function requestProfile(code, device, fetcher = fetch) {
+  return validateProfile(await post('profile', { code: checkCode(code), device }, fetcher))
+}
+
+// The account's deposit address, tier and balance; null when the service takes no payments.
+async function requestPayment(code, fetcher = fetch) {
+  try {
+    return validatePayment(await post('payment', { code: checkCode(code) }, fetcher))
+  } catch (error) {
+    if (error.status === 404) return null
+    throw error
+  }
 }
 
 class PublicAccess {
@@ -76,5 +118,12 @@ class PublicAccess {
     return this.profile
   }
   endpoints() { return this.profile && this.profile.expires * 1000 > Date.now() ? this.profile.endpoints : [] }
+  async payment(fetcher = fetch) {
+    if (!fs.existsSync(this.file)) return null
+    const payment = await requestPayment(this.safeStorage.decryptString(fs.readFileSync(this.file)), fetcher)
+    // paid days change the endpoints (the full tier's listener): fetch the profile again on connect
+    if (payment && this.profile && payment.tier !== (this.profile.tier || 'free')) this.fetchedAt = 0
+    return payment
+  }
 }
-module.exports = { PublicAccess, requestProfile, validateProfile }
+module.exports = { PublicAccess, requestProfile, requestPayment, validateProfile, validatePayment }

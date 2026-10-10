@@ -182,6 +182,19 @@
               <label for="publicCode"><span data-i18n="public.codeLabel">Personal code</span><input id="publicCode" type="password" placeholder="MG1-…" autocomplete="off" spellcheck="false" maxlength="68" /></label>
               <button class="mg-action" id="activatePublic" data-i18n="public.activate">Activate personal access</button>
               <p id="publicMessage" class="mg-flash" role="status"></p>
+              <div id="payment" class="mg-payment" hidden>
+                <h3 data-i18n="payment.heading">Full access</h3>
+                <p id="paymentStatus" class="mg-caption"></p>
+                <p class="mg-caption" data-i18n="payment.hint">Unlimited speed on MagnetGate nodes, paid in RQT. Send any amount to your deposit address: it buys whole days at the prices below, and the rest stays on your balance.</p>
+                <p class="mg-payment-address"><code id="paymentAddress"></code></p>
+                <div class="mg-actions">
+                  <button class="mg-secondary" id="copyPayment" data-i18n="payment.copy">Copy address</button>
+                  <button class="mg-secondary" id="refreshPayment" data-i18n="payment.refresh">Check payment</button>
+                </div>
+                <ul id="paymentPrices" class="mg-payment-prices"></ul>
+                <p id="paymentBalance" class="mg-caption"></p>
+                <p id="paymentNote" class="mg-note"></p>
+              </div>
             </section>
             <details id="serverSettings" class="mg-setting">
               <summary data-i18n="servers.summary">Servers and access keys</summary>

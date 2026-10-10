@@ -264,5 +264,18 @@
     <string name="public_unavailable">Сервис доступа недоступен.</string>
     <string name="public_node">Личный доступ</string>
     <string name="public_route_note">Личный доступ MagnetGate · TCP и UDP</string>
+    <string name="payment_title">Полный доступ</string>
+    <string name="payment_hint">Без ограничения скорости на нодах MagnetGate, оплата в RQT. Отправьте любую сумму на свой адрес для пополнения: она покупает целые дни по ценам ниже, остаток остаётся на балансе.</string>
+    <string name="payment_copy">Скопировать адрес</string>
+    <string name="payment_check">Проверить оплату</string>
+    <string name="payment_free">Бесплатный доступ</string>
+    <string name="payment_full_until">Полный доступ до %1$s</string>
+    <string name="payment_code_expires">код действует до %1$s</string>
+    <string name="payment_test_network">RQT тестовой сети</string>
+    <string name="payment_price">%1$d дн. — %2$s RQT</string>
+    <string name="payment_price_off">%1$d дн. — %2$s RQT (скидка %3$d%%)</string>
+    <string name="payment_balance">Баланс: %1$s RQT</string>
+    <string name="payment_note">Платёж засчитывается после %1$d подтверждений (около %2$d минут).</string>
+    <string name="payment_invalid">Сервис вернул некорректные данные оплаты.</string>
     <string name="address_hidden">[адрес скрыт]</string>
 </resources>

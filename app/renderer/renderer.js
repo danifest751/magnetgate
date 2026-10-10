@@ -422,6 +422,27 @@ function useLanguage(language) {
   renderServers()
   renderStatus()
 }
+// The payment block appears only when the access service takes payments (§1a of PAYMENTS.md).
+async function loadPayment() {
+  if (!window.mg.getPayment) return
+  try {
+    const view = MGView.paymentView(await window.mg.getPayment())
+    $('payment').hidden = !view
+    if (!view) return
+    text('paymentStatus', [view.status, view.expires, view.network].filter(Boolean).join(' · '))
+    $('paymentAddress').textContent = view.address
+    $('paymentPrices').replaceChildren(...view.prices.map((line) => {
+      const item = document.createElement('li')
+      item.textContent = line
+      return item
+    }))
+    text('paymentBalance', view.balance)
+    text('paymentNote', view.note)
+  } catch (error) {
+    // no code yet, or the service is unreachable: nothing to show
+    $('payment').hidden = true
+  }
+}
 window.addEventListener('DOMContentLoaded', async () => {
   MGI18n.setLanguage(MGI18n.detect(savedLanguage()))
   MGI18n.apply(document)
@@ -437,9 +458,16 @@ window.addEventListener('DOMContentLoaded', async () => {
       $('publicCode').value = ''
       text('publicMessage', t('public.done'))
       renderStatus()
+      loadPayment()
     } catch (error) { text('publicMessage', error.message) }
     finally { $('activatePublic').disabled = false }
   }
+  $('refreshPayment').onclick = async () => {
+    $('refreshPayment').disabled = true
+    try { await loadPayment() } finally { $('refreshPayment').disabled = false }
+  }
+  $('copyPayment').onclick = () => navigator.clipboard?.writeText($('paymentAddress').textContent).catch(() => {})
+  loadPayment()
   MGPeer.bind(showError)
   $('countrySearch').oninput = () => renderCountries(st, MGView.connectionView(cfg, st))
   $('connectionSource').onchange = () => saveChange(current => ({ ...current,
