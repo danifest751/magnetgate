@@ -173,7 +173,7 @@ Hysteria2's per-client `bandwidth` limit:
 
 ```yaml
 # free: hysteria-free.yaml                     # full: hysteria-full.yaml
-listen: :443                                   # listen: :8443
+listen: :4443                                  # listen: :8443
 bandwidth: {up: 3 mbps, down: 3 mbps}          # (no bandwidth limit)
 auth:
   type: http
@@ -190,7 +190,8 @@ trafficStats: {listen: 127.0.0.1:3412, secret: <free secret>}   # 127.0.0.1:3413
 
 The agent passes the listener's name to `/api/node-auth`, sums online counts over both instances and
 reports their traffic as one counter, so a restart of either instance adds only its new traffic. In
-the service's `nodes`, such a node gets `fullEndpoint` (the 8443 endpoint) next to `endpoint`.
+the service's `nodes`, such a node gets `fullEndpoint` (the 8443 endpoint) next to `endpoint`; the
+apps accept ports 4443 and 8443 only.
 
 Not done yet: the payment screen in the apps, admin-panel editing of these parameters, and English for
 the service's older error messages.
