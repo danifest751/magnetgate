@@ -266,5 +266,18 @@
     <string name="public_unavailable">The access service is unavailable.</string>
     <string name="public_node">Personal access</string>
     <string name="public_route_note">MagnetGate personal access · TCP and UDP</string>
+    <string name="payment_title">Full access</string>
+    <string name="payment_hint">Unlimited speed on MagnetGate nodes, paid in RQT. Send any amount to your deposit address: it buys whole days at the prices below, and the rest stays on your balance.</string>
+    <string name="payment_copy">Copy address</string>
+    <string name="payment_check">Check payment</string>
+    <string name="payment_free">Free tier</string>
+    <string name="payment_full_until">Full access until %1$s</string>
+    <string name="payment_code_expires">code valid until %1$s</string>
+    <string name="payment_test_network">test network RQT</string>
+    <string name="payment_price">%1$d d — %2$s RQT</string>
+    <string name="payment_price_off">%1$d d — %2$s RQT (%3$d%% off)</string>
+    <string name="payment_balance">Balance: %1$s RQT</string>
+    <string name="payment_note">A payment counts after %1$d confirmations (about %2$d minutes).</string>
+    <string name="payment_invalid">The service returned invalid payment details.</string>
     <string name="address_hidden">[address hidden]</string>
 </resources>

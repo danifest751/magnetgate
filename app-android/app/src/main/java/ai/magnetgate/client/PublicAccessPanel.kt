@@ -1,10 +1,14 @@
 package ai.magnetgate.client
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +45,48 @@ fun PublicAccessPanel() {
         .onFailure { message = ui.text(R.string.public_save_failed) }
     }) { Text(ui.text(R.string.public_deactivate)) }
     if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall)
+    if (enabled) PaymentBlock()
     HorizontalDivider()
+  }
+}
+
+/** Full access paid in RQT: shown only when the access service takes payments (PAYMENTS.md §1a). */
+@Composable
+private fun PaymentBlock() {
+  val context = LocalContext.current
+  val ui = LocalUiStrings.current
+  val scope = rememberCoroutineScope()
+  var info by remember { mutableStateOf<PaymentInfo?>(null) }
+  var checking by remember { mutableStateOf(false) }
+  suspend fun load() {
+    checking = true
+    // no payments there, or the service is unreachable: nothing to show
+    info = withContext(Dispatchers.IO) { runCatching { PublicAccess.payment(context) }.getOrNull() }
+    checking = false
+  }
+  LaunchedEffect(Unit) { load() }
+  val current = info ?: return
+  val date = { seconds: Long -> java.text.DateFormat.getDateInstance(java.text.DateFormat.MEDIUM, ui.locale).format(java.util.Date(seconds * 1000)) }
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+    HorizontalDivider()
+    Text(ui.text(R.string.payment_title), style = MaterialTheme.typography.titleMedium)
+    val status = if (current.fullNow()) ui.text(R.string.payment_full_until, date(current.paidUntil)) else ui.text(R.string.payment_free)
+    val network = if (current.network == "main") "" else " · " + ui.text(R.string.payment_test_network)
+    Text(status + " · " + ui.text(R.string.payment_code_expires, date(current.expires)) + network, style = MaterialTheme.typography.bodySmall)
+    Text(ui.text(R.string.payment_hint), style = MaterialTheme.typography.bodySmall)
+    SelectionContainer { Text(current.address, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      OutlinedButton(onClick = {
+        context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("RQT", current.address))
+      }) { Text(ui.text(R.string.payment_copy)) }
+      OutlinedButton(enabled = !checking, onClick = { scope.launch { load() } }) { Text(ui.text(R.string.payment_check)) }
+    }
+    for (step in current.steps()) {
+      val amount = Payments.formatRqt(step.atoms)
+      Text("• " + if (step.off > 0) ui.text(R.string.payment_price_off, step.days, amount, step.off) else ui.text(R.string.payment_price, step.days, amount),
+        style = MaterialTheme.typography.bodyMedium)
+    }
+    if (current.balance > 0) Text(ui.text(R.string.payment_balance, Payments.formatRqt(current.balance)), style = MaterialTheme.typography.bodySmall)
+    Text(ui.text(R.string.payment_note, current.confirmations, current.confirmations), style = MaterialTheme.typography.bodySmall)
   }
 }
