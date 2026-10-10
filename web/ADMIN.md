@@ -71,8 +71,8 @@ Open `http://127.0.0.1:3420/admin/`. Local and remote forwarded ports must match
 for the Host check; the service also supports `localhost` on the same port.
 The default service port can be changed using `--port`.
 
-Optional HTTP telemetry requires updating the existing public service with both
-`server.py` and `admin_metrics.py`, adding `analyticsDatabase` to its **untracked
+Optional HTTP telemetry requires updating the existing public service with
+`server.py`, `admin_metrics.py` and `payments.py` (imported even with payments off), adding `analyticsDatabase` to its **untracked
 private settings**, and restarting that service in an approved maintenance window.
 The path must match the admin history path; both processes need appropriate
 permissions. This is deliberately not enabled automatically. Telemetry is
