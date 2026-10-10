@@ -15,15 +15,15 @@ object PublicAccess {
     if (Regex("[a-f0-9]{64}").matches(saved)) return saved
     val bytes = ByteArray(32).also { SecureRandom().nextBytes(it) }
     val value = bytes.joinToString("") { "%02x".format(it) }
-    check(Settings.savePublicDevice(context, value)) { "Не удалось сохранить идентификатор устройства." }
+    check(Settings.savePublicDevice(context, value)) { uiResources(context).getString(R.string.public_device_failed) }
     return value
   }
   fun activate(context: Context, code: String) {
-    val result = fetch(code.trim(), device(context))
-    check(Settings.savePublicCode(context, code.trim())) { "Защищённое хранилище недоступно." }
+    val result = fetch(context, code.trim(), device(context))
+    check(Settings.savePublicCode(context, code.trim())) { uiResources(context).getString(R.string.public_storage_unavailable) }
     profile = result
   }
-  fun refresh(context: Context) { profile = fetch(Settings.publicCode(context), device(context)) }
+  fun refresh(context: Context) { profile = fetch(context, Settings.publicCode(context), device(context)) }
   fun clear(context: Context) { check(Settings.savePublicCode(context, "")); profile = null }
   fun nodes(): List<DiscoveredNode> {
     val current = profile ?: return emptyList()
@@ -38,10 +38,13 @@ object PublicAccess {
     running = MgVpnService.isRunning(), country = Settings.country(context),
     sent = MgVpnService.publicTraffic().sent, received = MgVpnService.publicTraffic().received,
     countries = nodes().map { CountryRow(it.country, 1) },
-    nodes = nodes().map { NodeRow(it.slot, "MagnetGate", "Личный доступ", it.country, listOf(Plane("hy2", "")), emptyList()) },
+    nodes = nodes().map {
+      NodeRow(it.slot, "MagnetGate", uiResources(context).getString(R.string.public_node), it.country, listOf(Plane("hy2", "")), emptyList())
+    },
   )
-  private fun fetch(code: String, device: String): JSONObject {
-    require(Regex("MG1-[a-f0-9]{64}").matches(code)) { "Вставьте личный код с сайта magnet.norma.so. Он начинается с MG1-." }
+  private fun fetch(context: Context, code: String, device: String): JSONObject {
+    val strings = uiResources(context)
+    require(Regex("MG1-[a-f0-9]{64}").matches(code)) { strings.getString(R.string.public_bad_code) }
     val connection = URL("https://magnet.norma.so/api/profile").openConnection() as HttpsURLConnection
     connection.instanceFollowRedirects = false
     connection.connectTimeout = 15000
@@ -59,14 +62,14 @@ object PublicAccess {
         while (true) {
           val count = it.read(buffer)
           if (count < 0) break
-          require(output.size() + count <= 24000) { "Слишком большой ответ сервиса." }
+          require(output.size() + count <= 24000) { strings.getString(R.string.public_too_large) }
           output.write(buffer, 0, count)
         }
         output.toByteArray()
-      } ?: error("Сервис доступа недоступен.")
-      require(bytes.size <= 24000) { "Слишком большой ответ сервиса." }
+      } ?: error(strings.getString(R.string.public_unavailable))
+      require(bytes.size <= 24000) { strings.getString(R.string.public_too_large) }
       val result = JSONObject(String(bytes, Charsets.UTF_8))
-      check(success) { result.optString("error", "Сервис доступа недоступен.").take(240) }
+      check(success) { result.optString("error", strings.getString(R.string.public_unavailable)).take(240) }
       require(result.optInt("version") == 1 && result.optLong("expires") > System.currentTimeMillis() / 1000)
       val endpoints = result.getJSONArray("endpoints")
       require(endpoints.length() in 1..4)

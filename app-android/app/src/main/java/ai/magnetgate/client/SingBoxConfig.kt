@@ -156,7 +156,7 @@ object SingBoxConfig {
     }
 
     if (publicRoute) {
-      require(udpTags.isNotEmpty()) { "Нет узлов личного доступа." }
+      require(udpTags.isNotEmpty()) { "No personal access nodes." }
       outbounds.put(JSONObject().put("type", "urltest").put("tag", "core").put("outbounds", JSONArray(udpTags))
         .put("url", "https://api.ipify.org").put("interval", "30s").put("interrupt_exist_connections", false))
     } else outbounds.put(
