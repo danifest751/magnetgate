@@ -247,4 +247,24 @@
   <string name="peer_share_save">Save</string>
     <string name="public_connection_details">Connection details</string>
     <string name="public_nodes_count">Available nodes: %1$d</string>
+    <string name="public_title">MagnetGate personal access</string>
+    <string name="public_hint">Get a free code at magnet.norma.so. Sites, video and calls go through your personal connection details.</string>
+    <string name="public_code_label">Personal code MG1-…</string>
+    <string name="public_vpn_first">Turn off the VPN first.</string>
+    <string name="public_checking">Checking the code…</string>
+    <string name="public_done">Done. Go back to the Connection screen and tap Connect.</string>
+    <string name="public_failed">Could not activate access.</string>
+    <string name="public_connecting">Activating…</string>
+    <string name="public_activate">Activate personal access</string>
+    <string name="public_servers_mode">Regular server mode is on.</string>
+    <string name="public_save_failed">Could not save the settings.</string>
+    <string name="public_deactivate">Turn off personal access</string>
+    <string name="public_device_failed">Could not save the device ID.</string>
+    <string name="public_storage_unavailable">Secure storage is unavailable.</string>
+    <string name="public_bad_code">Paste your personal code from magnet.norma.so. It starts with MG1-.</string>
+    <string name="public_too_large">The service sent too large an answer.</string>
+    <string name="public_unavailable">The access service is unavailable.</string>
+    <string name="public_node">Personal access</string>
+    <string name="public_route_note">MagnetGate personal access · TCP and UDP</string>
+    <string name="address_hidden">[address hidden]</string>
 </resources>

@@ -478,7 +478,7 @@ fun AppRoot(
           updateState = updateState,
           onUpdate = { takeUpdate() }, peerRoute = peerSource && !publicRoute,
           peerContent = {
-            if (publicRoute) androidx.compose.material3.Text("Личный доступ MagnetGate · TCP и UDP", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+            if (publicRoute) androidx.compose.material3.Text(ui.text(R.string.public_route_note), style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
             else PeerPanel(peerSource, peerCountry, peerStatus, peerError, !vpnUp && !starting && !busy, PeerRuntime.configured(context),
               onChoice = { enabled, cc ->
                 if (Settings.savePeerChoice(context, enabled, cc)) {

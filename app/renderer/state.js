@@ -1,5 +1,8 @@
 // Представление состояния не управляет VPN и не принимает решений за основной процесс.
 ;(function (root) {
+  // the UI strings: required in Node (tests), loaded before this file in the window
+  const I18n = typeof module !== 'undefined' && module.exports ? require('./i18n.js') : root.MGI18n
+  const t = (key, vars) => I18n.t(key, vars)
   function needsDisconnect(state) {
     return !!(state.vpnOn || state.guardRecoveryRequired || state.stopRecoveryRequired)
   }
@@ -17,44 +20,44 @@
       !pending
     )
     const empty = !['peers', 'public'].includes(config.connectionSource) && !config.exits?.length && !needsDisconnect(state)
-    let title = 'Не подключено',
-      detail = 'Сейчас используется обычное подключение.'
+    let title = t('view.notConnected'),
+      detail = t('view.directInUse')
     if (connected) {
-      title = 'Подключено'
+      title = t('view.connected')
       detail =
         state.activeMode === 'split'
-          ? 'Через VPN идут выбранные сайты и встроенные списки.'
+          ? t('view.splitActive')
           : state.trafficProtected
-            ? 'Интернет работает через VPN. Прямые исключения отключены.'
-            : 'Интернет работает через VPN, кроме исключений.'
+            ? t('view.fullProtected')
+            : t('view.fullActive')
     } else if (recovery) {
-      title = 'Нужно завершить отключение'
-      detail = 'Повторите отключение, чтобы остановить туннель и восстановить интернет.'
+      title = t('view.recoveryTitle')
+      detail = t('view.recoveryDetail')
     } else if (pending) {
-      title = 'Применяем режим…'
-      detail = 'Ожидаем применения правил и проверки соединения.'
+      title = t('view.applyingTitle')
+      detail = t('view.applyingDetail')
     } else if (state.phase === 'rendezvous') {
-      title = 'Ищем сервер…'
-      detail = 'Ожидаем параметры подключения.'
+      title = t('view.searchingTitle')
+      detail = t('view.searchingDetail')
     } else if (state.phase === 'authorizing') {
-      title = 'Подтвердите запуск VPN'
-      detail = 'Разрешите запуск в системном окне macOS.'
+      title = t('view.authorizeTitle')
+      detail = t('view.authorizeDetail')
     } else if (state.phase === 'starting') {
-      title = 'Проверяем соединение…'
-      detail = 'Ожидаем готовности туннеля и проверки интернета.'
+      title = t('view.checkingTitle')
+      detail = t('view.checkingDetail')
     } else if (empty) {
-      title = 'Добавьте сервер'
-      detail = 'Для начала нужен ключ вашего сервера.'
+      title = t('view.addServerTitle')
+      detail = t('view.addServerDetail')
     } else if (state.otherTunnel) {
-      title = 'Другой VPN включён'
-      detail = 'Отключите другой VPN и повторите подключение.'
+      title = t('view.otherVpnTitle')
+      detail = t('view.otherVpnDetail')
     }
-    let button = 'Подключить'
+    let button = t('button.connect')
     if (recovery)
-      button = state.guardRecoveryRequired ? 'Восстановить интернет' : 'Повторить отключение'
-    else if (needsDisconnect(state)) button = busy ? 'Отменить' : 'Отключить'
-    else if (empty) button = 'Добавить сервер'
-    else if (state.lastError || state.otherTunnel) button = 'Повторить'
+      button = state.guardRecoveryRequired ? t('button.restoreInternet') : t('button.disconnectAgain')
+    else if (needsDisconnect(state)) button = busy ? t('button.cancel') : t('button.disconnect')
+    else if (empty) button = t('button.addServer')
+    else if (state.lastError || state.otherTunnel) button = t('button.retry')
     return { connected, busy, empty, recovery, pending, title, detail, button }
   }
   // Country selector: the list is built from what the nodes advertise — a two-letter code plus how
@@ -62,21 +65,22 @@
   // code stays trivial and this is testable without a browser.
   function countryOptions(countries, selected = '', search = '') {
     const list = Array.isArray(countries) ? countries : []
-    const names = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['ru'], { type: 'region' }) : null
-    const query = String(search).trim().toLocaleLowerCase('ru')
+    const lang = I18n.language()
+    const names = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames([lang], { type: 'region' }) : null
+    const query = String(search).trim().toLocaleLowerCase(lang)
     const rows = list.filter(c => c && /^[A-Z]{2}$/.test(String(c.cc || '').toUpperCase()))
-      .map(c => { const cc = String(c.cc).toUpperCase(); return [cc, `${names?.of(cc) || cc} · ${Number(c.nodes) || 0} доступно`] })
-      .filter(([cc,label]) => cc === selected || !query || `${cc} ${label}`.toLocaleLowerCase('ru').includes(query))
+      .map(c => { const cc = String(c.cc).toUpperCase(); return [cc, t('country.available', { name: names?.of(cc) || cc, count: Number(c.nodes) || 0 })] })
+      .filter(([cc,label]) => cc === selected || !query || `${cc} ${label}`.toLocaleLowerCase(lang).includes(query))
     if (selected && /^[A-Z]{2}$/.test(selected) && !list.some(c => c && String(c.cc).toUpperCase() === selected))
-      rows.push([selected, `${names?.of(selected) || selected} · сейчас недоступна`])
+      rows.push([selected, t('country.unavailableNow', { name: names?.of(selected) || selected })])
     return [
-      ['', 'Авто'], ...rows
+      ['', t('country.auto')], ...rows
     ]
   }
   function countryMessage(country, fallback) {
     const cc = String(country || '').toUpperCase()
-    if (!/^[A-Z]{2}$/.test(cc)) return 'Любая страна с живой нодой'
-    return fallback ? `В ${cc} нет живых нод — используется любая` : `Выход через ${cc}`
+    if (!/^[A-Z]{2}$/.test(cc)) return t('country.any')
+    return fallback ? t('country.fallback', { country: cc }) : t('country.exitVia', { country: cc })
   }
   // Diagnostics rows for the discovered nodes: name and country, the planes the node offers, and
   // which of those the client is currently sitting out after failures. Never an address.
@@ -90,7 +94,7 @@
       const cooling = Array.isArray(n.cooling) ? n.cooling.filter(Boolean) : []
       return {
         label,
-        value: cooling.length ? `${planes} · пауза: ${cooling.join(', ')}` : planes,
+        value: cooling.length ? t('nodes.paused', { planes, cooling: cooling.join(', ') }) : planes,
         cooling: cooling.length > 0
       }
     })

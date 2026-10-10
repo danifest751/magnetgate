@@ -1,4 +1,6 @@
 const { test } = require('node:test')
+// these tests check the Russian strings; the English default is covered by i18n.test.cjs
+require('../renderer/i18n.js').setLanguage('ru')
 const assert = require('node:assert/strict')
 const { connectionView, needsDisconnect } = require('../renderer/state.js')
 const cfg = { exits: [{ name: 'fixture' }], vpnMode: 'full' }

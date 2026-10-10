@@ -12,10 +12,17 @@ enum class UiLanguage(val tag: String) {
   RU("ru"), EN("en");
 
   companion object {
-    fun resolve(saved: String?, systemLanguage: String): UiLanguage =
-      entries.firstOrNull { it.tag == saved }
-        ?: if (systemLanguage == "ru") RU else EN
+    /** English unless the user chose another language; the device language does not switch it. */
+    fun resolve(saved: String?): UiLanguage = entries.firstOrNull { it.tag == saved } ?: EN
   }
+}
+
+/** Resources in the chosen UI language, for text built outside composition (errors, node labels). */
+fun uiResources(context: Context): android.content.res.Resources {
+  val saved = context.getSharedPreferences("magnetgate-ui", Context.MODE_PRIVATE).getString("language", null)
+  val locale = Locale.forLanguageTag(UiLanguage.resolve(saved).tag)
+  return context.createConfigurationContext(Configuration(context.resources.configuration).apply { setLocale(locale) })
+    .resources
 }
 
 /** Строки Android с явной локалью; язык интерфейса не меняет настройки туннеля. */
@@ -35,7 +42,7 @@ fun UiLanguageProvider(content: @Composable () -> Unit) {
   val configuration = LocalConfiguration.current
   val preferences = remember(context) { context.getSharedPreferences("magnetgate-ui", Context.MODE_PRIVATE) }
   var saved by remember { mutableStateOf(preferences.getString("language", null)) }
-  val language = UiLanguage.resolve(saved, configuration.locales[0].language)
+  val language = UiLanguage.resolve(saved)
   val strings = remember(language, configuration) {
     val locale = Locale.forLanguageTag(language.tag)
     val localized = context.createConfigurationContext(Configuration(configuration).apply { setLocale(locale) })

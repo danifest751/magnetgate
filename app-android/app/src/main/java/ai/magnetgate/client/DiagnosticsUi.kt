@@ -36,9 +36,9 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
       Text(ui.text(R.string.check_scope_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     item { BottomAction(if (checking) ui.text(R.string.checking_action) else ui.text(R.string.check_again), enabled = vpnUp && !checking, secondary = true, onClick = onTest) }
-    if (engineError.isNotBlank()) item { InfoNotice(diagnosticText(engineError), true) }
-    if (status.error.isNotBlank()) item { InfoNotice(diagnosticText(status.error), true) }
-    if (check != null && !check.ok && vpnUp) item { InfoNotice(diagnosticText(check.detail), true) }
+    if (engineError.isNotBlank()) item { InfoNotice(diagnosticText(engineError, ui.text(R.string.address_hidden)), true) }
+    if (status.error.isNotBlank()) item { InfoNotice(diagnosticText(status.error, ui.text(R.string.address_hidden)), true) }
+    if (check != null && !check.ok && vpnUp) item { InfoNotice(diagnosticText(check.detail, ui.text(R.string.address_hidden)), true) }
     item {
       HorizontalDivider()
       ActionRow(ui.text(R.string.servers_transports), if (publicRoute) ui.text(R.string.public_nodes_count, status.nodes.size) else ui.text(R.string.server_relay_count, status.nodes.size, status.relays.count { it.answering }, status.relays.size)) { nodesOpen = !nodesOpen }
@@ -47,7 +47,7 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
       if (status.nodes.isEmpty()) item { Text(ui.text(R.string.servers_empty)) }
       items(status.nodes, key = { "${it.slot}:${it.name}" }) { node ->
         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-          Text(diagnosticText(node.title), style = MaterialTheme.typography.titleMedium)
+          Text(diagnosticText(node.title, ui.text(R.string.address_hidden)), style = MaterialTheme.typography.titleMedium)
           Text(ui.text(R.string.country_slot, ui.countryName(node.country), node.slot), style = MaterialTheme.typography.bodySmall)
           node.planes.forEach { plane -> Text(plane.type, style = MaterialTheme.typography.bodySmall) }
           node.paused.filter { it.remainingMs(System.currentTimeMillis()) > 0 }.forEach { pause ->
@@ -58,7 +58,7 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
       }
       if (!publicRoute) item { SectionLabel(ui.text(R.string.discovery_relays)) }
       items(status.relays, key = { it.url }) { relay ->
-        ValueRow(diagnosticText(relay.host), diagnosticText(when { relay.answering -> ui.text(R.string.responses_received); relay.error.isNotEmpty() -> relay.error; relay.connected -> ui.text(R.string.connected_no_responses); else -> ui.text(R.string.not_connected) }))
+        ValueRow(diagnosticText(relay.host, ui.text(R.string.address_hidden)), diagnosticText(when { relay.answering -> ui.text(R.string.responses_received); relay.error.isNotEmpty() -> relay.error; relay.connected -> ui.text(R.string.connected_no_responses); else -> ui.text(R.string.not_connected) }, ui.text(R.string.address_hidden)))
       }
       item {
         SectionLabel(ui.text(if (publicRoute) R.string.public_connection_details else R.string.core_measurements))
@@ -84,12 +84,12 @@ fun DiagnosticsScreen(status: CoreStatus, vpnUp: Boolean, check: Health.Check?, 
     }
     if (!publicRoute && liveOpen) {
       if (status.live.isEmpty()) item { Text(ui.text(R.string.connections_empty), style = MaterialTheme.typography.bodySmall) }
-      items(status.live.take(20)) { live -> ValueRow(diagnosticText(live.where), ui.text(R.string.connection_detail, ui.text(if (live.open) R.string.connection_open else R.string.connection_closed), live.plane, live.slot, ui.bytes(live.sent), ui.bytes(live.received))) }
+      items(status.live.take(20)) { live -> ValueRow(diagnosticText(live.where, ui.text(R.string.address_hidden)), ui.text(R.string.connection_detail, ui.text(if (live.open) R.string.connection_open else R.string.connection_closed), live.plane, live.slot, ui.bytes(live.sent), ui.bytes(live.received))) }
     }
     if (!publicRoute) item { HorizontalDivider(); ActionRow(ui.text(R.string.core_log), ui.text(R.string.core_log_hint)) { logOpen = !logOpen } }
     if (!publicRoute && logOpen) {
       if (status.logs.isEmpty()) item { Text(ui.text(R.string.log_empty)) }
-      items(status.logs) { line -> Text(diagnosticText(line), style = MaterialTheme.typography.bodySmall, fontFamily = Mono) }
+      items(status.logs) { line -> Text(diagnosticText(line, ui.text(R.string.address_hidden)), style = MaterialTheme.typography.bodySmall, fontFamily = Mono) }
     }
   }
 }

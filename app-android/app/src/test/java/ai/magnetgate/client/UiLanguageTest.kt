@@ -28,12 +28,11 @@ internal object TestStrings {
 }
 
 class UiLanguageTest {
-  @Test fun `явный выбор имеет приоритет над языком устройства`() {
-    assertEquals(UiLanguage.EN, UiLanguage.resolve("en", "ru"))
-    assertEquals(UiLanguage.RU, UiLanguage.resolve("ru", "en"))
-    assertEquals(UiLanguage.RU, UiLanguage.resolve(null, "ru"))
-    assertEquals(UiLanguage.EN, UiLanguage.resolve(null, "de"))
-    assertEquals(UiLanguage.RU, UiLanguage.resolve("invalid", "ru"))
+  @Test fun `english unless the user chose russian`() {
+    assertEquals(UiLanguage.EN, UiLanguage.resolve("en"))
+    assertEquals(UiLanguage.RU, UiLanguage.resolve("ru"))
+    assertEquals(UiLanguage.EN, UiLanguage.resolve(null))
+    assertEquals(UiLanguage.EN, UiLanguage.resolve("invalid"))
   }
 
   @Test fun `обе локали имеют полный набор одинаковых шаблонов`() {

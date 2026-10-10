@@ -2,18 +2,19 @@
 ;(function (root) {
   const $ = id => document.getElementById(id)
   let current, busy = false
-  const labels = { READY: 'Ваше соединение доступно другим пользователям', BUSY: 'Все места заняты',
-    PAUSED: 'Раздача приостановлена', PREPARING: 'Подготавливаем соединение', OFFLINE: 'Раздача выключена' }
+  const t = (key) => root.MGI18n.t(key)
+  const labels = { READY: 'peer.ready', BUSY: 'peer.busy', PAUSED: 'peer.paused', PREPARING: 'peer.preparing',
+    OFFLINE: 'peer.offline' }
   function render(state) {
     current = state.peer || {}
     const policy = current.policy || {}
     $('peerShare').checked = !!policy.enabled
     $('peerShare').disabled = busy || !current.configured || current.canShare === false
     $('peerState').textContent = current.error || (!current.configured
-      ? 'Сервис соединений пользователей пока не настроен.' : current.canShare === false
-      ? 'Раздача на этом устройстве пока недоступна.' : !current.connected
-      ? 'Нет связи с каталогом. Раздача приостановлена.' : policy.enabled && state.vpnOn
-      ? 'Раздача приостановлена, пока включён ваш VPN.' : labels[current.state] || 'Ожидаем готовности соединения')
+      ? t('peer.notSetUp') : current.canShare === false
+      ? t('peer.cannotShare') : !current.connected
+      ? t('peer.noCatalogue') : policy.enabled && state.vpnOn
+      ? t('peer.pausedVpn') : labels[current.state] ? t(labels[current.state]) : t('peer.waiting'))
     $('peerTcpNote').hidden = state.connectionSource !== 'peers'
     $('peerAutomatic').disabled = busy || !current.configured
     $('peerSaveLimits').disabled = busy || !current.configured
@@ -31,7 +32,7 @@
       try {
         current = await window.mg.setPeerPolicy(policy)
         $('peerLimits').dataset.dirty = ''
-        $('peerMessage').textContent = 'Сохранено.'
+        $('peerMessage').textContent = t('save.saved')
       } catch (error) {
         $('peerMessage').textContent = error.message
         $('peerShare').checked = !!current?.policy?.enabled
@@ -40,7 +41,7 @@
     }
     $('peerShare').onchange = () => save({ ...current.policy, enabled: $('peerShare').checked })
     for (const id of ['peerAutomatic','peerMaxMbps','peerMaxGuests','peerDaily','peerMonthly'])
-      $(id).oninput = () => { $('peerLimits').dataset.dirty = 'true'; $('peerMessage').textContent = 'Есть несохранённые изменения.' }
+      $(id).oninput = () => { $('peerLimits').dataset.dirty = 'true'; $('peerMessage').textContent = t('save.unsaved') }
     $('peerSaveLimits').onclick = () => save({ ...current.policy, automatic: $('peerAutomatic').checked,
       maxMbps: Number($('peerMaxMbps').value), maxGuests: Number($('peerMaxGuests').value),
       dailyBytes: Math.floor(Number($('peerDaily').value)*1073741824),

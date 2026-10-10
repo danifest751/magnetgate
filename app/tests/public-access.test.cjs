@@ -59,5 +59,5 @@ test('личный код отправляется только на довер�
   })
   assert.ok(called)
   await assert.rejects(requestProfile('https://untrusted.test', 'd'.repeat(64)), /MG1/)
-  await assert.rejects(requestProfile('MG1-' + 'c'.repeat(64), 'd'.repeat(64), async () => new Response('x'.repeat(25000))), /большой/)
+  await assert.rejects(requestProfile('MG1-' + 'c'.repeat(64), 'd'.repeat(64), async () => new Response('x'.repeat(25000))), /too large/)
 })
