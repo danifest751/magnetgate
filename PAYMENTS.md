@@ -30,6 +30,34 @@ Non-goals:
   own traffic through one's own exit.
 - No custody of user keys.
 
+## 1a. Open source first: everything works without payments
+
+MagnetGate is an open-source project. Anyone who builds it and runs it for themselves must get a
+complete VPN with no Requant, no wallet and no payment service. Payments are one optional feature of
+one deployment, the operator's public service, and not part of the core.
+
+- **Off unless the service says otherwise.** The access service has `payments.enabled` in its
+  settings, off by default. When it is off, the paid tier, deposits, payouts and every RQT code path
+  stay inactive. The free tier then has whatever limits the deployer sets: today's behaviour.
+- **Clients show what the service advertises.** `/api/info` lists `payments` only when they are on.
+  The wallet tab, "Get full access" and payout settings appear only then. With no such field (an older
+  or self-hosted service, the private group (PSK) mode, the peer pilot without payments), the app looks
+  and works as it does today, and the wallet never opens and never contacts a Requant API.
+- **Nothing tied to our deployment.**
+  - Deposit addresses come from the deployer's own seed; prices, discounts and the exit share come
+    from their own admin panel.
+  - The client must not hard-code our hosts. Today `magnet.norma.so` is fixed in the desktop and
+    Android personal-access code and the countries are limited to FI/NL. A self-hosted public service
+    needs these to be configurable (a service URL entered with the code, or a build setting). That is
+    work in its own right.
+- **Separable code.** Payment and wallet code lives in its own modules (`payments/` server side; a
+  wallet module in each client) behind the `payments` switch and a build flag. A fork can build without
+  them, as the app-store variant without a wallet already needs (§6).
+- **The private group mode never charges.** A PSK group (your own exits, Mainline DHT + Nostr
+  discovery) has no payment code path at all, with or without the switch.
+- **Peer exits** in someone else's deployment are not paid unless that deployment turns payments on
+  with its own seed.
+
 ## 2. MagnetGate today (what this builds on)
 
 - **Personal public access.** A personal `MG1-…` code is issued after human verification. It lasts
@@ -276,6 +304,7 @@ Still open:
 | Phase 2 | Generalise the pool's batch payout code into a payout service | Per-user, per-exit byte counts from the relay; per-user allocation of each payment; payout addresses; catalogue of paid countries |
 | Wallet | WASM/JNI bindings of the existing wallet cores | Wallet UI, tunnel-only API access, build variant without the wallet |
 | App | — | English by default with a shared RU/EN catalogue; unified country picker with operator/private routes and per-country capabilities; tier gating |
+| Self-hosting | — | `payments.enabled` switch (off by default) and a `payments` field in `/api/info`; clients hide all payment UI without it; a configurable personal-access service URL instead of the fixed host; payment and wallet code in separable modules behind a build flag |
 | Phase 3 | Channel library, CPFP pool policy | Exit-side metering, channel UI |
 
 Suggested order:
