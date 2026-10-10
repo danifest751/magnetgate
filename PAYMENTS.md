@@ -103,11 +103,15 @@ exits are not paid for it.
 
 The simplest working version needs no channels and no wallet in the app.
 
-- **Deposit addresses.** Each access account gets its own RQT deposit address, derived by the
-  operator's payment service from its own seed: an HD chain, as in `requant-wallet`. Requant
-  transfers have no memo field, so one address per account is how a payment is attributed.
-- **Watching.** The payment service runs its own `requantd` (or uses a trusted node's RPC). It credits
-  a deposit after N confirmations (`history` / `utxos`, §8). Proposed N is 6 on the test network;
+- **Deposit addresses.** Each access account gets its own RQT deposit address. Requant transfers have
+  no memo field, so one address per account is how a payment is attributed. The service holds no keys:
+  the operator makes a list of addresses offline with `requant-wallet newaddress WALLET --count N --out
+  deposits.txt` and gives the service only that file. An address goes to one account and is never
+  handed out again. The operator sweeps the coins with the wallet that made the list (`prepare` on a
+  watch-only copy, `sign` offline, `broadcast`); `restore --count N` brings the whole list back from the
+  backup phrase.
+- **Watching.** The access service polls a Requant node's public API (`/api/history?owners=`), best
+  the operator's own `requantd`. It credits a deposit after N confirmations, once per (txid, address). Proposed N is 6 on the test network;
   for value, scale it with the amount and the network hashrate ([Requant SWAPS.md](https://github.com/requant-network/requant/blob/main/SWAPS.md), Finality).
 - **Crediting.** A confirmed deposit buys days of full access, added to any days left, from one day up.
   Longer purchases are cheaper per day: the price of `d` days is
@@ -125,8 +129,72 @@ The simplest working version needs no channels and no wallet in the app.
   full access left, all from the access service. Paying from any Requant wallet works; an in-app wallet
   (§6) is a convenience, not a requirement.
 
-The risk is small and centralised. The operator holds the deposits (a hot wallet), and users trust
-the operator as they already do for access.
+The risk is small and centralised. The operator holds the deposits, and users trust the operator as
+they already do for access. With the deposit list made offline, the server itself holds nothing that
+can spend them.
+
+### 4.1 Status: the access service side is implemented
+
+`web/payments.py` and `web/server.py` (branch `feat/payments-phase1`, not deployed):
+
+- `payments` in the settings, off unless `enabled` is `true`:
+
+  ```json
+  "codeLifetimeDays": 7,
+  "payments": {
+    "enabled": true,
+    "network": "test",
+    "api": "http://127.0.0.1:19380",
+    "depositList": "/etc/magnetgate-public/deposits.txt",
+    "priceAtomsPerDay": 10000000,
+    "discounts": [[7, 10], [30, 20], [90, 30]],
+    "confirmations": 6
+  }
+  ```
+
+  The service refuses to start if a setting is invalid or any line of the deposit list is not an
+  address of that network. `codeLifetimeDays` (default 30, today's lifetime) applies with or without
+  payments.
+- `/api/info` carries `payments` (currency, network, price, discounts, confirmations) only when they
+  are on. `POST /api/payment {code}` hands the account its deposit address on the first ask and
+  returns the tier, the paid-until time, the code's expiry, the balance left and the recent credits.
+- A background thread polls the watched addresses (those handed to accounts that still exist) every
+  `pollSeconds` (60), 25 per request, within the node API's rate limit.
+- A credit adds the most days the balance plus the deposit buys (§9 discounts) and keeps the rest.
+  The code then stays valid until the paid days end plus one free code lifetime, to top up with the
+  same code. An account with RQT left over is not cleaned up.
+- During paid days the per-account daily quota does not apply. `/api/profile` returns `tier` and gives
+  a node's `fullEndpoint` instead of its `endpoint` when the node has one. `/api/node-auth` takes an
+  optional `listener` (`free` or `full`); the `full` listener admits paid accounts only.
+
+**Nodes** (`web/node_agent.py`). A node without `listeners` in its agent config works as today: one
+Hysteria2 instance, auth at `/auth`. A node with the two tiers runs two instances, the free one with
+Hysteria2's per-client `bandwidth` limit:
+
+```yaml
+# free: hysteria-free.yaml                     # full: hysteria-full.yaml
+listen: :4443                                  # listen: :8443
+bandwidth: {up: 3 mbps, down: 3 mbps}          # (no bandwidth limit)
+auth:
+  type: http
+  http: {url: http://127.0.0.1:3411/auth/free} #   url: http://127.0.0.1:3411/auth/full
+trafficStats: {listen: 127.0.0.1:3412, secret: <free secret>}   # 127.0.0.1:3413, <full secret>
+```
+
+```json
+"listeners": [
+  {"name": "free", "pidFile": "/run/magnetgate-public/hysteria.pid", "statsPort": 3412, "statsSecret": "..."},
+  {"name": "full", "pidFile": "/run/magnetgate-public/hysteria-full.pid", "statsPort": 3413, "statsSecret": "..."}
+]
+```
+
+The agent passes the listener's name to `/api/node-auth`, sums online counts over both instances and
+reports their traffic as one counter, so a restart of either instance adds only its new traffic. In
+the service's `nodes`, such a node gets `fullEndpoint` (the 8443 endpoint) next to `endpoint`; the
+apps accept ports 4443 and 8443 only.
+
+Not done yet: the payment screen in the apps, admin-panel editing of these parameters, and English for
+the service's older error messages.
 
 ## 5. Phase 2: peer exits earn RQT
 
@@ -300,7 +368,7 @@ Still open:
 
 | | Requant | MagnetGate |
 |---|---|---|
-| Phase 1 | Done: public API, RPC `history`/`utxos`, HD derivation in `requant-wallet`. New: a small deposit-watcher library (per-account addresses, N confirmations, idempotent crediting) | Payment service; days of full access per code in the access service; per-code speed and volume caps for the free tier on the nodes; deposit address and days left in the app |
+| Phase 1 | Done: public API (200 owners per request from node 0.15.2), RPC `history`/`utxos`, HD derivation and deposit lists (`newaddress --count`, `restore --count`, wallet 0.4.1) in `requant-wallet` | Done (§4.1): deposits, crediting and days of full access in the access service. Open: free/full listeners and the free speed limit on the nodes; deposit address and days left in the app |
 | Phase 2 | Generalise the pool's batch payout code into a payout service | Per-user, per-exit byte counts from the relay; per-user allocation of each payment; payout addresses; catalogue of paid countries |
 | Wallet | WASM/JNI bindings of the existing wallet cores | Wallet UI, tunnel-only API access, build variant without the wallet |
 | App | — | English by default with a shared RU/EN catalogue; unified country picker with operator/private routes and per-country capabilities; tier gating |
