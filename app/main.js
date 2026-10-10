@@ -855,6 +855,7 @@ handle('activatePublic', async code => {
   pushStatus()
   return cfg
 })
+handle('getPayment', () => publicAccess.payment())
 handle('setPeerPolicy', policy => peerHost.policy(policy))
 handle('getLog', () => logs.slice())
 handle('getConfig', loadConfig)
