@@ -95,6 +95,7 @@ expanding this private-group tunnel into one.
 | Store-and-forward via email/IMAP | Delayed-message use cases; it cannot replace interactive internet access |
 | Linux/macOS packaged clients | Supported VPN integration, packaging, lifecycle and recovery |
 | Provisioning/metrics | Repeatable host setup and operator visibility beyond the current scripts |
+| Paid full tier in RQT, English-first app, unified country/route picker | Design draft in [PAYMENTS.md](PAYMENTS.md): free low-speed tier always, full tier sold by time, peer exits credited by gigabytes, admin-panel parameters |
 
 These are research directions, not supported configuration options. Any physical fallback depends
 on separately available connectivity and is outside the current software.
