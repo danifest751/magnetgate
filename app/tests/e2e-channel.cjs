@@ -15,13 +15,13 @@ const post = async (pathname, body) => {
   return value
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms))
-async function until(what, f, secs = 120) {
+async function until(what, f, secs = Number(process.env.E2E_SECS || 120)) {
   const t = Date.now()
   for (;;) {
     const v = await f()
     if (v) return v
     if (Date.now() - t > secs * 1000) throw new Error('timed out waiting for ' + what)
-    await sleep(500)
+    await sleep(Number(process.env.POLL_MS || 500))
   }
 }
 
