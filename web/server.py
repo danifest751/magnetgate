@@ -287,7 +287,7 @@ class AccessStore:
             # the same proposal again (the answer to the first one was lost): the channel as accepted
             if active[1] == 'accepted' and isinstance(channel.get('funding_txid'), str) and                     active[0] == channel['funding_txid'] + ':' + str(channel.get('vout')):
                 with self.lock:
-                    return {'channel': json.loads(active[2]), 'status': self.channel_view(account)}
+                    return {'refund': json.loads(active[2])['refund'], 'status': self.channel_view(account)}
             if active[1] == 'open' or channels.confirmations(self.channels, funding) > 0:
                 raise AccessError(409, 'This code already has a channel: close it first.', 'channel_exists')
         try:
@@ -308,7 +308,9 @@ class AccessStore:
                 raise AccessError(409, 'This channel is already known.', 'channel_exists')
             self.db.execute("INSERT INTO channels(id,account,file,deposit,expiry,status,opened) VALUES(?,?,?,?,?,'accepted',?)",
                             (cid, account, json.dumps(accepted), accepted['deposit'], accepted['expiry'], now))
-            return {'channel': accepted, 'status': self.channel_view(account)}
+            # only the signed refund goes back: the client has the rest, and answers over some mobile
+            # networks stall after their first packet
+            return {'refund': accepted['refund'], 'status': self.channel_view(account)}
         return self.transaction(commit)
 
     def channel_pay(self, code, state, now=None):

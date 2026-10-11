@@ -90,7 +90,8 @@ def main():
             expiry = str(channels.height(store.channels) + blocks)
             wallet('channel', 'open', 'client.key', info['serverPubkey'], info['payTo'], amount, expiry, '--out', name)
             with open(os.path.join(tmp, name)) as f:
-                accepted = store.channel_open(code, json.load(f))['channel']
+                proposed = json.load(f)
+            accepted = {**proposed, 'refund': store.channel_open(code, proposed)['refund'], 'accepted': True}
             with open(os.path.join(tmp, name), 'w') as f:
                 json.dump(accepted, f)
             wallet('channel', 'fund', 'client.key', name)

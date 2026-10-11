@@ -40,6 +40,7 @@ class FakeWallet:
             path = os.path.join(cwd, 'ch.json')
             ch = json.loads(read(path))
             ch['accepted'] = True
+            ch['refund'] = 'signed'
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(ch, f)
         elif args[:2] == ['channel', 'receive']:
@@ -104,11 +105,12 @@ class ChannelTests(unittest.TestCase):
     def test_open_pay_by_the_minute_and_close(self):
         now = 1_000_000
         opened = self.store.channel_open(self.code, channel_file(), now)
-        self.assertTrue(opened['channel']['accepted'])
+        self.assertNotIn('channel', opened, 'only the refund goes back')
+        self.assertEqual(json.loads(self.store.db.execute('SELECT file FROM channels').fetchone()[0])['accepted'], True)
         self.assertEqual(opened['status']['status'], 'accepted')
         # the same proposal again (a lost answer): the channel as accepted, nothing new
         again = self.store.channel_open(self.code, channel_file(), now)
-        self.assertEqual(again['channel'], opened['channel'])
+        self.assertEqual(again['refund'], opened['refund'])
         # a second channel is refused while this one is funded
         with self.assertRaises(AccessError):
             self.store.channel_open(self.code, channel_file() | {'funding_txid': 'aa' * 32}, now)

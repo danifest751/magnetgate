@@ -45,7 +45,7 @@ function setup() {
   const calls = [], posts = []
   const post = async (pathname, body) => {
     posts.push({ pathname, body })
-    if (pathname === 'channel/open') return { channel: { ...body.channel, refund: 'r2', accepted: true } }
+    if (pathname === 'channel/open') return { refund: 'ab'.repeat(60) }
     return { tier: 'full', paidUntil: 1 }
   }
   const w = new ChannelWallet(dir, safeStorage, 'requant-wallet', post, fakeWallet(calls))
@@ -76,7 +76,8 @@ test('opening proposes, stores the accepted channel and only then funds it', asy
   assert.equal(posts[0].pathname, 'channel/open')
   const order = calls.map(c => c.argv[1])
   assert.ok(order.indexOf('fund') > order.indexOf('open'))
-  assert.equal(w.channel().refund, 'r2')
+  assert.equal(w.channel().refund, 'ab'.repeat(60))
+  assert.equal(w.channel().accepted, true)
 })
 
 test('pay as you go keeps a few minutes ahead and stops at the deposit', async () => {

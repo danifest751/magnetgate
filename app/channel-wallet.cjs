@@ -92,10 +92,11 @@ class ChannelWallet {
     if (!fs.existsSync(this.file('proposed.json')))
       await this.run(['channel', 'open', 'key.txt', c.serverPubkey, c.payTo, rqt(depositAtoms), String(expiry), '--out', 'proposed.json'], info)
     const proposed = JSON.parse(fs.readFileSync(this.file('proposed.json'), 'utf8'))
-    const accepted = (await this.post('channel/open', { code, channel: proposed })).channel
-    // the service's copy must be this channel with the refund signed
-    if (accepted.funding_txid !== proposed.funding_txid || accepted.refund === proposed.refund || accepted.accepted !== true)
+    // the service answers with the refund it signed; requant-wallet checks that signature before funding
+    const { refund } = await this.post('channel/open', { code, channel: proposed })
+    if (typeof refund !== 'string' || !/^[0-9a-f]{100,2000}$/.test(refund) || refund === proposed.refund)
       throw new Error(I18n.t('wallet.badAccept'))
+    const accepted = { ...proposed, refund, accepted: true }
     fs.writeFileSync(this.file('channel.json'), JSON.stringify(accepted, null, 2))
     fs.rmSync(this.file('proposed.json'), { force: true })
     await this.run(['channel', 'fund', 'key.txt', 'channel.json'], info)
