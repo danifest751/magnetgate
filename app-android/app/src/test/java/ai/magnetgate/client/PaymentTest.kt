@@ -30,6 +30,23 @@ class PaymentTest {
     for (json in bad) assertTrue(json.toString(), runCatching { Payments.parse(json) }.isFailure)
   }
 
+  private fun swaps() = JSONObject().put("maker", "maker.example:19390")
+    .put("methods", JSONArray().put("lightning").put("bitcoin").put("usdt").put("card"))
+    .put("bitcoinApi", "https://mempool.space/signet/api").put("requantApi", "http://node.example:19380")
+    .put("satsPerRqt", 1000).put("minAtoms", 10_000_000L).put("maxAtoms", 10_000_000_000L).put("lightning", true)
+
+  @Test fun usdtTermsComeWithTheMakersTronSide() {
+    val usdt = JSONObject().put("unitsPerRqt", 100_000).put("network", "nile").put("paysFees", true)
+    val s = Payments.parse(answer().put("swaps", swaps().put("usdt", usdt))).swaps!!
+    assertEquals(listOf("lightning", "bitcoin", "usdt"), s.methods)
+    assertEquals(UsdtTerms(100_000, "nile", true), s.usdt)
+    assertEquals(null, Payments.parse(answer().put("swaps", swaps())).swaps!!.usdt)
+    // a malformed USDT block hides USDT only, not the other ways to pay
+    val bad = Payments.parse(answer().put("swaps", swaps().put("usdt", JSONObject().put("unitsPerRqt", 0).put("network", "nile")))).swaps!!
+    assertEquals(null, bad.usdt)
+    assertTrue(bad.lightning)
+  }
+
   @Test fun rqtAmounts() {
     assertEquals("1.5", Payments.formatRqt(150_000_000))
     assertEquals("0.07", Payments.formatRqt(7_000_000))
