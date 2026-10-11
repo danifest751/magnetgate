@@ -194,6 +194,32 @@
                 <ul id="paymentPrices" class="mg-payment-prices"></ul>
                 <p id="paymentBalance" class="mg-caption"></p>
                 <p id="paymentNote" class="mg-note"></p>
+                <div id="channelBlock" class="mg-channel" hidden>
+                  <h3 data-i18n="wallet.heading">Pay as you go</h3>
+                  <p class="mg-caption" data-i18n="wallet.hint">A deposit from the app's own wallet pays for full access minute by minute while you are connected. What you do not use comes back when the channel closes.</p>
+                  <div id="walletNew" hidden>
+                    <label for="walletPass"><span data-i18n="wallet.passLabel">Wallet passphrase (at least 8 characters)</span><input id="walletPass" type="password" autocomplete="new-password" maxlength="200" /></label>
+                    <button class="mg-secondary" id="walletCreate" data-i18n="wallet.create">Create wallet</button>
+                  </div>
+                  <div id="walletReady" hidden>
+                    <p class="mg-payment-address"><code id="walletAddress"></code></p>
+                    <p id="walletBalance" class="mg-caption"></p>
+                    <div class="mg-actions">
+                      <button class="mg-secondary" id="walletCopy" data-i18n="payment.copy">Copy address</button>
+                      <button class="mg-secondary" id="walletExport" data-i18n="wallet.export">Save key file</button>
+                    </div>
+                    <p id="channelStatus" class="mg-caption"></p>
+                    <div id="channelNew" class="mg-actions">
+                      <label for="channelDeposit"><span data-i18n="wallet.depositLabel">Deposit, RQT</span><input id="channelDeposit" inputmode="decimal" value="1" maxlength="20" /></label>
+                      <button class="mg-action" id="channelOpen" data-i18n="wallet.open">Open channel</button>
+                    </div>
+                    <div id="channelLive" class="mg-actions" hidden>
+                      <button class="mg-secondary" id="channelClose" data-i18n="wallet.close">Close channel</button>
+                      <button class="mg-secondary" id="channelRefund" data-i18n="wallet.refund" hidden>Take the deposit back</button>
+                    </div>
+                  </div>
+                  <p id="walletMessage" class="mg-flash" role="status"></p>
+                </div>
               </div>
             </section>
             <details id="serverSettings" class="mg-setting">

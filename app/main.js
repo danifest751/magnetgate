@@ -11,7 +11,8 @@ const { switchMode, engineSignature } = require('./mode.cjs')
 const { rotatingLog } = require('./log.cjs')
 const { accumulate, rate } = require('./stats.cjs')
 const { PeerHost } = require('./peer-host.cjs')
-const { PublicAccess } = require('./public-access.cjs')
+const { PublicAccess, post } = require('./public-access.cjs')
+const { ChannelWallet } = require('./channel-wallet.cjs')
 // messages the main process shows to the user follow the language the renderer chose
 const I18n = require('./renderer/i18n.js')
 const RES = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..')
@@ -30,6 +31,23 @@ const { DEFAULT_CONFIG, validateConfig, freshEndpoints } = require(
 )
 const CONFIG = path.join(app.getPath('userData'), 'magnetgate.config.json')
 const publicAccess = new PublicAccess(app.getPath('userData'), safeStorage)
+// the in-app wallet for payment channels, with the bundled requant-wallet
+const channelWallet = new ChannelWallet(app.getPath('userData'), safeStorage,
+  path.join(RES, 'tools', 'requant', process.platform === 'win32' ? 'requant-wallet.exe' : 'requant-wallet'),
+  (pathname, body) => post(pathname, body, fetch))
+// Pay-as-you-go: keep a few minutes of full access paid ahead over the channel (no channel: nothing).
+async function payAhead() {
+  const code = publicAccess.code()
+  if (!code || !channelWallet.exists() || !channelWallet.channel()) return null
+  const payment = await publicAccess.payment()
+  const paid = await channelWallet.keepPaid(payment, code)
+  if (paid) publicAccess.fetchedAt = 0
+  return paid
+}
+setInterval(() => {
+  if (state.vpnOn && state.connectionSource === 'public')
+    payAhead().catch(error => pushLog('[wallet] payment: ' + error.message))
+}, 30000).unref?.()
 const DP_FILE = path.join(app.getPath('userData'), 'current-dp.json')
 // holds every exit PSK while the client child runs, so it must not outlive the session
 const RUNTIME_FILE = path.join(app.getPath('userData'), 'runtime-client.json')
@@ -347,6 +365,8 @@ async function startClient() {
   if (cfg.connectionSource === 'public') {
     if (clientProc) await stopClient()
     await peerHost.disconnect()
+    // a channel pays a few minutes ahead first, so that the profile gives the full tier
+    await payAhead().catch(error => pushLog('[wallet] payment: ' + error.message))
     await publicAccess.refresh()
     state.clientRunning = true
     state.rvReady = true
@@ -856,6 +876,26 @@ handle('activatePublic', async code => {
   return cfg
 })
 handle('getPayment', () => publicAccess.payment())
+handle('walletStatus', async () => {
+  const payment = await publicAccess.payment()
+  return payment?.channels ? channelWallet.status(payment) : null
+})
+handle('walletCreate', async passphrase => channelWallet.create(passphrase, await publicAccess.payment()))
+handle('walletExport', async () => {
+  const { dialog } = require('electron')
+  const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: 'magnetgate-requant-key.txt' })
+  if (canceled || !filePath) return false
+  channelWallet.exportKey(filePath)
+  return true
+})
+handle('channelOpen', async depositAtoms => {
+  const payment = await publicAccess.payment()
+  if (!payment?.channels) throw new Error(I18n.t('wallet.noChannels'))
+  return channelWallet.open(payment, publicAccess.code(), depositAtoms)
+})
+handle('channelPay', () => payAhead())
+handle('channelClose', () => channelWallet.close(publicAccess.code()))
+handle('channelRefund', async () => channelWallet.refund(await publicAccess.payment()))
 handle('setPeerPolicy', policy => peerHost.policy(policy))
 handle('getLog', () => logs.slice())
 handle('getConfig', loadConfig)

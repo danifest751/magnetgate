@@ -86,6 +86,12 @@ if ((Test-Path $exe) -and -not $Force -and (Get-Sha $exe) -eq ([string]$pins.sin
   Write-Host "installed: $exe"
 }
 
+# --- requant-wallet for the in-app wallet (payment channels), into tools\requant
+$requant = Join-Path (Split-Path $PSScriptRoot -Parent) 'tools\requant'
+New-Item -ItemType Directory -Force -Path $requant | Out-Null
+Get-Verified -Url ([string]$pins.requantWallet.url) -Sha256 ([string]$pins.requantWallet.sha256) `
+  -Dest (Join-Path $requant 'requant-wallet.exe') -Label "requant-wallet $($pins.requantWallet.version)"
+
 # --- locally supplied assets that get bundled: report drift instead of packaging it silently
 foreach ($asset in $pins.localAssets.PSObject.Properties) {
   if ($asset.Name -like '_*') { continue }

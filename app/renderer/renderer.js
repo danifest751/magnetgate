@@ -426,7 +426,8 @@ function useLanguage(language) {
 async function loadPayment() {
   if (!window.mg.getPayment) return
   try {
-    const view = MGView.paymentView(await window.mg.getPayment())
+    const payment = await window.mg.getPayment()
+    const view = MGView.paymentView(payment)
     $('payment').hidden = !view
     if (!view) return
     text('paymentStatus', [view.status, view.expires, view.network].filter(Boolean).join(' · '))
@@ -438,10 +439,40 @@ async function loadPayment() {
     }))
     text('paymentBalance', view.balance)
     text('paymentNote', view.note)
+    loadWallet(payment)
   } catch (error) {
     // no code yet, or the service is unreachable: nothing to show
     $('payment').hidden = true
   }
+}
+// The pay-as-you-go block, when the service takes payment channels.
+async function loadWallet(payment) {
+  if (!window.mg.walletStatus || !payment?.channels) { $('channelBlock').hidden = true; return }
+  let wallet = null
+  try { wallet = await window.mg.walletStatus() } catch (error) { text('walletMessage', error.message) }
+  const view = MGView.channelView(payment, wallet)
+  $('channelBlock').hidden = !view
+  if (!view) return
+  $('walletNew').hidden = !view.create
+  $('walletReady').hidden = !!view.create
+  if (view.create) return
+  $('walletAddress').textContent = view.address
+  text('walletBalance', [view.balance, view.price].join(' · '))
+  text('channelStatus', view.status)
+  $('channelNew').hidden = !view.canOpen
+  $('channelLive').hidden = !view.live && !view.refund
+  $('channelClose').hidden = !view.live
+  $('channelRefund').hidden = !view.refund
+}
+async function walletAction(button, work, done) {
+  button.disabled = true
+  text('walletMessage', t('wallet.working'))
+  try {
+    await work()
+    text('walletMessage', done ? t(done) : '')
+    await loadPayment()
+  } catch (error) { text('walletMessage', error.message) }
+  finally { button.disabled = false }
 }
 window.addEventListener('DOMContentLoaded', async () => {
   MGI18n.setLanguage(MGI18n.detect(savedLanguage()))
@@ -467,6 +498,21 @@ window.addEventListener('DOMContentLoaded', async () => {
     try { await loadPayment() } finally { $('refreshPayment').disabled = false }
   }
   $('copyPayment').onclick = () => navigator.clipboard?.writeText($('paymentAddress').textContent).catch(() => {})
+  $('walletCopy').onclick = () => navigator.clipboard?.writeText($('walletAddress').textContent).catch(() => {})
+  $('walletCreate').onclick = () => walletAction($('walletCreate'), async () => {
+    await window.mg.walletCreate($('walletPass').value)
+    $('walletPass').value = ''
+  })
+  $('walletExport').onclick = () => walletAction($('walletExport'), async () => {
+    if (!(await window.mg.walletExport())) throw new Error('')
+  }, 'wallet.exported')
+  $('channelOpen').onclick = () => walletAction($('channelOpen'), async () => {
+    const atoms = MGView.parseRqt($('channelDeposit').value)
+    if (!atoms) throw new Error(t('wallet.badAmount'))
+    await window.mg.channelOpen(atoms)
+  }, 'wallet.opened')
+  $('channelClose').onclick = () => walletAction($('channelClose'), () => window.mg.channelClose(), 'wallet.closing')
+  $('channelRefund').onclick = () => walletAction($('channelRefund'), () => window.mg.channelRefund(), 'wallet.refunded')
   loadPayment()
   MGPeer.bind(showError)
   $('countrySearch').oninput = () => renderCountries(st, MGView.connectionView(cfg, st))
