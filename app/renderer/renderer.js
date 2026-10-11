@@ -450,22 +450,51 @@ const SWAP_STATES = {
   waiting: 'swap.state.waiting', waiting_btc: 'swap.state.waiting_btc', waiting_ln: 'swap.state.waiting_ln',
   rqt_locked: 'swap.state.rqt_locked', claimed: 'swap.state.claimed', done: 'swap.state.done',
   expired: 'swap.state.expired', failed: 'swap.state.failed', underpaid: 'swap.state.underpaid',
-  too_late: 'swap.state.too_late', rqt_refunded: 'swap.state.rqt_refunded', refunded: 'swap.state.refunded'
+  too_late: 'swap.state.too_late', rqt_refunded: 'swap.state.rqt_refunded', refunded: 'swap.state.refunded',
+  waiting_token: 'swap.state.waiting_token', locking: 'swap.state.locking'
 }
+// the same states where a USDT purchase reads differently (no Lightning or BTC)
+const USDT_STATES = {
+  expired: 'swap.usdtState.expired', too_late: 'swap.usdtState.too_late', failed: 'swap.usdtState.failed',
+  rqt_refunded: 'swap.usdtState.rqt_refunded', refunded: 'swap.usdtState.refunded'
+}
+const usdt = units => (units / 1e6).toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
 async function loadSwaps(payment, wallet) {
   const s = payment?.swaps
   $('swapBlock').hidden = !s || !wallet?.exists
   if ($('swapBlock').hidden) return
-  text('swapPrice', t('swap.price', { rate: s.satsPerRqt, min: MGView.formatRqt(s.minAtoms), max: MGView.formatRqt(s.maxAtoms) }))
-  for (const o of $('swapMethod').options) o.hidden = !s.methods.includes(o.value) || (o.value === 'lightning' && !s.lightning)
+  text('swapPrice', t('swap.price', { rate: s.satsPerRqt, min: MGView.formatRqt(s.minAtoms), max: MGView.formatRqt(s.maxAtoms) }) +
+    (s.usdt && s.methods.includes('usdt') ? ' ' + t('swap.priceUsdt', { rate: usdt(s.usdt.unitsPerRqt) }) : ''))
+  for (const o of $('swapMethod').options)
+    o.hidden = !s.methods.includes(o.value) || (o.value === 'lightning' && !s.lightning) || (o.value === 'usdt' && !s.usdt)
   let list = []
   try { list = await window.mg.swapList() } catch (error) { text('swapMessage', error.message) }
   $('swapList').replaceChildren(...list.slice().reverse().slice(0, 5).map((e) => {
     const item = document.createElement('li')
     const head = document.createElement('div')
-    head.textContent = MGView.formatRqt(e.rqtAtoms) + ' RQT · ' + t(SWAP_STATES[e.state] || 'swap.state.waiting')
+    const state = (e.method === 'usdt' && USDT_STATES[e.state]) || SWAP_STATES[e.state] || 'swap.state.waiting'
+    head.textContent = MGView.formatRqt(e.rqtAtoms) + ' RQT · ' + t(state)
     item.append(head)
-    const open = ['waiting', 'waiting_btc', 'waiting_ln'].includes(e.state)
+    if (e.note) {
+      const note = document.createElement('div')
+      note.className = 'mg-caption'
+      note.textContent = e.note
+      item.append(note)
+    }
+    if (e.method === 'usdt' && ['waiting', 'waiting_token'].includes(e.state)) {
+      const how = document.createElement('div')
+      how.className = 'mg-caption'
+      how.textContent = t('swap.payUsdt', { usdt: usdt(e.usdtUnits), held: e.held || '0' })
+      const code = document.createElement('code')
+      code.textContent = e.address
+      code.style.wordBreak = 'break-all'
+      const copy = document.createElement('button')
+      copy.className = 'mg-secondary'
+      copy.textContent = t('swap.copy')
+      copy.onclick = () => navigator.clipboard?.writeText(e.address).catch(() => {})
+      item.append(how, code, copy)
+    }
+    const open = ['waiting', 'waiting_btc', 'waiting_ln'].includes(e.state) && e.method !== 'usdt'
     if (open) {
       const how = document.createElement('div')
       how.className = 'mg-caption'
@@ -486,12 +515,20 @@ async function loadSwaps(payment, wallet) {
         item.append(wallet)
       }
     }
-    if (e.method === 'bitcoin' && ['underpaid', 'too_late', 'expired'].includes(e.state)) {
+    const usdtBack = e.method === 'usdt' && ['too_late', 'expired', 'failed', 'rqt_refunded'].includes(e.state) &&
+      (e.lock === 'open' || Number(e.held) > 0)
+    if ((e.method === 'bitcoin' && ['underpaid', 'too_late', 'expired'].includes(e.state)) || usdtBack) {
       const to = document.createElement('input')
-      to.placeholder = t('swap.refundTo')
+      to.placeholder = t(usdtBack ? 'swap.refundToTron' : 'swap.refundTo')
       const back = document.createElement('button')
       back.className = 'mg-secondary'
-      back.textContent = t('swap.refund')
+      back.textContent = t(usdtBack ? 'swap.refundUsdt' : 'swap.refund')
+      if (usdtBack && e.lock === 'open' && e.refundFrom) {
+        const when = document.createElement('div')
+        when.className = 'mg-caption'
+        when.textContent = t('swap.refundFrom', { time: new Date(e.refundFrom * 1000).toLocaleString() })
+        item.append(when)
+      }
       back.onclick = async () => {
         try { await window.mg.swapRefund(e.file, to.value.trim()); loadPayment() } catch (error) { text('swapMessage', error.message) }
       }

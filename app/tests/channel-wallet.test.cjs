@@ -124,3 +124,80 @@ test('the pay-as-you-go block in both languages', () => {
   }
   assert.equal(rqt(123_000_000), '1.23')
 })
+
+// ---- buying RQT with USDT on TRON ---------------------------------------------------------------------
+function swapWallet(status) {
+  I18n.setLanguage('en')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-swap-'))
+  const calls = []
+  const pending = []
+  const run = (binary, argv, options, done) => {
+    calls.push(argv)
+    const file = name => path.join(options.cwd, name)
+    const [cmd, sub] = argv
+    if (cmd === 'keygen') fs.writeFileSync(file(argv[1]), 'requant-key:1:x')
+    if (cmd === 'swap' && sub === 'buy-usdt') {
+      fs.writeFileSync(file(argv[argv.indexOf('--out') + 1]), JSON.stringify({ units: 100000, tron_network: 'nile',
+        terms: { sender: 'TGVEUQDSim5MdXE7MnjhkFzA2aHvhD1CHf' } }))
+      return done(null, 'send     0.100000 USDT (TRC-20, TRON nile) to TGVEUQDSim5MdXE7MnjhkFzA2aHvhD1CHf\n')
+    }
+    if (cmd === 'swap' && sub === 'status') return done(null, JSON.stringify(status()))
+    if (cmd === 'swap' && sub === 'lock') return pending.push(done)  // finishes when the test says so
+    done(null, 'ok\n')
+  }
+  const w = new ChannelWallet(dir, safeStorage, 'requant-wallet', async () => ({}), run)
+  return { w, calls, pending }
+}
+const swapsPayment = () => payment({ swaps: { maker: 'maker:19390', methods: ['lightning', 'bitcoin', 'usdt'], minAtoms: 1e7,
+  maxAtoms: 1e10, requantApi: 'http://api', bitcoinApi: 'https://btc', usdt: { unitsPerRqt: 100000, network: 'nile', paysFees: true } } })
+
+test('a USDT purchase gets its own TRON address and locks once the USDT has arrived', async () => {
+  let st = { state: 'waiting_token', lock: 'none', usdt_held: '0.000000', usdt_to_lock: '0.100000', refund_from: 1800000000 }
+  const { w, calls, pending } = swapWallet(() => st)
+  await w.create('a long passphrase', swapsPayment())
+  await assert.rejects(w.buy(payment({ swaps: { ...swapsPayment().swaps, usdt: undefined } }), 'usdt', 1e8), /not offered/)
+  const e = await w.buy(swapsPayment(), 'usdt', 1e8)
+  assert.equal(e.address, 'TGVEUQDSim5MdXE7MnjhkFzA2aHvhD1CHf')
+  assert.equal(e.usdtUnits, 100000)
+  assert.ok(calls.some(a => a[1] === 'buy-usdt' && a.includes('maker:19390')))
+  // nothing has arrived: no lock
+  await w.advance(swapsPayment())
+  assert.ok(!calls.some(a => a[1] === 'lock'))
+  // it has: one lock, and while it runs the purchase shows as locking without a second one
+  st = { ...st, usdt_held: '0.100000' }
+  await w.advance(swapsPayment())
+  const list = await w.advance(swapsPayment())
+  assert.equal(calls.filter(a => a[1] === 'lock').length, 1)
+  assert.equal(list[0].state, 'locking')
+  pending[0](null, 'locked\n')
+  await new Promise(r => setImmediate(r))
+  st = { ...st, state: 'rqt_locked', lock: 'open' }
+  const done = await w.advance(swapsPayment())
+  assert.equal(done[0].state, 'claimed')
+  assert.ok(calls.some(a => a[1] === 'claim'))
+})
+
+test('the USDT of a purchase the maker did not complete comes back to a TRON address', async () => {
+  const { w, calls } = swapWallet(() => ({ state: 'too_late', lock: 'open', usdt_held: '0.000000', usdt_to_lock: '0.1', refund_from: 1 }))
+  await w.create('a long passphrase', swapsPayment())
+  const e = await w.buy(swapsPayment(), 'usdt', 1e8)
+  await assert.rejects(w.refundSwap(swapsPayment(), e.file, 'tb1qnotatron'), /TRON address/)
+  await w.refundSwap(swapsPayment(), e.file, 'TRED2Ydeh7o4D4uNW6S11L1JKmDvtwesWe')
+  const order = calls.filter(a => a[0] === 'swap').map(a => a[1])
+  assert.ok(order.indexOf('withdraw') > order.indexOf('refund'), 'the lock is refunded first, then withdrawn')
+  assert.equal(calls.find(a => a[1] === 'withdraw')[3], 'TRED2Ydeh7o4D4uNW6S11L1JKmDvtwesWe')
+  assert.equal(w.swapIndex()[0].state, 'refunded')
+})
+
+test('a BTC refund goes to the Bitcoin network, not to the channel refund', async () => {
+  const { w, calls } = swapWallet(() => ({}))
+  await w.create('a long passphrase', swapsPayment())
+  fs.mkdirSync(w.file('swaps'), { recursive: true })
+  w.saveSwaps([{ file: 'swaps/1.json', method: 'bitcoin', state: 'too_late' }])
+  let posted = null
+  const fetcher = async (url, opts) => { posted = { url, body: opts.body }; return { ok: true, text: async () => 'txid1' } }
+  assert.equal(await w.refundSwap(swapsPayment(), 'swaps/1.json', 'tb1qrefundaddressxyz', fetcher), 'txid1')
+  assert.equal(posted.url, 'https://btc/tx')
+  assert.ok(calls.some(a => a[1] === 'refund' && a[2] === 'swaps/1.json' && a[3] === 'tb1qrefundaddressxyz'))
+  assert.ok(!calls.some(a => a[0] === 'channel'))
+})

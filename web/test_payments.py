@@ -190,3 +190,13 @@ class SwapSettingsTests(unittest.TestCase):
         def down(m):
             raise OSError('refused')
         self.assertIsNone(payments.maker_terms({'maker': 'm:2'}, 100, down))
+        self.assertNotIn('usdt', t, 'no TRON side, no USDT offer')
+
+    def test_usdt_terms_when_the_maker_has_a_tron_side(self):
+        payments._maker_cache.clear()
+        info = {'sats_per_rqt': 1000, 'min_rqt': 10**7, 'max_rqt': 10**10, 'btc_network': 'signet', 'lightning': True,
+                'usdt': {'network': 'nile', 'units_per_rqt': 100000, 'pays_fees': True, 'htlc': 'T...'}}
+        t = payments.maker_terms({'maker': 'm:3'}, 100, lambda m: info)
+        self.assertEqual(t['usdt'], {'unitsPerRqt': 100000, 'network': 'nile', 'paysFees': True})
+        s = payments.swap_settings({'enabled': True, 'maker': 'h:1', 'methods': ['usdt'], 'requantApi': 'http://n:1'})
+        self.assertEqual(s['methods'], ['usdt'])

@@ -16,8 +16,11 @@ data class ChannelTerms(
 /** Where the app buys RQT: the service's maker, its price and limits (atoms), and the APIs it needs. */
 data class SwapTerms(
   val maker: String, val methods: List<String>, val bitcoinApi: String, val requantApi: String, val satsPerRqt: Long,
-  val minAtoms: Long, val maxAtoms: Long, val lightning: Boolean,
+  val minAtoms: Long, val maxAtoms: Long, val lightning: Boolean, val usdt: UsdtTerms? = null,
 )
+
+/** USDT on TRON at the maker: millionths of a USDT per RQT; the maker pays the TRON fees when paysFees. */
+data class UsdtTerms(val unitsPerRqt: Long, val network: String, val paysFees: Boolean)
 
 /** The service's view of the account's latest channel. */
 data class ChannelState(val status: String, val deposit: Long, val paid: Long)
@@ -73,11 +76,17 @@ object Payments {
   private fun swapTerms(c: JSONObject): SwapTerms {
     val maker = c.getString("maker").also { require(Regex("[A-Za-z0-9.-]{1,80}:[0-9]{1,5}").matches(it)) }
     val list = c.getJSONArray("methods")
-    val methods = (0 until list.length()).map { list.getString(it) }.filter { it in listOf("lightning", "bitcoin") }
+    val methods = (0 until list.length()).map { list.getString(it) }.filter { it in listOf("lightning", "bitcoin", "usdt") }
     val bitcoinApi = c.getString("bitcoinApi").also { require(it.startsWith("https://") && it.length < 120) }
     val requantApi = c.getString("requantApi").trimEnd('/').also { require(Regex("https?://[A-Za-z0-9.:\\[\\]-]{1,100}").matches(it)) }
     return SwapTerms(maker, methods, bitcoinApi, requantApi, c.getLong("satsPerRqt").also { require(it > 0) },
-      c.getLong("minAtoms"), c.getLong("maxAtoms"), c.optBoolean("lightning"))
+      c.getLong("minAtoms"), c.getLong("maxAtoms"), c.optBoolean("lightning"),
+      c.optJSONObject("usdt")?.let { u ->
+        runCatching {
+          UsdtTerms(u.getLong("unitsPerRqt").also { require(it > 0) }, u.getString("network").also { require(Regex("[a-z]{2,16}").matches(it)) },
+            u.optBoolean("paysFees"))
+        }.getOrNull()
+      })
   }
 
   private fun state(c: JSONObject) = ChannelState(c.getString("status").also { require(it.length <= 20) },

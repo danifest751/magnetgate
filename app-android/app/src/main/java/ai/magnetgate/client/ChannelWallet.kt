@@ -33,7 +33,8 @@ object ChannelWallet {
   /** The Requant API the wallet uses: the channels' or the swaps'. */
   private fun api(payment: PaymentInfo) = payment.channels?.api ?: payment.swaps?.requantApi ?: error("no Requant API")
 
-  private fun run(context: Context, api: String, network: String, args: List<String>, pass: String? = null): String {
+  private fun run(context: Context, api: String, network: String, args: List<String>, pass: String? = null,
+                  seconds: Long = 60): String {
     val command = listOf(binary(context).path) + args + listOf("--network", network, "--api", api, "--yes")
     val builder = ProcessBuilder(command).directory(dir(context))
     builder.environment()["REQUANT_WALLET_PASSPHRASE"] = pass ?: Settings.walletPass(context)
@@ -42,7 +43,7 @@ object ChannelWallet {
     val err = StringBuilder()
     val reader = Thread { err.append(process.errorStream.bufferedReader().readText()) }.apply { start() }
     val out = process.inputStream.bufferedReader().readText()
-    if (!process.waitFor(60, TimeUnit.SECONDS)) { process.destroy(); error("requant-wallet timed out") }
+    if (!process.waitFor(seconds, TimeUnit.SECONDS)) { process.destroy(); error("requant-wallet timed out") }
     reader.join(5000)
     if (process.exitValue() != 0) error(err.trim().lines().lastOrNull()?.removePrefix("requant-wallet: ")?.take(240) ?: "requant-wallet failed")
     return out
@@ -140,9 +141,13 @@ object ChannelWallet {
 
   fun close(context: Context) { PublicAccess.post(context, "channel/close", JSONObject().put("code", Settings.publicCode(context)), 60000) }
 
-  // ---- buying RQT from the service's maker (atomic swaps over Lightning or on-chain Bitcoin) ----------
+  // ---- buying RQT from the service's maker (atomic swaps: Lightning, on-chain Bitcoin or USDT on TRON) --
   data class Swap(val file: String, val method: String, val rqtAtoms: Long, val sats: Long, val state: String,
-                  val invoice: String?, val address: String?)
+                  val invoice: String?, val address: String?, val usdtUnits: Long = 0, val held: String? = null,
+                  val lock: String? = null, val refundFrom: Long = 0, val note: String? = null)
+
+  /** USDT swap file -> the error of its last lock ("" while one runs). */
+  private val locking = java.util.concurrent.ConcurrentHashMap<String, String>()
 
   private fun swapIndex(context: Context): org.json.JSONArray =
     file(context, "swaps.json").takeIf { it.isFile }?.let { org.json.JSONArray(it.readText()) } ?: org.json.JSONArray()
@@ -153,43 +158,74 @@ object ChannelWallet {
     file(context, "swaps.json").writeText(keep.toString(2))
   }
 
-  private fun swapOf(o: JSONObject) = Swap(o.getString("file"), o.getString("method"), o.getLong("rqtAtoms"), o.getLong("sats"),
-    o.getString("state"), o.optString("invoice").ifBlank { null }, o.optString("address").ifBlank { null })
+  private fun swapOf(o: JSONObject) = Swap(o.getString("file"), o.getString("method"), o.getLong("rqtAtoms"), o.optLong("sats"),
+    o.getString("state"), o.optString("invoice").ifBlank { null }, o.optString("address").ifBlank { null }, o.optLong("usdtUnits"),
+    o.optString("held").ifBlank { null }, o.optString("lock").ifBlank { null }, o.optLong("refundFrom"),
+    o.optString("note").ifBlank { null })
 
   fun swaps(context: Context): List<Swap> = swapIndex(context).let { a -> (0 until a.length()).map { swapOf(a.getJSONObject(it)) } }
 
-  private val FINAL = setOf("done", "claimed", "expired", "failed", "rqt_refunded", "refunded")
+  private val FINAL = setOf("done", "claimed", "failed", "refunded")
+  // final for Lightning and Bitcoin; a USDT purchase is followed until its USDT is back
+  private fun finished(method: String, state: String) =
+    state in FINAL || (method != "usdt" && state in setOf("expired", "rqt_refunded"))
 
   /** Start a purchase; the swap file (it holds the secret) stays in the wallet directory. */
   fun buy(context: Context, payment: PaymentInfo, method: String, atoms: Long): Swap {
     val strings = uiResources(context)
     val s = payment.swaps ?: error(strings.getString(R.string.swap_unavailable))
-    check(method in s.methods && (method != "lightning" || s.lightning)) { strings.getString(R.string.swap_unavailable) }
+    check(method in s.methods && (method != "lightning" || s.lightning) && (method != "usdt" || s.usdt != null)) {
+      strings.getString(R.string.swap_unavailable)
+    }
     require(atoms in s.minAtoms..s.maxAtoms) { strings.getString(R.string.swap_bad_amount, Payments.formatRqt(s.minAtoms), Payments.formatRqt(s.maxAtoms)) }
     File(dir(context), "swaps").mkdirs()
     val name = "swaps/" + System.currentTimeMillis() + ".json"
-    val out = run(context, s.requantApi, payment.network, listOf("swap", if (method == "lightning") "buy-ln" else "buy", s.maker,
+    val command = when (method) { "lightning" -> "buy-ln"; "usdt" -> "buy-usdt"; else -> "buy" }
+    val out = run(context, s.requantApi, payment.network, listOf("swap", command, s.maker,
       Payments.formatRqt(atoms), "key.txt", "--out", name))
     val line = { key: String -> out.lines().firstOrNull { it.startsWith(key) }?.removePrefix(key)?.trim() }
     val record = JSONObject(file(context, name).readText())
-    val entry = JSONObject().put("file", name).put("method", method).put("rqtAtoms", atoms).put("sats", record.getLong("btc_sats"))
+    val entry = JSONObject().put("file", name).put("method", method).put("rqtAtoms", atoms).put("sats", record.optLong("btc_sats"))
       .put("state", "waiting").put("created", System.currentTimeMillis())
-    if (method == "lightning") entry.put("invoice", line("invoice")) else entry.put("address", line("to"))
+    when (method) {
+      "lightning" -> entry.put("invoice", line("invoice"))
+      "usdt" -> entry.put("address", record.getJSONObject("terms").getString("sender")).put("usdtUnits", record.getLong("units"))
+      else -> entry.put("address", line("to"))
+    }
     saveSwaps(context, swapIndex(context).put(entry))
     return swapOf(entry)
   }
 
-  /** Follow the open purchases: claim the RQT as soon as the maker has locked them. */
+  /** Follow the open purchases: lock USDT once it has arrived (on a thread of its own: TRON takes a minute or
+   *  two), and claim the RQT as soon as the maker has locked them. */
   fun advance(context: Context, payment: PaymentInfo): List<Swap> {
     val s = payment.swaps ?: return swaps(context)
     val list = swapIndex(context)
     for (k in 0 until list.length()) {
       val e = list.getJSONObject(k)
-      if (e.getString("state") in FINAL) continue
+      if (finished(e.getString("method"), e.getString("state"))) continue
       runCatching {
-        val st = JSONObject(run(context, s.requantApi, payment.network, listOf("swap", "status", e.getString("file"))))
+        val file = e.getString("file")
+        val st = JSONObject(run(context, s.requantApi, payment.network, listOf("swap", "status", file)))
         val state = st.getString("state")
-        e.put("state", if (state == "btc_claimed") "claimed" else state)
+        e.put("state", if (state == "btc_claimed" || state == "token_claimed") "claimed" else state)
+        if (e.getString("method") == "usdt") {
+          e.put("held", st.optString("usdt_held")).put("lock", st.optString("lock")).put("refundFrom", st.optLong("refund_from"))
+          e.put("note", locking[file] ?: "")
+          val arrived = (st.optString("usdt_held").toDoubleOrNull() ?: 0.0) >= (st.optString("usdt_to_lock").toDoubleOrNull() ?: 1e18)
+          if (state == "waiting_token" && st.optString("lock") == "none" && arrived) {
+            if (locking[file] == "") e.put("state", "locking")
+            else {
+              locking[file] = ""
+              Thread {
+                runCatching { run(context, s.requantApi, payment.network, listOf("swap", "lock", file), seconds = 300) }
+                  .onSuccess { locking.remove(file) }
+                  .onFailure { locking[file] = it.message?.take(160) ?: "lock failed" }
+              }.start()
+              e.put("state", "locking")
+            }
+          }
+        }
         if (state == "rqt_locked") {
           run(context, s.requantApi, payment.network, listOf("swap", "claim", e.getString("file"), "key.txt"))
           e.put("state", "claimed")
@@ -200,11 +236,23 @@ object ChannelWallet {
     return swaps(context)
   }
 
-  fun hasOpenSwaps(context: Context) = swaps(context).any { it.state !in FINAL }
+  fun hasOpenSwaps(context: Context) = swaps(context).any { !finished(it.method, it.state) }
 
-  /** The on-chain refund of a purchase the maker did not complete, sent through the Esplora API. */
-  fun refundSwap(context: Context, payment: PaymentInfo, file: String, btcAddress: String): String {
+  /** Taking back what a purchase the maker did not complete paid: BTC through the Esplora API, or USDT on TRON
+   *  (a lock still open back to the swap's address first, then to `address`). */
+  fun refundSwap(context: Context, payment: PaymentInfo, file: String, address: String): String {
     val s = payment.swaps ?: error(uiResources(context).getString(R.string.swap_unavailable))
+    if (swaps(context).firstOrNull { it.file == file }?.method == "usdt") {
+      require(Regex("T[1-9A-HJ-NP-Za-km-z]{33}").matches(address)) { uiResources(context).getString(R.string.swap_bad_tron_address) }
+      val st = JSONObject(run(context, s.requantApi, payment.network, listOf("swap", "status", file)))
+      if (st.optString("lock") == "open") run(context, s.requantApi, payment.network, listOf("swap", "refund", file), seconds = 300)
+      val out = run(context, s.requantApi, payment.network, listOf("swap", "withdraw", file, address), seconds = 300)
+      val list = swapIndex(context)
+      for (k in 0 until list.length()) list.getJSONObject(k).let { if (it.getString("file") == file) it.put("state", "refunded").put("note", "") }
+      saveSwaps(context, list)
+      return out.trim()
+    }
+    val btcAddress = address
     require(Regex("[a-zA-Z0-9]{14,90}").matches(btcAddress)) { uiResources(context).getString(R.string.swap_bad_address) }
     val hex = run(context, s.requantApi, payment.network, listOf("swap", "refund", file, btcAddress)).trim()
     val connection = java.net.URL(s.bitcoinApi + "/tx").openConnection() as javax.net.ssl.HttpsURLConnection

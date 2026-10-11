@@ -177,7 +177,9 @@ private fun PayAsYouGo(payment: PaymentInfo, reload: () -> Unit) {
   }
 }
 
-/** Buying RQT from the service's maker over Lightning or on-chain Bitcoin (atomic swaps). */
+private fun usdtText(units: Long) = java.math.BigDecimal.valueOf(units, 6).stripTrailingZeros().toPlainString()
+
+/** Buying RQT from the service's maker over Lightning, on-chain Bitcoin or USDT on TRON (atomic swaps). */
 @Composable
 private fun BuyRqt(payment: PaymentInfo) {
   val context = LocalContext.current
@@ -201,6 +203,8 @@ private fun BuyRqt(payment: PaymentInfo) {
       "waiting", "waiting_ln" -> R.string.swap_state_waiting
       "waiting_btc" -> R.string.swap_state_waiting_btc
       "rqt_locked" -> R.string.swap_state_locked
+      "waiting_token" -> R.string.swap_state_waiting_usdt
+      "locking" -> R.string.swap_state_locking
       "claimed", "done" -> R.string.swap_state_done
       "expired" -> R.string.swap_state_expired
       "underpaid", "too_late" -> R.string.swap_state_refund
@@ -213,6 +217,8 @@ private fun BuyRqt(payment: PaymentInfo) {
     Text(ui.text(R.string.swap_title), style = MaterialTheme.typography.titleMedium)
     Text(ui.text(R.string.swap_price, terms.satsPerRqt, Payments.formatRqt(terms.minAtoms), Payments.formatRqt(terms.maxAtoms)),
       style = MaterialTheme.typography.bodySmall)
+    val usdt = terms.usdt?.takeIf { "usdt" in terms.methods }
+    if (usdt != null) Text(ui.text(R.string.swap_price_usdt, usdtText(usdt.unitsPerRqt)), style = MaterialTheme.typography.bodySmall)
     OutlinedTextField(amount, { if (it.length <= 20) amount = it }, label = { Text(ui.text(R.string.swap_amount)) }, singleLine = true,
       enabled = !busy, modifier = Modifier.fillMaxWidth())
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -220,6 +226,8 @@ private fun BuyRqt(payment: PaymentInfo) {
         FilterChip(selected = method == "lightning", onClick = { method = "lightning" }, label = { Text(ui.text(R.string.swap_lightning)) })
       if ("bitcoin" in terms.methods)
         FilterChip(selected = method == "bitcoin", onClick = { method = "bitcoin" }, label = { Text(ui.text(R.string.swap_bitcoin)) })
+      if (usdt != null)
+        FilterChip(selected = method == "usdt", onClick = { method = "usdt" }, label = { Text(ui.text(R.string.swap_usdt)) })
     }
     Button(enabled = !busy, onClick = {
       val atoms = Payments.parseRqt(amount)
@@ -233,8 +241,24 @@ private fun BuyRqt(payment: PaymentInfo) {
       }
     }) { Text(ui.text(R.string.swap_buy)) }
     for (s in list.reversed().take(5)) {
-      Text(Payments.formatRqt(s.rqtAtoms) + " RQT · " + stateText(s.state), style = MaterialTheme.typography.bodyMedium)
-      if (s.state in listOf("waiting", "waiting_ln", "waiting_btc")) {
+      val usdtState = when (s.state) {
+        "expired" -> R.string.swap_usdt_state_expired
+        "too_late", "failed", "rqt_refunded" -> R.string.swap_usdt_state_refund
+        "refunded" -> R.string.swap_usdt_state_refunded
+        else -> null
+      }
+      Text(Payments.formatRqt(s.rqtAtoms) + " RQT · " + (if (s.method == "usdt" && usdtState != null) ui.text(usdtState) else stateText(s.state)),
+        style = MaterialTheme.typography.bodyMedium)
+      if (!s.note.isNullOrBlank()) Text(s.note, style = MaterialTheme.typography.bodySmall)
+      if (s.method == "usdt" && s.state in listOf("waiting", "waiting_token")) {
+        val target = s.address ?: ""
+        Text(ui.text(R.string.swap_pay_usdt, usdtText(s.usdtUnits), s.held ?: "0"), style = MaterialTheme.typography.bodySmall)
+        SelectionContainer { Text(target, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+        OutlinedButton(onClick = {
+          context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("pay", target))
+        }) { Text(ui.text(R.string.payment_copy)) }
+      }
+      if (s.method != "usdt" && s.state in listOf("waiting", "waiting_ln", "waiting_btc")) {
         val target = s.invoice ?: s.address ?: ""
         Text(ui.text(if (s.invoice != null) R.string.swap_pay_ln else R.string.swap_pay_btc, s.sats), style = MaterialTheme.typography.bodySmall)
         SelectionContainer { Text(target, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
@@ -250,9 +274,15 @@ private fun BuyRqt(payment: PaymentInfo) {
           }) { Text(ui.text(R.string.swap_open_wallet)) }
         }
       }
-      if (s.method == "bitcoin" && s.state in listOf("underpaid", "too_late", "expired")) {
+      val usdtBack = s.method == "usdt" && s.state in listOf("too_late", "expired", "failed", "rqt_refunded") &&
+        (s.lock == "open" || (s.held?.toDoubleOrNull() ?: 0.0) > 0)
+      if ((s.method == "bitcoin" && s.state in listOf("underpaid", "too_late", "expired")) || usdtBack) {
         var to by remember(s.file) { mutableStateOf("") }
-        OutlinedTextField(to, { if (it.length <= 90) to = it.trim() }, label = { Text(ui.text(R.string.swap_refund_to)) }, singleLine = true,
+        if (usdtBack && s.lock == "open" && s.refundFrom > 0)
+          Text(ui.text(R.string.swap_refund_from, java.text.DateFormat.getDateTimeInstance().format(java.util.Date(s.refundFrom * 1000))),
+            style = MaterialTheme.typography.bodySmall)
+        OutlinedTextField(to, { if (it.length <= 90) to = it.trim() },
+          label = { Text(ui.text(if (usdtBack) R.string.swap_refund_to_tron else R.string.swap_refund_to)) }, singleLine = true,
           modifier = Modifier.fillMaxWidth())
         OutlinedButton(enabled = !busy, onClick = {
           scope.launch {
@@ -262,7 +292,7 @@ private fun BuyRqt(payment: PaymentInfo) {
               .onFailure { message = it.message?.take(240) ?: ui.text(R.string.public_failed) }
             busy = false
           }
-        }) { Text(ui.text(R.string.swap_refund)) }
+        }) { Text(ui.text(if (usdtBack) R.string.swap_refund_usdt else R.string.swap_refund)) }
       }
     }
     if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall)

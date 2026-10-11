@@ -27,18 +27,19 @@ class ChannelWallet {
     this.post = post
     this.runner = run
     this.busy = null
+    this.locking = new Map() // USDT swap file -> the error of its last lock, while one runs or after it failed
   }
   file(name) { return path.join(this.dir, name) }
   exists() { return fs.existsSync(this.file('key.txt')) && fs.existsSync(this.file('pass.bin')) }
 
   // requant-wallet with the network and API of the service's channel settings; resolves stdout
-  run(args, info, extra = {}) {
+  run(args, info, extra = {}, timeout = 60000) {
     const env = { ...process.env, ...extra }
     if (this.exists()) env.REQUANT_WALLET_PASSPHRASE = this.safeStorage.decryptString(fs.readFileSync(this.file('pass.bin')))
     const api = info.channels?.api || info.swaps?.requantApi
     const argv = [...args, '--network', info.network, '--api', api, '--yes']
     return new Promise((resolve, reject) => {
-      this.runner(this.binary, argv, { cwd: this.dir, env, timeout: 60000, windowsHide: true }, (error, stdout, stderr) => {
+      this.runner(this.binary, argv, { cwd: this.dir, env, timeout, windowsHide: true }, (error, stdout, stderr) => {
         if (!error) return resolve(String(stdout))
         const line = String(stderr || '').trim().split(/\r?\n/).pop() || error.message
         reject(new Error(line.replace(/^requant-wallet: /, '').slice(0, 240)))
@@ -137,7 +138,7 @@ class ChannelWallet {
 
   close(code) { return this.post('channel/close', { code }) }
 
-  // ---- buying RQT from the service's maker (atomic swaps: Lightning or on-chain Bitcoin) -------------
+  // ---- buying RQT from the service's maker (atomic swaps: Lightning, on-chain Bitcoin or USDT on TRON) --
   swapIndex() {
     const f = this.file('swaps.json')
     return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []
@@ -147,29 +148,42 @@ class ChannelWallet {
   // Start a purchase; the swap file (it holds the secret) stays in the wallet directory.
   async buy(info, method, rqtAtoms) {
     const s = info.swaps
-    if (!s || !s.methods.includes(method)) throw new Error(I18n.t('swap.unavailable'))
+    if (!s || !s.methods.includes(method) || (method === 'usdt' && !s.usdt)) throw new Error(I18n.t('swap.unavailable'))
     if (!Number.isSafeInteger(rqtAtoms) || rqtAtoms < s.minAtoms || rqtAtoms > s.maxAtoms)
       throw new Error(I18n.t('swap.badAmount', { min: rqt(s.minAtoms), max: rqt(s.maxAtoms) }))
     fs.mkdirSync(this.file('swaps'), { recursive: true, mode: 0o700 })
     const name = 'swaps/' + Date.now() + '.json'
-    const out = await this.run(['swap', method === 'lightning' ? 'buy-ln' : 'buy', s.maker, rqt(rqtAtoms), 'key.txt', '--out', name], info)
+    const command = { lightning: 'buy-ln', bitcoin: 'buy', usdt: 'buy-usdt' }[method]
+    const out = await this.run(['swap', command, s.maker, rqt(rqtAtoms), 'key.txt', '--out', name], info)
     const line = key => (out.split(/\r?\n/).find(l => l.startsWith(key)) || '').slice(key.length).trim()
     const record = JSON.parse(fs.readFileSync(this.file(name), 'utf8'))
     const entry = { file: name, method, created: Date.now(), rqtAtoms, sats: record.btc_sats, state: 'waiting',
       invoice: method === 'lightning' ? line('invoice') : undefined,
-      address: method === 'bitcoin' ? line('to') : undefined }
+      address: method === 'bitcoin' ? line('to') : method === 'usdt' ? record.terms.sender : undefined,
+      usdtUnits: method === 'usdt' ? record.units : undefined, tronNetwork: method === 'usdt' ? record.tron_network : undefined }
     this.saveSwaps([...this.swapIndex(), entry])
     return entry
   }
 
-  // Follow every open purchase: claim the RQT once the maker has locked them. Returns the list.
+  // Follow every open purchase: lock USDT once it has arrived (in the background: it waits about two
+  // minutes for TRON), and claim the RQT once the maker has locked them. Returns the list.
   async advance(info) {
     const list = this.swapIndex()
     for (const e of list) {
-      if (['done', 'claimed', 'expired', 'failed', 'rqt_refunded', 'refunded'].includes(e.state)) continue
+      if (['done', 'claimed', 'failed', 'refunded'].includes(e.state)) continue
+      // a failed or late purchase can still need its refund; USDT ones are followed until then
+      if (['expired', 'rqt_refunded'].includes(e.state) && e.method !== 'usdt') continue
       try {
         const st = JSON.parse(await this.run(['swap', 'status', e.file], info))
-        e.state = st.state === 'btc_claimed' ? 'claimed' : st.state
+        e.state = ['btc_claimed', 'token_claimed'].includes(st.state) ? 'claimed' : st.state
+        if (e.method === 'usdt') {
+          Object.assign(e, { held: st.usdt_held, lock: st.lock, refundFrom: st.refund_from })
+          if (this.locking.has(e.file)) e.note = this.locking.get(e.file) || undefined
+          if (st.state === 'waiting_token' && st.lock === 'none' && Number(st.usdt_held) >= Number(st.usdt_to_lock)) {
+            if (this.locking.get(e.file) === null) e.state = 'locking'
+            else this.lockUsdt(info, e.file)
+          }
+        }
         if (st.state === 'rqt_locked') {
           await this.run(['swap', 'claim', e.file, 'key.txt'], info)
           e.state = 'claimed'
@@ -180,8 +194,20 @@ class ChannelWallet {
     return list
   }
 
-  // The on-chain refund of a purchase the maker did not complete (from the Bitcoin timeout).
-  async refund(info, file, btcAddress, fetcher = fetch) {
+  // `swap lock` approves and locks the USDT and waits for TRON (one or two minutes); one at a time per swap
+  lockUsdt(info, file) {
+    this.locking.set(file, null)
+    this.run(['swap', 'lock', file], info, {}, 300000)
+      .then(() => this.locking.delete(file))
+      .catch(error => this.locking.set(file, String(error.message).slice(0, 160)))
+  }
+
+  // Taking back what a purchase the maker did not complete paid: BTC on chain (from the Bitcoin timeout, to
+  // `address`), or USDT on TRON (from the lock's refund time: back to the swap's address, then to `address`).
+  async refundSwap(info, file, address, fetcher = fetch) {
+    const entry = this.swapIndex().find(e => e.file === file)
+    if (entry?.method === 'usdt') return this.refundUsdt(info, file, address)
+    const btcAddress = address
     if (typeof btcAddress !== 'string' || !/^[a-z0-9]{14,90}$/i.test(btcAddress)) throw new Error(I18n.t('swap.badAddress'))
     const hex = (await this.run(['swap', 'refund', file, btcAddress], info)).trim()
     const reply = await fetcher(info.swaps.bitcoinApi + '/tx', { method: 'POST', body: hex, signal: AbortSignal.timeout(30000) })
@@ -191,6 +217,18 @@ class ChannelWallet {
     for (const e of list) if (e.file === file) { e.state = 'refunded'; e.refundTxid = text.trim() }
     this.saveSwaps(list)
     return text.trim()
+  }
+
+  async refundUsdt(info, file, tronAddress) {
+    if (typeof tronAddress !== 'string' || !/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(tronAddress)) throw new Error(I18n.t('swap.badTronAddress'))
+    const st = JSON.parse(await this.run(['swap', 'status', file], info))
+    // a lock still open goes back to the swap's own address first (allowed from its refund time)
+    if (st.lock === 'open') await this.run(['swap', 'refund', file], info, {}, 300000)
+    const out = await this.run(['swap', 'withdraw', file, tronAddress], info, {}, 300000)
+    const list = this.swapIndex()
+    for (const e of list) if (e.file === file) { e.state = 'refunded'; e.note = undefined }
+    this.saveSwaps(list)
+    return out.trim()
   }
 
   refund(info) { return this.run(['channel', 'refund', 'channel.json'], info) }

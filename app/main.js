@@ -48,7 +48,8 @@ setInterval(() => {
   if (state.vpnOn && state.connectionSource === 'public')
     payAhead().catch(error => pushLog('[wallet] payment: ' + error.message))
   // purchases of RQT move on by themselves: the RQT are claimed as soon as the maker has locked them
-  if (channelWallet.exists() && channelWallet.swapIndex().some(e => !['done', 'claimed', 'expired', 'failed', 'rqt_refunded', 'refunded'].includes(e.state)))
+  if (channelWallet.exists() && channelWallet.swapIndex().some(e => !['done', 'claimed', 'failed', 'refunded'].includes(e.state) &&
+      (e.method === 'usdt' || !['expired', 'rqt_refunded'].includes(e.state))))
     publicAccess.payment().then(p => p?.swaps && channelWallet.advance(p)).catch(error => pushLog('[wallet] swap: ' + error.message))
 }, 20000).unref?.()
 const DP_FILE = path.join(app.getPath('userData'), 'current-dp.json')
@@ -904,7 +905,7 @@ handle('swapList', async () => {
   const payment = await publicAccess.payment()
   return payment?.swaps && channelWallet.exists() ? channelWallet.advance(payment) : []
 })
-handle('swapRefund', async (file, address) => channelWallet.refund(await publicAccess.payment(), file, address))
+handle('swapRefund', async (file, address) => channelWallet.refundSwap(await publicAccess.payment(), file, address))
 handle('openLightning', invoice => {
   if (typeof invoice === 'string' && /^ln[a-z0-9]+$/i.test(invoice)) shell.openExternal('lightning:' + invoice)
 })

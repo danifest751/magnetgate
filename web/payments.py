@@ -87,8 +87,8 @@ def swap_settings(v):
     if not isinstance(maker, str) or ':' not in maker or len(maker) > 100:
         raise ValueError('payments.swaps.maker must be host:port of a requant-maker')
     methods = v.get('methods', ['lightning', 'bitcoin'])
-    if not isinstance(methods, list) or not methods or any(m not in ('lightning', 'bitcoin') for m in methods):
-        raise ValueError('payments.swaps.methods: lightning and/or bitcoin')
+    if not isinstance(methods, list) or not methods or any(m not in ('lightning', 'bitcoin', 'usdt') for m in methods):
+        raise ValueError('payments.swaps.methods: lightning, bitcoin and/or usdt')
     explorer = v.get('bitcoinApi', 'https://mempool.space/api')
     if not isinstance(explorer, str) or not explorer.startswith('https://'):
         raise ValueError('payments.swaps.bitcoinApi must be an https Esplora API (to send a refund)')
@@ -112,6 +112,11 @@ def maker_terms(swaps, now=None, fetch=None):
         info = (fetch or _maker_info)(swaps['maker'])
         terms = {'satsPerRqt': int(info['sats_per_rqt']), 'minAtoms': int(info['min_rqt']), 'maxAtoms': int(info['max_rqt']),
                  'bitcoinNetwork': str(info['btc_network']), 'lightning': info.get('lightning') is True}
+        # USDT on TRON (requant-maker with a TRON side): price in millionths of a USDT per RQT
+        u = info.get('usdt')
+        if isinstance(u, dict):
+            terms['usdt'] = {'unitsPerRqt': int(u['units_per_rqt']), 'network': str(u['network']),
+                             'paysFees': u.get('pays_fees') is True}
     except Exception:
         terms = None
     _maker_cache[swaps['maker']] = (terms, now)
