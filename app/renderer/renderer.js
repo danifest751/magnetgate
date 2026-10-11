@@ -445,6 +445,62 @@ async function loadPayment() {
     $('payment').hidden = true
   }
 }
+// Buying RQT from the service's maker: the price, the purchases and what to pay.
+const SWAP_STATES = {
+  waiting: 'swap.state.waiting', waiting_btc: 'swap.state.waiting_btc', waiting_ln: 'swap.state.waiting_ln',
+  rqt_locked: 'swap.state.rqt_locked', claimed: 'swap.state.claimed', done: 'swap.state.done',
+  expired: 'swap.state.expired', failed: 'swap.state.failed', underpaid: 'swap.state.underpaid',
+  too_late: 'swap.state.too_late', rqt_refunded: 'swap.state.rqt_refunded', refunded: 'swap.state.refunded'
+}
+async function loadSwaps(payment, wallet) {
+  const s = payment?.swaps
+  $('swapBlock').hidden = !s || !wallet?.exists
+  if ($('swapBlock').hidden) return
+  text('swapPrice', t('swap.price', { rate: s.satsPerRqt, min: MGView.formatRqt(s.minAtoms), max: MGView.formatRqt(s.maxAtoms) }))
+  for (const o of $('swapMethod').options) o.hidden = !s.methods.includes(o.value) || (o.value === 'lightning' && !s.lightning)
+  let list = []
+  try { list = await window.mg.swapList() } catch (error) { text('swapMessage', error.message) }
+  $('swapList').replaceChildren(...list.slice().reverse().slice(0, 5).map((e) => {
+    const item = document.createElement('li')
+    const head = document.createElement('div')
+    head.textContent = MGView.formatRqt(e.rqtAtoms) + ' RQT · ' + t(SWAP_STATES[e.state] || 'swap.state.waiting')
+    item.append(head)
+    const open = ['waiting', 'waiting_btc', 'waiting_ln'].includes(e.state)
+    if (open) {
+      const how = document.createElement('div')
+      how.className = 'mg-caption'
+      how.textContent = e.method === 'lightning' ? t('swap.payLn', { sats: e.sats }) : t('swap.payBtc', { sats: e.sats })
+      const code = document.createElement('code')
+      code.textContent = e.invoice || e.address
+      code.style.wordBreak = 'break-all'
+      const copy = document.createElement('button')
+      copy.className = 'mg-secondary'
+      copy.textContent = t('swap.copy')
+      copy.onclick = () => navigator.clipboard?.writeText(e.invoice || e.address).catch(() => {})
+      item.append(how, code, copy)
+      if (e.invoice) {
+        const wallet = document.createElement('button')
+        wallet.className = 'mg-secondary'
+        wallet.textContent = t('swap.openWallet')
+        wallet.onclick = () => window.mg.openLightning(e.invoice)
+        item.append(wallet)
+      }
+    }
+    if (e.method === 'bitcoin' && ['underpaid', 'too_late', 'expired'].includes(e.state)) {
+      const to = document.createElement('input')
+      to.placeholder = t('swap.refundTo')
+      const back = document.createElement('button')
+      back.className = 'mg-secondary'
+      back.textContent = t('swap.refund')
+      back.onclick = async () => {
+        try { await window.mg.swapRefund(e.file, to.value.trim()); loadPayment() } catch (error) { text('swapMessage', error.message) }
+      }
+      item.append(to, back)
+    }
+    return item
+  }))
+}
+
 // The pay-as-you-go block, when the service takes payment channels.
 async function loadWallet(payment) {
   if (!window.mg.walletStatus || !payment?.channels) { $('channelBlock').hidden = true; return }
@@ -463,6 +519,7 @@ async function loadWallet(payment) {
   $('channelLive').hidden = !view.live && !view.refund
   $('channelClose').hidden = !view.live
   $('channelRefund').hidden = !view.refund
+  loadSwaps(payment, wallet)
 }
 async function walletAction(button, work, done) {
   button.disabled = true
@@ -512,6 +569,18 @@ window.addEventListener('DOMContentLoaded', async () => {
     await window.mg.channelOpen(atoms)
   }, 'wallet.opened')
   $('channelClose').onclick = () => walletAction($('channelClose'), () => window.mg.channelClose(), 'wallet.closing')
+  $('swapBuy').onclick = async () => {
+    $('swapBuy').disabled = true
+    text('swapMessage', t('wallet.working'))
+    try {
+      const atoms = MGView.parseRqt($('swapAmount').value)
+      if (!atoms) throw new Error(t('wallet.badAmount'))
+      await window.mg.swapBuy($('swapMethod').value, atoms)
+      text('swapMessage', t('swap.started'))
+      await loadPayment()
+    } catch (error) { text('swapMessage', error.message) }
+    finally { $('swapBuy').disabled = false }
+  }
   $('channelRefund').onclick = () => walletAction($('channelRefund'), () => window.mg.channelRefund(), 'wallet.refunded')
   loadPayment()
   MGPeer.bind(showError)

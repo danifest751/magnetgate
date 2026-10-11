@@ -35,7 +35,8 @@ class ChannelWallet {
   run(args, info, extra = {}) {
     const env = { ...process.env, ...extra }
     if (this.exists()) env.REQUANT_WALLET_PASSPHRASE = this.safeStorage.decryptString(fs.readFileSync(this.file('pass.bin')))
-    const argv = [...args, '--network', info.network, '--api', info.channels.api, '--yes']
+    const api = info.channels?.api || info.swaps?.requantApi
+    const argv = [...args, '--network', info.network, '--api', api, '--yes']
     return new Promise((resolve, reject) => {
       this.runner(this.binary, argv, { cwd: this.dir, env, timeout: 60000, windowsHide: true }, (error, stdout, stderr) => {
         if (!error) return resolve(String(stdout))
@@ -135,6 +136,62 @@ class ChannelWallet {
   }
 
   close(code) { return this.post('channel/close', { code }) }
+
+  // ---- buying RQT from the service's maker (atomic swaps: Lightning or on-chain Bitcoin) -------------
+  swapIndex() {
+    const f = this.file('swaps.json')
+    return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : []
+  }
+  saveSwaps(list) { fs.writeFileSync(this.file('swaps.json'), JSON.stringify(list.slice(-20), null, 2)) }
+
+  // Start a purchase; the swap file (it holds the secret) stays in the wallet directory.
+  async buy(info, method, rqtAtoms) {
+    const s = info.swaps
+    if (!s || !s.methods.includes(method)) throw new Error(I18n.t('swap.unavailable'))
+    if (!Number.isSafeInteger(rqtAtoms) || rqtAtoms < s.minAtoms || rqtAtoms > s.maxAtoms)
+      throw new Error(I18n.t('swap.badAmount', { min: rqt(s.minAtoms), max: rqt(s.maxAtoms) }))
+    fs.mkdirSync(this.file('swaps'), { recursive: true, mode: 0o700 })
+    const name = 'swaps/' + Date.now() + '.json'
+    const out = await this.run(['swap', method === 'lightning' ? 'buy-ln' : 'buy', s.maker, rqt(rqtAtoms), 'key.txt', '--out', name], info)
+    const line = key => (out.split(/\r?\n/).find(l => l.startsWith(key)) || '').slice(key.length).trim()
+    const record = JSON.parse(fs.readFileSync(this.file(name), 'utf8'))
+    const entry = { file: name, method, created: Date.now(), rqtAtoms, sats: record.btc_sats, state: 'waiting',
+      invoice: method === 'lightning' ? line('invoice') : undefined,
+      address: method === 'bitcoin' ? line('to') : undefined }
+    this.saveSwaps([...this.swapIndex(), entry])
+    return entry
+  }
+
+  // Follow every open purchase: claim the RQT once the maker has locked them. Returns the list.
+  async advance(info) {
+    const list = this.swapIndex()
+    for (const e of list) {
+      if (['done', 'claimed', 'expired', 'failed', 'rqt_refunded', 'refunded'].includes(e.state)) continue
+      try {
+        const st = JSON.parse(await this.run(['swap', 'status', e.file], info))
+        e.state = st.state === 'btc_claimed' ? 'claimed' : st.state
+        if (st.state === 'rqt_locked') {
+          await this.run(['swap', 'claim', e.file, 'key.txt'], info)
+          e.state = 'claimed'
+        }
+      } catch (error) { e.note = String(error.message).slice(0, 160) }
+    }
+    this.saveSwaps(list)
+    return list
+  }
+
+  // The on-chain refund of a purchase the maker did not complete (from the Bitcoin timeout).
+  async refund(info, file, btcAddress, fetcher = fetch) {
+    if (typeof btcAddress !== 'string' || !/^[a-z0-9]{14,90}$/i.test(btcAddress)) throw new Error(I18n.t('swap.badAddress'))
+    const hex = (await this.run(['swap', 'refund', file, btcAddress], info)).trim()
+    const reply = await fetcher(info.swaps.bitcoinApi + '/tx', { method: 'POST', body: hex, signal: AbortSignal.timeout(30000) })
+    const text = await reply.text()
+    if (!reply.ok) throw new Error(text.slice(0, 200))
+    const list = this.swapIndex()
+    for (const e of list) if (e.file === file) { e.state = 'refunded'; e.refundTxid = text.trim() }
+    this.saveSwaps(list)
+    return text.trim()
+  }
 
   refund(info) { return this.run(['channel', 'refund', 'channel.json'], info) }
 }

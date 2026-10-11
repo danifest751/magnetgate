@@ -75,7 +75,55 @@ def settings(config):
         raise ValueError('payments.depositList must name the deposit address file')
     return {'network': network, 'price': price, 'discounts': sorted(discounts), 'confirmations': confirmations,
             'api': p['api'].rstrip('/'), 'depositList': p['depositList'], 'maxDays': p.get('maxDays', 3650),
-            'pollSeconds': p.get('pollSeconds', 60)}
+            'pollSeconds': p.get('pollSeconds', 60), 'swaps': swap_settings(p.get('swaps'))}
+
+
+def swap_settings(v):
+    """Where the apps buy RQT (a requant-maker, SWAPS.md of Requant), or None. Clients learn the maker's
+    price and limits from the maker itself; the service only names it."""
+    if not v or v.get('enabled') is not True:
+        return None
+    maker = v.get('maker')
+    if not isinstance(maker, str) or ':' not in maker or len(maker) > 100:
+        raise ValueError('payments.swaps.maker must be host:port of a requant-maker')
+    methods = v.get('methods', ['lightning', 'bitcoin'])
+    if not isinstance(methods, list) or not methods or any(m not in ('lightning', 'bitcoin') for m in methods):
+        raise ValueError('payments.swaps.methods: lightning and/or bitcoin')
+    explorer = v.get('bitcoinApi', 'https://mempool.space/api')
+    if not isinstance(explorer, str) or not explorer.startswith('https://'):
+        raise ValueError('payments.swaps.bitcoinApi must be an https Esplora API (to send a refund)')
+    api = v.get('requantApi')
+    if not isinstance(api, str) or not api.startswith(('http://', 'https://')):
+        raise ValueError('payments.swaps.requantApi must be the Requant API URL the apps use')
+    return {'maker': maker, 'methods': methods, 'bitcoinApi': explorer.rstrip('/'), 'requantApi': api.rstrip('/')}
+
+
+_maker_cache = {}
+
+
+def maker_terms(swaps, now=None, fetch=None):
+    """The maker's price and limits for the apps (from its `info`, cached for a minute); None when the
+    maker does not answer."""
+    now = time.time() if now is None else now
+    hit = _maker_cache.get(swaps['maker'])
+    if hit and now - hit[1] < 60:
+        return hit[0]
+    try:
+        info = (fetch or _maker_info)(swaps['maker'])
+        terms = {'satsPerRqt': int(info['sats_per_rqt']), 'minAtoms': int(info['min_rqt']), 'maxAtoms': int(info['max_rqt']),
+                 'bitcoinNetwork': str(info['btc_network']), 'lightning': info.get('lightning') is True}
+    except Exception:
+        terms = None
+    _maker_cache[swaps['maker']] = (terms, now)
+    return terms
+
+
+def _maker_info(maker):
+    host, port = maker.rsplit(':', 1)
+    body = json.dumps({'method': 'info', 'params': [], 'id': 1}).encode()
+    request = urllib.request.Request(f'http://{host}:{port}/', body, {'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=10) as reply:
+        return json.loads(reply.read(65536))['result']
 
 
 def percent_off(s, days):
@@ -96,8 +144,14 @@ def days_for(s, atoms):
 
 def public(s):
     """What clients are told: enough to show prices and confirmations, nothing private."""
-    return {'currency': 'RQT', 'network': s['network'], 'atomsPerRqt': 10**8, 'priceAtomsPerDay': s['price'],
-            'discounts': s['discounts'], 'confirmations': s['confirmations']}
+    result = {'currency': 'RQT', 'network': s['network'], 'atomsPerRqt': 10**8, 'priceAtomsPerDay': s['price'],
+              'discounts': s['discounts'], 'confirmations': s['confirmations']}
+    if s.get('swaps'):
+        terms = maker_terms(s['swaps'])
+        if terms:
+            # without the maker's terms the apps show no Buy RQT
+            result['swaps'] = {**s['swaps'], **terms}
+    return result
 
 
 def load_addresses(s):

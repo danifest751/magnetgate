@@ -219,6 +219,17 @@
                     </div>
                   </div>
                   <p id="walletMessage" class="mg-flash" role="status"></p>
+                  <div id="swapBlock" hidden>
+                    <h3 data-i18n="swap.heading">Buy RQT</h3>
+                    <p id="swapPrice" class="mg-caption"></p>
+                    <div class="mg-actions">
+                      <label for="swapAmount"><span data-i18n="swap.amountLabel">Amount, RQT</span><input id="swapAmount" inputmode="decimal" value="1" maxlength="20" /></label>
+                      <label for="swapMethod"><span data-i18n="swap.methodLabel">Pay with</span><select id="swapMethod"><option value="lightning" data-i18n="swap.lightning">Lightning</option><option value="bitcoin" data-i18n="swap.bitcoin">Bitcoin (on chain)</option></select></label>
+                      <button class="mg-action" id="swapBuy" data-i18n="swap.buy">Buy</button>
+                    </div>
+                    <ul id="swapList" class="mg-payment-prices"></ul>
+                    <p id="swapMessage" class="mg-flash" role="status"></p>
+                  </div>
                 </div>
               </div>
             </section>

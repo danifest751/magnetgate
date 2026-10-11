@@ -162,3 +162,31 @@ class PaymentTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SwapSettingsTests(unittest.TestCase):
+    def test_the_maker_is_named_only_when_enabled(self):
+        self.assertIsNone(payments.swap_settings(None))
+        self.assertIsNone(payments.swap_settings({'enabled': False, 'maker': 'h:1'}))
+        s = payments.swap_settings({'enabled': True, 'maker': 'maker.example:19390', 'bitcoinApi': 'https://mempool.space/signet/api/',
+                                    'requantApi': 'http://node.example:19380'})
+        self.assertEqual(s, {'maker': 'maker.example:19390', 'methods': ['lightning', 'bitcoin'], 'bitcoinApi': 'https://mempool.space/signet/api',
+                             'requantApi': 'http://node.example:19380'})
+        for bad in ({'maker': 'nohost'}, {'maker': 'h:1', 'methods': ['card']}, {'maker': 'h:1', 'bitcoinApi': 'http://x'}, {'maker': 'h:1'}):
+            with self.assertRaises(ValueError):
+                payments.swap_settings({'enabled': True, **bad})
+
+    def test_the_makers_terms_are_cached_and_a_silent_maker_hides_the_offer(self):
+        payments._maker_cache.clear()
+        calls = []
+        info = {'sats_per_rqt': 1000, 'min_rqt': 10**7, 'max_rqt': 10**10, 'btc_network': 'signet', 'lightning': True}
+        fetch = lambda m: calls.append(m) or info
+        sw = {'maker': 'm:1'}
+        t = payments.maker_terms(sw, 100, fetch)
+        self.assertEqual(t['satsPerRqt'], 1000)
+        self.assertTrue(t['lightning'])
+        payments.maker_terms(sw, 130, fetch)
+        self.assertEqual(len(calls), 1, 'cached for a minute')
+        def down(m):
+            raise OSError('refused')
+        self.assertIsNone(payments.maker_terms({'maker': 'm:2'}, 100, down))

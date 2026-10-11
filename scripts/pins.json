@@ -50,13 +50,13 @@
       "requant-wallet for the in-app wallet and payment channels (requant-network/requant, Apache-2.0).",
       "The asset of a Requant release; its hash is published in the release notes."
     ],
-    "version": "0.7.0",
-    "url": "https://github.com/requant-network/requant/releases/download/v0.17.0/requant-wallet-windows-x86_64.exe",
-    "sha256": "313df75e802163671cb2fc965b5cc9ef2a2543a3abe2d629930bc9c4bc40f05b",
+    "version": "0.9.0",
+    "url": "https://github.com/requant-network/requant/releases/download/wallet-v0.9.0/requant-wallet-windows-x86_64.exe",
+    "sha256": "292d7465048ad33815de7dcd4f6422ef7564ec5b420b8baa64a613da53c8ddcc",
     "verifiedOn": "2026-10-11",
     "android": {
-      "url": "https://github.com/requant-network/requant/releases/download/v0.17.0/requant-wallet-android-arm64",
-      "sha256": "fdd2c7d16a3ae8e99dca9d4c82f614ec3dbec41400012943190459ad5a68d226"
+      "url": "https://github.com/requant-network/requant/releases/download/wallet-v0.9.0/requant-wallet-android-arm64",
+      "sha256": "6fcb0b78bcdc34f516be6724a6c27c3f6b089663ecfa7c86f7ee9457861b7371"
     }
   },
   "localAssets": {

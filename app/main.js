@@ -47,7 +47,10 @@ async function payAhead() {
 setInterval(() => {
   if (state.vpnOn && state.connectionSource === 'public')
     payAhead().catch(error => pushLog('[wallet] payment: ' + error.message))
-}, 30000).unref?.()
+  // purchases of RQT move on by themselves: the RQT are claimed as soon as the maker has locked them
+  if (channelWallet.exists() && channelWallet.swapIndex().some(e => !['done', 'claimed', 'expired', 'failed', 'rqt_refunded', 'refunded'].includes(e.state)))
+    publicAccess.payment().then(p => p?.swaps && channelWallet.advance(p)).catch(error => pushLog('[wallet] swap: ' + error.message))
+}, 20000).unref?.()
 const DP_FILE = path.join(app.getPath('userData'), 'current-dp.json')
 // holds every exit PSK while the client child runs, so it must not outlive the session
 const RUNTIME_FILE = path.join(app.getPath('userData'), 'runtime-client.json')
@@ -896,6 +899,15 @@ handle('channelOpen', async depositAtoms => {
 handle('channelPay', () => payAhead())
 handle('channelClose', () => channelWallet.close(publicAccess.code()))
 handle('channelRefund', async () => channelWallet.refund(await publicAccess.payment()))
+handle('swapBuy', async (method, atoms) => channelWallet.buy(await publicAccess.payment(), method, atoms))
+handle('swapList', async () => {
+  const payment = await publicAccess.payment()
+  return payment?.swaps && channelWallet.exists() ? channelWallet.advance(payment) : []
+})
+handle('swapRefund', async (file, address) => channelWallet.refund(await publicAccess.payment(), file, address))
+handle('openLightning', invoice => {
+  if (typeof invoice === 'string' && /^ln[a-z0-9]+$/i.test(invoice)) shell.openExternal('lightning:' + invoice)
+})
 handle('setPeerPolicy', policy => peerHost.policy(policy))
 handle('getLog', () => logs.slice())
 handle('getConfig', loadConfig)
