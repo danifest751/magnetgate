@@ -93,8 +93,11 @@ object PublicAccess {
     connection.requestMethod = "POST"
     connection.doOutput = true
     connection.setRequestProperty("Content-Type", "application/json")
+    val payload = body.toString().toByteArray()
+    // the length up front: the body goes out at once with the headers instead of being buffered
+    connection.setFixedLengthStreamingMode(payload.size)
     try {
-      connection.outputStream.use { it.write(body.toString().toByteArray()) }
+      connection.outputStream.use { it.write(payload) }
       val success = connection.responseCode == 200
       val stream = if (success) connection.inputStream else connection.errorStream
       val bytes = stream?.use {

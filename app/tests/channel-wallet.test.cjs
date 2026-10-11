@@ -29,7 +29,7 @@ function fakeWallet(calls) {
     if (cmd === 'address') return done(null, 'address  trq1client\nkey hash ' + '0'.repeat(64) + '\npubkey   ' + 'cd'.repeat(32) + '\n')
     if (cmd === 'balance') return done(null, 'confirmed   5.5 RQT in 2 outputs\n')
     if (cmd === 'channel' && sub === 'open')
-      fs.writeFileSync(file('proposed.json'), JSON.stringify({ funding_txid: 'f'.repeat(64), refund: 'r1', deposit: Number(argv[5]) * 1e8, paid: 0, accepted: false }))
+      fs.writeFileSync(file('proposed.json'), JSON.stringify({ funding_txid: 'f'.repeat(64), refund: 'aa'.repeat(10) + '0'.repeat(128) + 'bb', deposit: Number(argv[5]) * 1e8, paid: 0, accepted: false }))
     if (cmd === 'channel' && sub === 'pay') {
       const ch = JSON.parse(fs.readFileSync(file('channel.json')))
       ch.paid = Math.round(Number(argv[4]) * 1e8)
@@ -45,7 +45,7 @@ function setup() {
   const calls = [], posts = []
   const post = async (pathname, body) => {
     posts.push({ pathname, body })
-    if (pathname === 'channel/open') return { refund: 'ab'.repeat(60) }
+    if (pathname === 'channel/open') return { sig2: 'cd'.repeat(64), at: 20 }
     return { tier: 'full', paidUntil: 1 }
   }
   const w = new ChannelWallet(dir, safeStorage, 'requant-wallet', post, fakeWallet(calls))
@@ -76,7 +76,7 @@ test('opening proposes, stores the accepted channel and only then funds it', asy
   assert.equal(posts[0].pathname, 'channel/open')
   const order = calls.map(c => c.argv[1])
   assert.ok(order.indexOf('fund') > order.indexOf('open'))
-  assert.equal(w.channel().refund, 'ab'.repeat(60))
+  assert.equal(w.channel().refund, 'aa'.repeat(10) + 'cd'.repeat(64) + 'bb')
   assert.equal(w.channel().accepted, true)
 })
 

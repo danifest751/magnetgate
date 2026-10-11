@@ -91,7 +91,9 @@ def main():
             wallet('channel', 'open', 'client.key', info['serverPubkey'], info['payTo'], amount, expiry, '--out', name)
             with open(os.path.join(tmp, name)) as f:
                 proposed = json.load(f)
-            accepted = {**proposed, 'refund': store.channel_open(code, proposed)['refund'], 'accepted': True}
+            answer = store.channel_open(code, proposed)
+            at, refund = answer['at'], proposed['refund']
+            accepted = {**proposed, 'refund': refund[:at] + answer['sig2'] + refund[at + 128:], 'accepted': True}
             with open(os.path.join(tmp, name), 'w') as f:
                 json.dump(accepted, f)
             wallet('channel', 'fund', 'client.key', name)

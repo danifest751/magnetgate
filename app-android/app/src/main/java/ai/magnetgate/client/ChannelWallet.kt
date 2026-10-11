@@ -94,11 +94,15 @@ object ChannelWallet {
       run(context, terms, payment.network, listOf("channel", "open", "key.txt", terms.serverPubkey, terms.payTo,
         Payments.formatRqt(deposit), expiry.toString(), "--out", "proposed.json"))
     val proposed = JSONObject(pending.readText())
-    // the service answers with the refund it signed (small: answers over some mobile networks stall after
-    // their first packet); requant-wallet checks that signature before it funds the channel
-    val refund = PublicAccess.post(context, "channel/open", JSONObject().put("code", code).put("channel", proposed), 60000).getString("refund")
-    check(Regex("[0-9a-f]{100,2000}").matches(refund) && refund != proposed.getString("refund")) { strings.getString(R.string.wallet_bad_accept) }
-    val accepted = JSONObject(proposed.toString()).put("refund", refund).put("accepted", true)
+    // the service answers with its signature of the refund and where it goes (answers over some mobile
+    // networks stall after their first packet); requant-wallet checks the signature before funding
+    val answer = PublicAccess.post(context, "channel/open", JSONObject().put("code", code).put("channel", proposed), 60000)
+    val sig2 = answer.getString("sig2")
+    val at = answer.getInt("at")
+    val mine = proposed.getString("refund")
+    check(Regex("[0-9a-f]{128}").matches(sig2) && at >= 0 && at % 2 == 0 && at + 128 <= mine.length &&
+      mine.substring(at, at + 128) == "0".repeat(128)) { strings.getString(R.string.wallet_bad_accept) }
+    val accepted = JSONObject(proposed.toString()).put("refund", mine.substring(0, at) + sig2 + mine.substring(at + 128)).put("accepted", true)
     file(context, "channel.json").writeText(accepted.toString(2))
     file(context, "proposed.json").delete()
     run(context, terms, payment.network, listOf("channel", "fund", "key.txt", "channel.json"))

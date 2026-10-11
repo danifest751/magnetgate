@@ -40,7 +40,7 @@ class FakeWallet:
             path = os.path.join(cwd, 'ch.json')
             ch = json.loads(read(path))
             ch['accepted'] = True
-            ch['refund'] = 'signed'
+            ch['refund'] = ch['refund'].replace('0' * 128, 'cd' * 64)
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(ch, f)
         elif args[:2] == ['channel', 'receive']:
@@ -59,7 +59,7 @@ class FakeWallet:
 
 def channel_file(deposit=500_000_000, expiry=3000):
     return {'requant_channel': 1, 'network': 'test', 'server': PUBKEY, 'server_to': PAY_TO, 'deposit': deposit,
-            'expiry': expiry, 'funding_txid': FUNDING, 'vout': 1}
+            'expiry': expiry, 'funding_txid': FUNDING, 'vout': 1, 'refund': 'aa' * 40 + '0' * 128 + 'bb' * 20}
 
 
 class ChannelTests(unittest.TestCase):
@@ -105,12 +105,12 @@ class ChannelTests(unittest.TestCase):
     def test_open_pay_by_the_minute_and_close(self):
         now = 1_000_000
         opened = self.store.channel_open(self.code, channel_file(), now)
-        self.assertNotIn('channel', opened, 'only the refund goes back')
+        self.assertEqual((opened['sig2'], opened['at']), ('cd' * 64, 80), 'only the signature goes back')
         self.assertEqual(json.loads(self.store.db.execute('SELECT file FROM channels').fetchone()[0])['accepted'], True)
         self.assertEqual(opened['status']['status'], 'accepted')
         # the same proposal again (a lost answer): the channel as accepted, nothing new
         again = self.store.channel_open(self.code, channel_file(), now)
-        self.assertEqual(again['refund'], opened['refund'])
+        self.assertEqual(again['sig2'], opened['sig2'])
         # a second channel is refused while this one is funded
         with self.assertRaises(AccessError):
             self.store.channel_open(self.code, channel_file() | {'funding_txid': 'aa' * 32}, now)

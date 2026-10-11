@@ -287,7 +287,7 @@ class AccessStore:
             # the same proposal again (the answer to the first one was lost): the channel as accepted
             if active[1] == 'accepted' and isinstance(channel.get('funding_txid'), str) and                     active[0] == channel['funding_txid'] + ':' + str(channel.get('vout')):
                 with self.lock:
-                    return {'refund': json.loads(active[2])['refund'], 'status': self.channel_view(account)}
+                    return {**self.refund_signature(channel, json.loads(active[2])), 'status': self.channel_view(account)}
             if active[1] == 'open' or channels.confirmations(self.channels, funding) > 0:
                 raise AccessError(409, 'This code already has a channel: close it first.', 'channel_exists')
         try:
@@ -308,9 +308,9 @@ class AccessStore:
                 raise AccessError(409, 'This channel is already known.', 'channel_exists')
             self.db.execute("INSERT INTO channels(id,account,file,deposit,expiry,status,opened) VALUES(?,?,?,?,?,'accepted',?)",
                             (cid, account, json.dumps(accepted), accepted['deposit'], accepted['expiry'], now))
-            # only the signed refund goes back: the client has the rest, and answers over some mobile
-            # networks stall after their first packet
-            return {'refund': accepted['refund'], 'status': self.channel_view(account)}
+            # only the service's signature goes back: answers over some mobile networks stall after their
+            # first packet (about 1.4 kB), and the client has everything else
+            return {**self.refund_signature(channel, accepted), 'status': self.channel_view(account)}
         return self.transaction(commit)
 
     def channel_pay(self, code, state, now=None):
@@ -353,6 +353,19 @@ class AccessStore:
             return {'tier': 'full' if paid_until > now else 'free', 'paidUntil': paid_until, 'channel': self.channel_view(account),
                     'blocksLeft': r['blocks_left']}
         return self.transaction(commit)
+
+    @staticmethod
+    def refund_signature(proposed, accepted):
+        """Where the service's signature goes in the client's refund: `sig2` (64 bytes, hex) at hex offset
+        `at`, where the client's copy has zeros. The client checks it all with requant-wallet before funding."""
+        mine, theirs = proposed.get('refund', ''), accepted['refund']
+        diff = [i for i in range(min(len(mine), len(theirs))) if mine[i] != theirs[i]]
+        if len(mine) != len(theirs) or not diff:
+            raise AccessError(400, 'Channel refused: unexpected refund.', 'channel_refused')
+        at = diff[0] - diff[0] % 2
+        if diff[-1] >= at + 128 or mine[at:at + 128] != '0' * 128:
+            raise AccessError(400, 'Channel refused: unexpected refund.', 'channel_refused')
+        return {'sig2': theirs[at:at + 128], 'at': at}
 
     def close_channel(self, cid):
         """Countersign and send the best state of a channel; a channel without one is left to its refund."""
