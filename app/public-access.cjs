@@ -118,6 +118,8 @@ class PublicAccess {
     return this.profile
   }
   endpoints() { return this.profile && this.profile.expires * 1000 > Date.now() ? this.profile.endpoints : [] }
+  // the saved personal code (for the payment channel requests), or null without one
+  code() { return fs.existsSync(this.file) ? this.safeStorage.decryptString(fs.readFileSync(this.file)) : null }
   async payment(fetcher = fetch) {
     if (!fs.existsSync(this.file)) return null
     const payment = await requestPayment(this.safeStorage.decryptString(fs.readFileSync(this.file)), fetcher)
@@ -126,4 +128,4 @@ class PublicAccess {
     return payment
   }
 }
-module.exports = { PublicAccess, requestProfile, requestPayment, validateProfile, validatePayment }
+module.exports = { PublicAccess, requestProfile, requestPayment, validateProfile, validatePayment, post }

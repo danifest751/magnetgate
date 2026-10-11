@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from admin_metrics import RequestMetrics
 import payments
+import channels
 
 
 class AccessError(Exception):
@@ -23,12 +24,16 @@ class AccessError(Exception):
 
 
 class AccessStore:
-    def __init__(self, path, config):
+    def __init__(self, path, config, runner=None):
         self.config = config
         self.lock = threading.RLock()
         # payment settings and the whole deposit list are checked before anything is opened
         self.payments = payments.settings(config)
         listed = payments.load_addresses(self.payments) if self.payments else []
+        # payment channels: the wallet binary and the channel key are checked at start
+        self.channels = channels.settings(config, self.payments)
+        self.channel_wallet = channels.Wallet(self.channels, *([runner] if runner else [])) if self.channels else None
+        self.channel_key = self.channel_wallet.identity() if self.channels else None
         self.db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self.db.execute('PRAGMA journal_mode=WAL')
         self.metrics = RequestMetrics(config['analyticsDatabase']) if config.get('analyticsDatabase') else None
@@ -42,6 +47,9 @@ class AccessStore:
           -- payments (used only with payments.enabled): an address is handed to one account, never again
           CREATE TABLE IF NOT EXISTS deposits(address TEXT PRIMARY KEY, owner TEXT UNIQUE, account TEXT UNIQUE, assigned INTEGER);
           CREATE TABLE IF NOT EXISTS credits(txid TEXT, address TEXT, account TEXT, atoms INTEGER, days INTEGER, height INTEGER, credited INTEGER, PRIMARY KEY(txid,address));
+          -- payment channels (payments.channels): status accepted -> open -> closed (or dropped, abandoned, expired)
+          CREATE TABLE IF NOT EXISTS channels(id TEXT PRIMARY KEY, account TEXT, file TEXT, deposit INTEGER, expiry INTEGER,
+            paid INTEGER DEFAULT 0, credited INTEGER DEFAULT 0, state TEXT, status TEXT, opened INTEGER, closed_txid TEXT);
         ''')
         columns = {r[1] for r in self.db.execute('PRAGMA table_info(accounts)')}
         if 'paid_until' not in columns:
@@ -74,7 +82,7 @@ class AccessStore:
             self.db.execute('DELETE FROM issues WHERE day < ?', (day,))
             self.db.execute('DELETE FROM usage WHERE day < ?', (day,))
             # an account with RQT left over is kept: its deposit address may still be paid to
-            old = [r[0] for r in self.db.execute('SELECT id FROM accounts WHERE expires < ? AND coalesce(balance,0)=0', (now - 86400,))]
+            old = [r[0] for r in self.db.execute("SELECT id FROM accounts WHERE expires < ? AND coalesce(balance,0)=0 AND id NOT IN (SELECT account FROM channels WHERE status IN ('accepted','open'))", (now - 86400,))]
             for account in old:
                 self.db.execute('DELETE FROM traffic WHERE device IN (SELECT id FROM devices WHERE account=?)', (account,))
                 self.db.execute('DELETE FROM devices WHERE account=?', (account,))
@@ -178,12 +186,18 @@ class AccessStore:
             if any(type(v) is not int or v < 0 or v > 1000 for v in online.values()):
                 raise AccessError(400, 'invalid online')
             self.db.execute('INSERT INTO nodes VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET seen=excluded.seen,online=excluded.online', (node, now, sum(online.values())))
+            full = data.get('fullOnline') or []
+            if not isinstance(full, list) or len(full) > 200 or any(not isinstance(d, str) for d in full):
+                raise AccessError(400, 'invalid fullOnline')
             kick = []
             for device, connections in online.items():
                 row = self.db.execute('SELECT account FROM devices WHERE id=?', (device,)).fetchone()
                 # Two transport sessions may overlap during a device reconnect. Both are billed
                 # to the same device/account; registration, device and node capacity limits remain.
-                if not row or connections > 2 or not self.allowed(row[0], now):
+                # A device on the full listener must still have paid time (minutes bought over a
+                # channel run out between reconnects).
+                listener = 'full' if device in full else None
+                if not row or connections > 2 or not self.allowed(row[0], now, listener):
                     kick.append(device)
             return {'kick': kick}
         return self.transaction(commit)
@@ -202,6 +216,8 @@ class AccessStore:
         if self.payments:
             # only a service that takes payments says so; clients show no payment UI without this field
             result['payments'] = payments.public(self.payments)
+            if self.channels:
+                result['payments']['channels'] = channels.public(self.channels, *self.channel_key)
         return result
 
     def payment(self, code, now=None):
@@ -220,9 +236,150 @@ class AccessStore:
             paid_until, balance = self.db.execute('SELECT coalesce(paid_until,0),coalesce(balance,0) FROM accounts WHERE id=?', (account,)).fetchone()
             credits = [{'txid': r[0], 'atoms': r[1], 'days': r[2], 'height': r[3]} for r in self.db.execute(
                 'SELECT txid,atoms,days,height FROM credits WHERE account=? ORDER BY credited DESC LIMIT 20', (account,))]
-            return {**payments.public(self.payments), 'address': row[0], 'tier': 'full' if paid_until > now else 'free',
-                    'paidUntil': paid_until, 'expires': expires, 'balanceAtoms': balance, 'credits': credits}
+            result = {**payments.public(self.payments), 'address': row[0], 'tier': 'full' if paid_until > now else 'free',
+                      'paidUntil': paid_until, 'expires': expires, 'balanceAtoms': balance, 'credits': credits}
+            if self.channels:
+                result['channels'] = channels.public(self.channels, *self.channel_key)
+                result['channel'] = self.channel_view(account)
+            return result
         return self.transaction(commit)
+
+    # ---- payment channels -------------------------------------------------------------------------
+
+    def need_channels(self):
+        if not self.channels:
+            raise AccessError(404, 'This service does not take payment channels.', 'channels_off')
+
+    def channel_view(self, account):
+        row = self.db.execute('SELECT id,status,deposit,expiry,paid,credited,closed_txid FROM channels WHERE account=? ORDER BY opened DESC LIMIT 1', (account,)).fetchone()
+        if not row:
+            return None
+        return {'id': row[0], 'status': row[1], 'depositAtoms': row[2], 'expiry': row[3], 'paidAtoms': row[4],
+                'creditedAtoms': row[5], 'closedTxid': row[6]}
+
+    def active_channel(self, account):
+        return self.db.execute("SELECT id,status,file,state,paid FROM channels WHERE account=? AND status IN ('accepted','open') ORDER BY opened DESC LIMIT 1", (account,)).fetchone()
+
+    def channel_open(self, code, channel, now=None):
+        """Sign the refund of a channel the client proposes; it is funded by the client afterwards."""
+        self.need_channels()
+        now = int(time.time() if now is None else now)
+        if not isinstance(channel, dict):
+            raise AccessError(400, 'Expected a channel file.')
+        with self.lock:
+            account = self.account(code, now)[0]
+            active = self.active_channel(account)
+        if active:
+            funding = active[0].split(':')[0]
+            if active[1] == 'open' or channels.confirmations(self.channels, funding) > 0:
+                raise AccessError(409, 'This code already has a channel: close it first.', 'channel_exists')
+        try:
+            accepted = self.channel_wallet.accept(channel)
+        except channels.ChannelError as error:
+            raise AccessError(400, 'Channel refused: ' + str(error), 'channel_refused')
+        if accepted.get('server') != self.channel_key[0] or accepted.get('server_to') != self.channel_key[1]:
+            raise AccessError(400, 'Channel refused: it is not a channel with this service.', 'channel_refused')
+        if accepted['deposit'] < self.channels['minDeposit']:
+            raise AccessError(400, 'Channel refused: the deposit is below the minimum.', 'channel_refused')
+        if accepted['expiry'] > channels.height(self.channels) + self.channels['maxBlocks']:
+            raise AccessError(400, 'Channel refused: the expiry is too far away.', 'channel_refused')
+        cid = accepted['funding_txid'] + ':' + str(accepted['vout'])
+        def commit():
+            if active:
+                self.db.execute("UPDATE channels SET status='dropped' WHERE id=? AND status='accepted'", (active[0],))
+            if self.db.execute('SELECT 1 FROM channels WHERE id=?', (cid,)).fetchone():
+                raise AccessError(409, 'This channel is already known.', 'channel_exists')
+            self.db.execute("INSERT INTO channels(id,account,file,deposit,expiry,status,opened) VALUES(?,?,?,?,?,'accepted',?)",
+                            (cid, account, json.dumps(accepted), accepted['deposit'], accepted['expiry'], now))
+            return {'channel': accepted, 'status': self.channel_view(account)}
+        return self.transaction(commit)
+
+    def channel_pay(self, code, state, now=None):
+        """Take a state signed by the client: what it pays beyond the last one buys minutes of full access."""
+        self.need_channels()
+        now = int(time.time() if now is None else now)
+        if not isinstance(state, str) or not 0 < len(state) <= 4000 or any(c not in '0123456789abcdef' for c in state):
+            raise AccessError(400, 'Expected a signed channel state (hex).')
+        with self.lock:
+            account = self.account(code, now)[0]
+            active = self.active_channel(account)
+        if not active:
+            raise AccessError(404, 'This code has no open channel.', 'no_channel')
+        cid, _, file, _, _ = active
+        try:
+            r = self.channel_wallet.receive(json.loads(file), state)
+        except channels.ChannelError as error:
+            raise AccessError(400, 'State refused: ' + str(error), 'state_refused')
+        if r.get('closed') or not r.get('funded'):
+            raise AccessError(409, 'The deposit is not on the chain (not sent yet, or already spent).', 'channel_unfunded')
+        need = self.payments['confirmations']
+        have = channels.confirmations(self.channels, cid.split(':')[0])
+        if have < need:
+            raise AccessError(409, f'The deposit has {have} of {need} confirmations.', 'channel_unconfirmed')
+        if r['blocks_left'] <= self.channels['closeMargin']:
+            raise AccessError(409, 'The channel is about to expire: open a new one.', 'channel_expiring')
+        price = self.channels['pricePerMinute']
+        def commit():
+            paid, credited = self.db.execute('SELECT paid,credited FROM channels WHERE id=?', (cid,)).fetchone()
+            if r['paid'] > paid:
+                minutes = (r['paid'] - credited) // price
+                self.db.execute("UPDATE channels SET paid=?, credited=?, state=?, status='open' WHERE id=?",
+                                (r['paid'], credited + minutes * price, state, cid))
+                if minutes:
+                    paid_until, expires = self.db.execute('SELECT coalesce(paid_until,0),expires FROM accounts WHERE id=?', (account,)).fetchone()
+                    paid_until = max(paid_until, now) + minutes * 60
+                    self.db.execute('UPDATE accounts SET paid_until=?, expires=? WHERE id=?',
+                                    (paid_until, max(expires, paid_until + self.lifetime()), account))
+            paid_until = self.db.execute('SELECT coalesce(paid_until,0) FROM accounts WHERE id=?', (account,)).fetchone()[0]
+            return {'tier': 'full' if paid_until > now else 'free', 'paidUntil': paid_until, 'channel': self.channel_view(account),
+                    'blocksLeft': r['blocks_left']}
+        return self.transaction(commit)
+
+    def close_channel(self, cid):
+        """Countersign and send the best state of a channel; a channel without one is left to its refund."""
+        with self.lock:
+            row = self.db.execute('SELECT file,state,status FROM channels WHERE id=?', (cid,)).fetchone()
+        if not row or row[2] not in ('accepted', 'open'):
+            return None
+        if not row[1]:
+            with self.lock:
+                self.db.execute("UPDATE channels SET status='abandoned' WHERE id=?", (cid,))
+            return None
+        txid = self.channel_wallet.close(json.loads(row[0]), row[1])
+        with self.lock:
+            self.db.execute("UPDATE channels SET status='closed', closed_txid=? WHERE id=?", (txid, cid))
+        return txid
+
+    def channel_close(self, code, now=None):
+        """The client is done: close with the last state now (the rest of the deposit goes back to it)."""
+        self.need_channels()
+        now = int(time.time() if now is None else now)
+        with self.lock:
+            account = self.account(code, now)[0]
+            active = self.active_channel(account)
+        if not active:
+            raise AccessError(404, 'This code has no open channel.', 'no_channel')
+        try:
+            self.close_channel(active[0])
+        except channels.ChannelError as error:
+            raise AccessError(503, 'Could not close the channel: ' + str(error), 'close_failed')
+        with self.lock:
+            return {'channel': self.channel_view(account)}
+
+    def close_due(self, tip):
+        """Close channels near their expiry or fully paid; drop accepted ones that expired unfunded."""
+        margin = self.channels['closeMargin']
+        with self.lock:
+            self.db.execute("UPDATE channels SET status='expired' WHERE status='accepted' AND state IS NULL AND expiry <= ?", (tip,))
+            due = [r[0] for r in self.db.execute(
+                "SELECT id FROM channels WHERE status='open' AND state IS NOT NULL AND (expiry - ? <= ? OR paid >= deposit - 1000)", (tip, margin))]
+        closed = 0
+        for cid in due:
+            try:
+                closed += self.close_channel(cid) is not None
+            except Exception as error:
+                print('channel close failed: ' + type(error).__name__, flush=True)
+        return closed
 
     def watched(self):
         """Deposit addresses to watch: those handed to an account that still exists."""
@@ -276,6 +433,11 @@ def watch_payments(store):
         except Exception as error:
             # no addresses, amounts or response bodies in the log
             print('payments poll failed: ' + type(error).__name__, flush=True)
+        if store.channels:
+            try:
+                store.close_due(channels.height(store.channels))
+            except Exception as error:
+                print('channel closing failed: ' + type(error).__name__, flush=True)
         time.sleep(store.payments['pollSeconds'])
 
 
@@ -338,7 +500,7 @@ def handler(store, config):
                 if self.headers.get('Transfer-Encoding'):
                     raise AccessError(400, 'invalid transfer encoding')
                 length = int(self.headers.get('Content-Length', '0'))
-                if not 0 < length <= (65536 if self.path == '/api/node-report' else 4096):
+                if not 0 < length <= (65536 if self.path in ('/api/node-report', '/api/channel/open') else 4096 if self.path != '/api/channel/pay' else 8192):
                     raise AccessError(413, 'Слишком большой запрос.')
                 origin = self.headers.get('Origin')
                 if origin and origin != 'https://' + config['hostname']:
@@ -368,6 +530,12 @@ def handler(store, config):
                     result = store.revoke(data.get('code'))
                 elif self.path == '/api/payment':
                     result = store.payment(data.get('code'))
+                elif self.path == '/api/channel/open':
+                    result = store.channel_open(data.get('code'), data.get('channel'))
+                elif self.path == '/api/channel/pay':
+                    result = store.channel_pay(data.get('code'), data.get('state'))
+                elif self.path == '/api/channel/close':
+                    result = store.channel_close(data.get('code'))
                 elif self.path == '/api/node-auth':
                     result = store.authenticate(data.get('auth'), data.get('listener'))
                 elif self.path == '/api/node-report':

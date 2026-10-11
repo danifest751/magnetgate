@@ -395,6 +395,8 @@ class MgVpnService : VpnService() {
         session.use(ticket) { PeerRuntime.suspendForVpn() }
         val selectedPublicRoute = !coreless && PublicAccess.enabled(this)
         if (selectedPublicRoute) session.use(ticket) { renewCpuWake() }
+        // a payment channel pays a few minutes ahead first, so that the profile gives the full tier
+        if (selectedPublicRoute) runCatching { ChannelWallet.payAhead(this) }.onFailure { Log.w(TAG, "channel payment: ${it.message}") }
         if (selectedPublicRoute) PublicAccess.refresh(this)
         val selectedPeerRoute = !coreless && !selectedPublicRoute && Settings.peerSource(this)
         val selectedPeerCountry = Settings.peerCountry(this)
@@ -637,9 +639,15 @@ class MgVpnService : VpnService() {
       }
     }, "public-traffic").apply { isDaemon = true; start() }
     var checkedAt = 0L
+    var paidAt = 0L
     val recovery = PublicRecovery()
     while (session.current(ticket)) {
       session.use(ticket) { renewCpuWake() }
+      // pay as you go: every 30 s, keep a few minutes of full access paid ahead over the channel
+      if (System.nanoTime() - paidAt >= 30_000_000_000L) {
+        paidAt = System.nanoTime()
+        runCatching { ChannelWallet.payAhead(this) }.onFailure { Log.w(TAG, "channel payment: ${it.message}") }
+      }
       val interval = if (Health.lastCheck?.ok == false) CHECK_RETRY_INTERVAL_MS else 15_000L
       if (checkRequested || System.nanoTime() - checkedAt >= interval * 1_000_000) {
         checkRequested = false

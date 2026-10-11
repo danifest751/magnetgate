@@ -1,3 +1,5 @@
+import java.security.MessageDigest
+
 plugins {
   id("com.android.application")
   id("org.jetbrains.kotlin.android")
@@ -119,7 +121,11 @@ android {
 
   packaging {
     resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    // librequantwallet.so is an executable, run from nativeLibraryDir: it must be extracted on install
+    jniLibs.useLegacyPackaging = true
   }
+
+  sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/requantWallet/jniLibs"))
 }
 
 // The routing rule-sets come from the same place the desktop gets them: tools/sing-box/, fetched by
@@ -160,3 +166,22 @@ dependencies {
   // Exercise the actual generated routing JSON on the JVM, rather than Android's stub classes.
   testImplementation("org.json:json:20240303")
 }
+
+// requant-wallet for the in-app wallet (payment channels): the arm64 asset of a Requant release, fetched
+// by scripts/get-singbox.ps1 against its pin in scripts/pins.json into tools/requant/. It is packaged as
+// librequantwallet.so because nativeLibraryDir is the only place Android lets an app execute a file from.
+// Missing or unpinned: the app builds without it and hides pay as you go.
+val requantWallet = rootProject.layout.projectDirectory.file("../tools/requant/requant-wallet-android-arm64")
+val packRequantWallet by tasks.registering(Copy::class) {
+  val pins = groovy.json.JsonSlurper().parse(rootProject.file("../scripts/pins.json")) as Map<*, *>
+  val pinned = ((pins["requantWallet"] as Map<*, *>)["android"] as Map<*, *>)["sha256"] as String
+  onlyIf {
+    val f = requantWallet.asFile
+    val ok = f.isFile && MessageDigest.getInstance("SHA-256").digest(f.readBytes()).joinToString("") { "%02x".format(it) } == pinned
+    if (!ok) logger.lifecycle("requant-wallet: none or unpinned at ${f} - pay as you go will be hidden")
+    ok
+  }
+  from(requantWallet) { rename { "librequantwallet.so" } }
+  into(layout.buildDirectory.dir("generated/requantWallet/jniLibs/arm64-v8a"))
+}
+tasks.named("preBuild") { dependsOn(packRequantWallet) }

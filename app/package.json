@@ -53,6 +53,14 @@
         ]
       },
       {
+        "from": "../tools/requant",
+        "to": "tools/requant",
+        "filter": [
+          "requant-wallet.exe",
+          "requant-wallet"
+        ]
+      },
+      {
         "from": "../magnetgate.config.example.json",
         "to": "magnetgate.config.example.json"
       },

@@ -126,6 +126,9 @@ object Settings {
   fun setPsk(context: Context, value: String) = put(context, KEY_PSK, value.trim())
 
   fun publicCode(context: Context) = get(context, "public_code")
+  /** The passphrase of the in-app wallet's key file (ChannelWallet). */
+  fun walletPass(context: Context) = get(context, "wallet_pass")
+  fun saveWalletPass(context: Context, value: String) = open(context)?.edit()?.putString("wallet_pass", value)?.commit() == true
   fun publicDevice(context: Context) = get(context, "public_device")
   fun savePublicDevice(context: Context, value: String) = open(context)?.edit()?.putString("public_device", value)?.commit() == true
   fun savePublicCode(context: Context, value: String): Boolean = synchronized(this) {

@@ -20,6 +20,10 @@ function verifyResources(platform, arch, dir = path.resolve(__dirname, '../tools
   } else if (platform === 'win32' && arch === 'x64') {
     check('sing-box.exe', pins.singBox.exeSha256)
     check('wintun.dll', pins.localAssets['wintun.dll'].sha256)
+    // the in-app wallet's requant-wallet (payment channels)
+    const wallet = path.resolve(dir, '..', 'requant', 'requant-wallet.exe')
+    if (crypto.createHash('sha256').update(fs.readFileSync(wallet)).digest('hex') !== pins.requantWallet.sha256)
+      throw new Error('Refusing to package unpinned requant-wallet.exe')
   } else throw new Error('Unsupported desktop target')
   for (const name of ['refilter-domains.srs', 'refilter-ip.srs']) check(name, pins.ruleSets[name].sha256)
   check('tunnel-userlist.srs', pins.localAssets['tunnel-userlist.srs'].sha256, false)

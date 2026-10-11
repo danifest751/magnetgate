@@ -128,7 +128,38 @@
       expires: t('payment.codeExpires', { date: date(p.expires) })
     }
   }
-  const api = { needsDisconnect, connectionView, countryOptions, countryMessage, nodeRows, formatRqt, paymentView }
+  // RQT typed by the user to atoms, or null (at most 8 decimals)
+  function parseRqt(text) {
+    const m = /^\s*(\d{1,8})(?:[.,](\d{1,8}))?\s*$/.exec(String(text))
+    return m ? Number(m[1]) * 1e8 + Number((m[2] || '').padEnd(8, '0')) : null
+  }
+  // The pay-as-you-go block: the in-app wallet and the service's view of its channel.
+  function channelView(p, wallet) {
+    if (!p?.channels || !wallet) return null
+    if (!wallet.exists) return { create: true }
+    const c = p.channels, ch = p.channel, fee = 1000
+    const view = {
+      address: wallet.address,
+      balance: wallet.balanceAtoms == null ? t('wallet.balanceUnknown') : t('wallet.balance', { amount: formatRqt(wallet.balanceAtoms) }),
+      price: t('wallet.price', { amount: formatRqt(c.priceAtomsPerMinute), min: formatRqt(c.minDepositAtoms) }),
+      canOpen: true, live: false, refund: false
+    }
+    if (!ch || ['closed', 'dropped', 'expired'].includes(ch.status)) {
+      view.status = ch?.status === 'closed' ? t('wallet.closed', { paid: formatRqt(ch.paidAtoms) }) : t('wallet.none')
+    } else if (ch.status === 'abandoned') {
+      view.status = t('wallet.unclosed')
+      view.refund = true
+    } else {
+      view.canOpen = false
+      view.live = true
+      view.status = ch.status === 'accepted' && !ch.paidAtoms
+        ? t('wallet.waiting', { deposit: formatRqt(ch.depositAtoms), confirmations: p.confirmations })
+        : t('wallet.live', { deposit: formatRqt(ch.depositAtoms), paid: formatRqt(ch.paidAtoms),
+          minutes: Math.floor((ch.depositAtoms - fee - ch.paidAtoms) / c.priceAtomsPerMinute) })
+    }
+    return view
+  }
+  const api = { needsDisconnect, connectionView, countryOptions, countryMessage, nodeRows, formatRqt, paymentView, parseRqt, channelView }
   if (typeof module !== 'undefined' && module.exports) module.exports = api
   else root.MGView = api
 })(globalThis)

@@ -45,6 +45,20 @@
       "role": "split mode: blocked IP summaries routed through the exit"
     }
   },
+  "requantWallet": {
+    "_comment": [
+      "requant-wallet for the in-app wallet and payment channels (requant-network/requant, Apache-2.0).",
+      "The asset of a Requant release; its hash is published in the release notes."
+    ],
+    "version": "0.7.0",
+    "url": "https://github.com/requant-network/requant/releases/download/v0.17.0/requant-wallet-windows-x86_64.exe",
+    "sha256": "313df75e802163671cb2fc965b5cc9ef2a2543a3abe2d629930bc9c4bc40f05b",
+    "verifiedOn": "2026-10-11",
+    "android": {
+      "url": "https://github.com/requant-network/requant/releases/download/v0.17.0/requant-wallet-android-arm64",
+      "sha256": "fdd2c7d16a3ae8e99dca9d4c82f614ec3dbec41400012943190459ad5a68d226"
+    }
+  },
   "localAssets": {
     "_comment": [
       "Files that are supplied locally (not downloadable) but are bundled into the desktop app.",

@@ -196,6 +196,55 @@ apps accept ports 4443 and 4444 only.
 Not done yet: the payment screen in the apps, admin-panel editing of these parameters, and English for
 the service's older error messages.
 
+### 4.2 Pay as you go: payment channels with the operator
+
+Status: **implemented** in the access service (`web/channels.py`) and the desktop app
+(`app/channel-wallet.cjs`); Android to follow. It runs Requant's one-way channel
+(`requant-wallet channel`, wallet 0.7.0, [SWAPS.md §3](https://github.com/requant-network/requant/blob/main/SWAPS.md))
+between the user and the operator, before any peer-exit channels (§8).
+
+- **The user's side.** The app keeps its own Requant key file (the standard `requant-wallet` format,
+  encrypted with a passphrase the user chooses; "Save key file" exports it) and runs the bundled
+  `requant-wallet` (pinned in `scripts/pins.json`). The user funds the wallet's address from any
+  wallet, then opens a channel with a deposit. The app proposes it, the service signs the refund (the
+  whole deposit back to the user from the expiry height, about 7 days), and only then is the deposit
+  sent. While the app is connected it keeps a few minutes of full access paid ahead: every payment is
+  a new state paying the service 5 more minutes at the daily price spread over minutes. Closing the
+  channel returns what was not spent.
+- **The service's side.** `POST /api/channel/open` checks the proposal and signs the refund with the
+  channel key; `/api/channel/pay` takes a state once the deposit has `confirmations` and credits the
+  minutes it pays beyond the last one to the account's paid time; `/api/channel/close` closes with the
+  last state now. The payment thread closes channels `closeMarginBlocks` before their expiry and those
+  fully paid. A device stays on the full listener only while paid time lasts (node reports list the
+  devices on it).
+- **Keys and trust.** The channel key on the server can only countersign refunds and states the user
+  signed: it cannot move a user's deposit. What closed channels paid collects at that key's address;
+  sweep it to cold storage (`requant-wallet send channel.key COLD all`). The user risks at most the
+  few minutes paid ahead; if the service never closes, the user takes the deposit back at the expiry
+  ("Take the deposit back").
+- **Settings:**
+
+  ```json
+  "payments": {
+    "channels": {
+      "enabled": true,
+      "wallet": "/usr/local/bin/requant-wallet",
+      "key": "/etc/magnetgate-public/channel.key",
+      "publicApi": "http://<node-ip>:19380",
+      "minDepositAtoms": 100000000,
+      "minBlocks": 1440,
+      "maxBlocks": 20160,
+      "closeMarginBlocks": 120
+    }
+  }
+  ```
+
+  `publicApi` is the Requant API the apps use for their wallet; `/api/info` and `/api/payment` carry
+  `channels` (the service's channel key, its address, the price per minute and these bounds) only when
+  channels are on.
+- **Checks.** `web/test_channels.py`; `web/e2e_channels.py` (service side) and `web/e2e_app.py` (the
+  app's module against the service over HTTP) run the real `requantd` and `requant-wallet` on regtest.
+
 ## 5. Phase 2: peer exits earn RQT
 
 - **Metering.** Peer traffic already passes through the operator's authenticated relay, which counts
