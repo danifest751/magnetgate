@@ -5,10 +5,20 @@ import org.json.JSONObject
 /** One price line: [days] of full access for [atoms] (10^8 per RQT), [off] percent discount. */
 data class PriceStep(val days: Int, val atoms: Long, val off: Int)
 
+/** The service's terms for payment channels (PAYMENTS.md §4.2). */
+data class ChannelTerms(
+  val api: String, val serverPubkey: String, val payTo: String, val minDeposit: Long, val minBlocks: Int,
+  val maxBlocks: Int, val closeMargin: Int, val pricePerMinute: Long,
+)
+
+/** The service's view of the account's latest channel. */
+data class ChannelState(val status: String, val deposit: Long, val paid: Long)
+
 /** What the access service says about the account's payments (POST /api/payment). */
 data class PaymentInfo(
   val network: String, val address: String, val full: Boolean, val paidUntil: Long, val expires: Long,
   val balance: Long, val price: Long, val discounts: List<Pair<Int, Int>>, val confirmations: Int,
+  val channels: ChannelTerms? = null, val channel: ChannelState? = null,
 ) {
   fun cost(days: Int): PriceStep {
     val off = discounts.filter { days >= it.first }.maxOfOrNull { it.second } ?: 0
@@ -39,7 +49,24 @@ object Payments {
     }
     val confirmations = json.getInt("confirmations").also { require(it in 1..1000) }
     return PaymentInfo(network, address, tier == "full", atoms("paidUntil"), atoms("expires"), atoms("balanceAtoms"),
-      price, discounts, confirmations)
+      price, discounts, confirmations, json.optJSONObject("channels")?.let(::terms), json.optJSONObject("channel")?.let(::state))
+  }
+
+  private fun terms(c: JSONObject): ChannelTerms {
+    val api = c.getString("api").trimEnd('/').also { require(Regex("https?://[A-Za-z0-9.:\\[\\]-]{1,100}").matches(it)) }
+    val pubkey = c.getString("serverPubkey").also { require(Regex("[a-f0-9]{64}").matches(it)) }
+    val payTo = c.getString("payTo").also { require(ADDRESS.matches(it)) }
+    return ChannelTerms(api, pubkey, payTo, c.getLong("minDepositAtoms").also { require(it > 0) }, c.getInt("minBlocks"),
+      c.getInt("maxBlocks"), c.getInt("closeMarginBlocks"), c.getLong("priceAtomsPerMinute").also { require(it > 0) })
+  }
+
+  private fun state(c: JSONObject) = ChannelState(c.getString("status").also { require(it.length <= 20) },
+    c.getLong("depositAtoms"), c.getLong("paidAtoms"))
+
+  /** RQT typed by the user to atoms, or null (at most 8 decimals). */
+  fun parseRqt(text: String): Long? {
+    val m = Regex("\\s*(\\d{1,8})(?:[.,](\\d{1,8}))?\\s*").matchEntire(text) ?: return null
+    return m.groupValues[1].toLong() * 100_000_000 + m.groupValues[2].padEnd(8, '0').toLong()
   }
 
   /** RQT from atoms, without trailing zeros. */

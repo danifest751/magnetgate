@@ -88,5 +88,88 @@ private fun PaymentBlock() {
     }
     if (current.balance > 0) Text(ui.text(R.string.payment_balance, Payments.formatRqt(current.balance)), style = MaterialTheme.typography.bodySmall)
     Text(ui.text(R.string.payment_note, current.confirmations, current.confirmations), style = MaterialTheme.typography.bodySmall)
+    if (current.channels != null && ChannelWallet.available(context)) PayAsYouGo(current) { scope.launch { load() } }
+  }
+}
+
+/** Pay as you go from the in-app wallet over a payment channel (PAYMENTS.md §4.2). */
+@Composable
+private fun PayAsYouGo(payment: PaymentInfo, reload: () -> Unit) {
+  val context = LocalContext.current
+  val ui = LocalUiStrings.current
+  val scope = rememberCoroutineScope()
+  val terms = payment.channels ?: return
+  var exists by remember { mutableStateOf(ChannelWallet.exists(context)) }
+  var status by remember { mutableStateOf<ChannelWallet.Status?>(null) }
+  var pass by remember { mutableStateOf("") }
+  var deposit by remember { mutableStateOf("1") }
+  var busy by remember { mutableStateOf(false) }
+  var message by remember { mutableStateOf("") }
+  LaunchedEffect(exists, payment) {
+    if (exists) status = withContext(Dispatchers.IO) { runCatching { ChannelWallet.status(context, payment) }.getOrNull() }
+  }
+  fun act(done: Int?, work: () -> Unit) {
+    scope.launch {
+      busy = true; message = ui.text(R.string.wallet_working)
+      runCatching { withContext(Dispatchers.IO) { work() } }
+        .onSuccess { message = done?.let { ui.text(it) } ?: ""; exists = ChannelWallet.exists(context); reload() }
+        .onFailure { message = it.message?.take(240) ?: ui.text(R.string.public_failed) }
+      busy = false
+    }
+  }
+  val export = androidx.activity.compose.rememberLauncherForActivityResult(
+    androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+    if (uri != null) act(R.string.wallet_exported) { ChannelWallet.exportKey(context, uri) }
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+    HorizontalDivider()
+    Text(ui.text(R.string.wallet_title), style = MaterialTheme.typography.titleMedium)
+    Text(ui.text(R.string.wallet_hint), style = MaterialTheme.typography.bodySmall)
+    if (!exists) {
+      OutlinedTextField(pass, { if (it.length <= 200) pass = it }, label = { Text(ui.text(R.string.wallet_pass_label)) }, singleLine = true,
+        visualTransformation = PasswordVisualTransformation(), enabled = !busy, modifier = Modifier.fillMaxWidth())
+      OutlinedButton(enabled = !busy, onClick = { act(null) { ChannelWallet.create(context, pass, payment); pass = "" } }) {
+        Text(ui.text(R.string.wallet_create))
+      }
+    } else {
+      val current = status
+      if (current != null) {
+        SelectionContainer { Text(current.address, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+        val balance = current.balance?.let { ui.text(R.string.wallet_balance, Payments.formatRqt(it)) } ?: ui.text(R.string.wallet_balance_unknown)
+        Text(balance + " · " + ui.text(R.string.wallet_price, Payments.formatRqt(terms.pricePerMinute), Payments.formatRqt(terms.minDeposit)),
+          style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          OutlinedButton(onClick = {
+            context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("RQT", current.address))
+          }) { Text(ui.text(R.string.payment_copy)) }
+          OutlinedButton(enabled = !busy, onClick = { export.launch("magnetgate-requant-key.txt") }) { Text(ui.text(R.string.wallet_export)) }
+        }
+      }
+      val ch = payment.channel
+      val live = ch != null && ch.status in listOf("accepted", "open")
+      val text = when {
+        ch == null || ch.status in listOf("dropped", "expired") -> ui.text(R.string.wallet_none)
+        ch.status == "closed" -> ui.text(R.string.wallet_closed, Payments.formatRqt(ch.paid))
+        ch.status == "abandoned" -> ui.text(R.string.wallet_unclosed)
+        ch.status == "accepted" && ch.paid == 0L -> ui.text(R.string.wallet_waiting, Payments.formatRqt(ch.deposit), payment.confirmations)
+        else -> ui.text(R.string.wallet_live, Payments.formatRqt(ch.deposit), Payments.formatRqt(ch.paid),
+          (ch.deposit - ChannelWallet.FEE - ch.paid) / terms.pricePerMinute)
+      }
+      Text(text, style = MaterialTheme.typography.bodySmall)
+      if (live) {
+        OutlinedButton(enabled = !busy, onClick = { act(R.string.wallet_closing) { ChannelWallet.close(context) } }) { Text(ui.text(R.string.wallet_close)) }
+      } else {
+        if (ch?.status == "abandoned")
+          OutlinedButton(enabled = !busy, onClick = { act(R.string.wallet_refunded) { ChannelWallet.refund(context, payment) } }) { Text(ui.text(R.string.wallet_refund)) }
+        OutlinedTextField(deposit, { if (it.length <= 20) deposit = it }, label = { Text(ui.text(R.string.wallet_deposit_label)) }, singleLine = true,
+          enabled = !busy, modifier = Modifier.fillMaxWidth())
+        Button(enabled = !busy, onClick = {
+          val atoms = Payments.parseRqt(deposit)
+          if (atoms == null) message = ui.text(R.string.wallet_bad_amount)
+          else act(R.string.wallet_opened) { ChannelWallet.open(context, payment, Settings.publicCode(context), atoms) }
+        }) { Text(ui.text(R.string.wallet_open)) }
+      }
+    }
+    if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall)
   }
 }
