@@ -173,5 +173,98 @@ private fun PayAsYouGo(payment: PaymentInfo, reload: () -> Unit) {
       }
     }
     if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall)
+    if (exists && payment.swaps != null) BuyRqt(payment)
+  }
+}
+
+/** Buying RQT from the service's maker over Lightning or on-chain Bitcoin (atomic swaps). */
+@Composable
+private fun BuyRqt(payment: PaymentInfo) {
+  val context = LocalContext.current
+  val ui = LocalUiStrings.current
+  val scope = rememberCoroutineScope()
+  val terms = payment.swaps ?: return
+  var amount by remember { mutableStateOf("1") }
+  var method by remember { mutableStateOf(if (terms.lightning && "lightning" in terms.methods) "lightning" else "bitcoin") }
+  var list by remember { mutableStateOf(ChannelWallet.swaps(context)) }
+  var busy by remember { mutableStateOf(false) }
+  var message by remember { mutableStateOf("") }
+  // purchases move on by themselves while the panel is open
+  LaunchedEffect(payment) {
+    while (true) {
+      list = withContext(Dispatchers.IO) { runCatching { ChannelWallet.advance(context, payment) }.getOrDefault(list) }
+      kotlinx.coroutines.delay(10_000)
+    }
+  }
+  val stateText = { s: String ->
+    ui.text(when (s) {
+      "waiting", "waiting_ln" -> R.string.swap_state_waiting
+      "waiting_btc" -> R.string.swap_state_waiting_btc
+      "rqt_locked" -> R.string.swap_state_locked
+      "claimed", "done" -> R.string.swap_state_done
+      "expired" -> R.string.swap_state_expired
+      "underpaid", "too_late" -> R.string.swap_state_refund
+      "refunded" -> R.string.swap_state_refunded
+      else -> R.string.swap_state_failed
+    })
+  }
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+    HorizontalDivider()
+    Text(ui.text(R.string.swap_title), style = MaterialTheme.typography.titleMedium)
+    Text(ui.text(R.string.swap_price, terms.satsPerRqt, Payments.formatRqt(terms.minAtoms), Payments.formatRqt(terms.maxAtoms)),
+      style = MaterialTheme.typography.bodySmall)
+    OutlinedTextField(amount, { if (it.length <= 20) amount = it }, label = { Text(ui.text(R.string.swap_amount)) }, singleLine = true,
+      enabled = !busy, modifier = Modifier.fillMaxWidth())
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      if (terms.lightning && "lightning" in terms.methods)
+        FilterChip(selected = method == "lightning", onClick = { method = "lightning" }, label = { Text(ui.text(R.string.swap_lightning)) })
+      if ("bitcoin" in terms.methods)
+        FilterChip(selected = method == "bitcoin", onClick = { method = "bitcoin" }, label = { Text(ui.text(R.string.swap_bitcoin)) })
+    }
+    Button(enabled = !busy, onClick = {
+      val atoms = Payments.parseRqt(amount)
+      if (atoms == null) { message = ui.text(R.string.wallet_bad_amount); return@Button }
+      scope.launch {
+        busy = true; message = ui.text(R.string.wallet_working)
+        runCatching { withContext(Dispatchers.IO) { ChannelWallet.buy(context, payment, method, atoms) } }
+          .onSuccess { list = ChannelWallet.swaps(context); message = ui.text(R.string.swap_started) }
+          .onFailure { android.util.Log.w("MgWallet", "buy failed", it); message = it.message?.take(240) ?: ui.text(R.string.public_failed) }
+        busy = false
+      }
+    }) { Text(ui.text(R.string.swap_buy)) }
+    for (s in list.reversed().take(5)) {
+      Text(Payments.formatRqt(s.rqtAtoms) + " RQT · " + stateText(s.state), style = MaterialTheme.typography.bodyMedium)
+      if (s.state in listOf("waiting", "waiting_ln", "waiting_btc")) {
+        val target = s.invoice ?: s.address ?: ""
+        Text(ui.text(if (s.invoice != null) R.string.swap_pay_ln else R.string.swap_pay_btc, s.sats), style = MaterialTheme.typography.bodySmall)
+        SelectionContainer { Text(target, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall) }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          OutlinedButton(onClick = {
+            context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("pay", target))
+          }) { Text(ui.text(R.string.payment_copy)) }
+          if (s.invoice != null) OutlinedButton(onClick = {
+            runCatching {
+              context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("lightning:" + s.invoice))
+                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.onFailure { message = ui.text(R.string.swap_no_wallet) }
+          }) { Text(ui.text(R.string.swap_open_wallet)) }
+        }
+      }
+      if (s.method == "bitcoin" && s.state in listOf("underpaid", "too_late", "expired")) {
+        var to by remember(s.file) { mutableStateOf("") }
+        OutlinedTextField(to, { if (it.length <= 90) to = it.trim() }, label = { Text(ui.text(R.string.swap_refund_to)) }, singleLine = true,
+          modifier = Modifier.fillMaxWidth())
+        OutlinedButton(enabled = !busy, onClick = {
+          scope.launch {
+            busy = true
+            runCatching { withContext(Dispatchers.IO) { ChannelWallet.refundSwap(context, payment, s.file, to) } }
+              .onSuccess { list = ChannelWallet.swaps(context); message = ui.text(R.string.wallet_refunded) }
+              .onFailure { message = it.message?.take(240) ?: ui.text(R.string.public_failed) }
+            busy = false
+          }
+        }) { Text(ui.text(R.string.swap_refund)) }
+      }
+    }
+    if (message.isNotBlank()) Text(message, style = MaterialTheme.typography.bodySmall)
   }
 }

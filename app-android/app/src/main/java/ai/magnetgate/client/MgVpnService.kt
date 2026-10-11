@@ -647,6 +647,7 @@ class MgVpnService : VpnService() {
       if (System.nanoTime() - paidAt >= 30_000_000_000L) {
         paidAt = System.nanoTime()
         runCatching { ChannelWallet.payAhead(this) }.onFailure { Log.w(TAG, "channel payment: ${it.message}") }
+        runCatching { ChannelWallet.advanceSwaps(this) }.onFailure { Log.w(TAG, "swap: ${it.message}") }
       }
       val interval = if (Health.lastCheck?.ok == false) CHECK_RETRY_INTERVAL_MS else 15_000L
       if (checkRequested || System.nanoTime() - checkedAt >= interval * 1_000_000) {

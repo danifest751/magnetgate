@@ -30,8 +30,11 @@ object ChannelWallet {
   fun available(context: Context) = binary(context).canExecute()
   fun exists(context: Context) = file(context, "key.txt").isFile && Settings.walletPass(context).isNotBlank()
 
-  private fun run(context: Context, terms: ChannelTerms, network: String, args: List<String>, pass: String? = null): String {
-    val command = listOf(binary(context).path) + args + listOf("--network", network, "--api", terms.api, "--yes")
+  /** The Requant API the wallet uses: the channels' or the swaps'. */
+  private fun api(payment: PaymentInfo) = payment.channels?.api ?: payment.swaps?.requantApi ?: error("no Requant API")
+
+  private fun run(context: Context, api: String, network: String, args: List<String>, pass: String? = null): String {
+    val command = listOf(binary(context).path) + args + listOf("--network", network, "--api", api, "--yes")
     val builder = ProcessBuilder(command).directory(dir(context))
     builder.environment()["REQUANT_WALLET_PASSPHRASE"] = pass ?: Settings.walletPass(context)
     builder.environment()["HOME"] = dir(context).path
@@ -46,21 +49,20 @@ object ChannelWallet {
   }
 
   fun create(context: Context, passphrase: String, payment: PaymentInfo) {
-    val terms = payment.channels ?: error(uiResources(context).getString(R.string.wallet_no_channels))
     require(passphrase.length >= 8) { uiResources(context).getString(R.string.wallet_short_passphrase) }
     check(!exists(context)) { uiResources(context).getString(R.string.wallet_exists) }
     file(context, "key.txt").delete()
-    run(context, terms, payment.network, listOf("keygen", "key.txt"), passphrase)
+    run(context, api(payment), payment.network, listOf("keygen", "key.txt"), passphrase)
     check(Settings.saveWalletPass(context, passphrase)) { uiResources(context).getString(R.string.public_storage_unavailable) }
   }
 
   fun status(context: Context, payment: PaymentInfo): Status? {
-    val terms = payment.channels ?: return null
+    if (payment.channels == null && payment.swaps == null) return null
     if (!exists(context)) return null
     val field = { out: String, name: String -> out.lines().firstOrNull { it.startsWith(name) }?.trim()?.split(Regex("\\s+"))?.lastOrNull() ?: "" }
-    val address = field(run(context, terms, payment.network, listOf("address", "key.txt")), "address")
+    val address = field(run(context, api(payment), payment.network, listOf("address", "key.txt")), "address")
     val balance = runCatching {
-      val line = run(context, terms, payment.network, listOf("balance", "key.txt")).lines().first { it.startsWith("confirmed") }
+      val line = run(context, api(payment), payment.network, listOf("balance", "key.txt")).lines().first { it.startsWith("confirmed") }
       java.math.BigDecimal(line.trim().split(Regex("\\s+"))[1]).movePointRight(8).toLong()
     }.getOrNull()
     return Status(address, balance)
@@ -91,7 +93,7 @@ object ChannelWallet {
     // channel), rather than locking other coins in a second one
     val pending = file(context, "proposed.json")
     if (!pending.isFile)
-      run(context, terms, payment.network, listOf("channel", "open", "key.txt", terms.serverPubkey, terms.payTo,
+      run(context, terms.api, payment.network, listOf("channel", "open", "key.txt", terms.serverPubkey, terms.payTo,
         Payments.formatRqt(deposit), expiry.toString(), "--out", "proposed.json"))
     val proposed = JSONObject(pending.readText())
     // the service answers with its signature of the refund and where it goes (answers over some mobile
@@ -105,7 +107,7 @@ object ChannelWallet {
     val accepted = JSONObject(proposed.toString()).put("refund", mine.substring(0, at) + sig2 + mine.substring(at + 128)).put("accepted", true)
     file(context, "channel.json").writeText(accepted.toString(2))
     file(context, "proposed.json").delete()
-    run(context, terms, payment.network, listOf("channel", "fund", "key.txt", "channel.json"))
+    run(context, terms.api, payment.network, listOf("channel", "fund", "key.txt", "channel.json"))
   }
 
   /** One step of pay-as-you-go: keep a few minutes of full access paid ahead. Returns whether it sent one. */
@@ -124,7 +126,7 @@ object ChannelWallet {
     val most = ch.getLong("deposit") - FEE
     if (paid >= most) return false
     val total = minOf(most, paid + STEP_MINUTES * terms.pricePerMinute)
-    run(context, terms, payment.network, listOf("channel", "pay", "key.txt", "channel.json", Payments.formatRqt(total), "--out", "state.hex"))
+    run(context, terms.api, payment.network, listOf("channel", "pay", "key.txt", "channel.json", Payments.formatRqt(total), "--out", "state.hex"))
     PublicAccess.post(context, "channel/pay", JSONObject().put("code", code).put("state", state.readText().trim()), 60000)
     return true
   }
@@ -138,8 +140,102 @@ object ChannelWallet {
 
   fun close(context: Context) { PublicAccess.post(context, "channel/close", JSONObject().put("code", Settings.publicCode(context)), 60000) }
 
+  // ---- buying RQT from the service's maker (atomic swaps over Lightning or on-chain Bitcoin) ----------
+  data class Swap(val file: String, val method: String, val rqtAtoms: Long, val sats: Long, val state: String,
+                  val invoice: String?, val address: String?)
+
+  private fun swapIndex(context: Context): org.json.JSONArray =
+    file(context, "swaps.json").takeIf { it.isFile }?.let { org.json.JSONArray(it.readText()) } ?: org.json.JSONArray()
+
+  private fun saveSwaps(context: Context, list: org.json.JSONArray) {
+    val keep = org.json.JSONArray()
+    for (k in maxOf(0, list.length() - 20) until list.length()) keep.put(list.get(k))
+    file(context, "swaps.json").writeText(keep.toString(2))
+  }
+
+  private fun swapOf(o: JSONObject) = Swap(o.getString("file"), o.getString("method"), o.getLong("rqtAtoms"), o.getLong("sats"),
+    o.getString("state"), o.optString("invoice").ifBlank { null }, o.optString("address").ifBlank { null })
+
+  fun swaps(context: Context): List<Swap> = swapIndex(context).let { a -> (0 until a.length()).map { swapOf(a.getJSONObject(it)) } }
+
+  private val FINAL = setOf("done", "claimed", "expired", "failed", "rqt_refunded", "refunded")
+
+  /** Start a purchase; the swap file (it holds the secret) stays in the wallet directory. */
+  fun buy(context: Context, payment: PaymentInfo, method: String, atoms: Long): Swap {
+    val strings = uiResources(context)
+    val s = payment.swaps ?: error(strings.getString(R.string.swap_unavailable))
+    check(method in s.methods && (method != "lightning" || s.lightning)) { strings.getString(R.string.swap_unavailable) }
+    require(atoms in s.minAtoms..s.maxAtoms) { strings.getString(R.string.swap_bad_amount, Payments.formatRqt(s.minAtoms), Payments.formatRqt(s.maxAtoms)) }
+    File(dir(context), "swaps").mkdirs()
+    val name = "swaps/" + System.currentTimeMillis() + ".json"
+    val out = run(context, s.requantApi, payment.network, listOf("swap", if (method == "lightning") "buy-ln" else "buy", s.maker,
+      Payments.formatRqt(atoms), "key.txt", "--out", name))
+    val line = { key: String -> out.lines().firstOrNull { it.startsWith(key) }?.removePrefix(key)?.trim() }
+    val record = JSONObject(file(context, name).readText())
+    val entry = JSONObject().put("file", name).put("method", method).put("rqtAtoms", atoms).put("sats", record.getLong("btc_sats"))
+      .put("state", "waiting").put("created", System.currentTimeMillis())
+    if (method == "lightning") entry.put("invoice", line("invoice")) else entry.put("address", line("to"))
+    saveSwaps(context, swapIndex(context).put(entry))
+    return swapOf(entry)
+  }
+
+  /** Follow the open purchases: claim the RQT as soon as the maker has locked them. */
+  fun advance(context: Context, payment: PaymentInfo): List<Swap> {
+    val s = payment.swaps ?: return swaps(context)
+    val list = swapIndex(context)
+    for (k in 0 until list.length()) {
+      val e = list.getJSONObject(k)
+      if (e.getString("state") in FINAL) continue
+      runCatching {
+        val st = JSONObject(run(context, s.requantApi, payment.network, listOf("swap", "status", e.getString("file"))))
+        val state = st.getString("state")
+        e.put("state", if (state == "btc_claimed") "claimed" else state)
+        if (state == "rqt_locked") {
+          run(context, s.requantApi, payment.network, listOf("swap", "claim", e.getString("file"), "key.txt"))
+          e.put("state", "claimed")
+        }
+      }
+    }
+    saveSwaps(context, list)
+    return swaps(context)
+  }
+
+  fun hasOpenSwaps(context: Context) = swaps(context).any { it.state !in FINAL }
+
+  /** The on-chain refund of a purchase the maker did not complete, sent through the Esplora API. */
+  fun refundSwap(context: Context, payment: PaymentInfo, file: String, btcAddress: String): String {
+    val s = payment.swaps ?: error(uiResources(context).getString(R.string.swap_unavailable))
+    require(Regex("[a-zA-Z0-9]{14,90}").matches(btcAddress)) { uiResources(context).getString(R.string.swap_bad_address) }
+    val hex = run(context, s.requantApi, payment.network, listOf("swap", "refund", file, btcAddress)).trim()
+    val connection = java.net.URL(s.bitcoinApi + "/tx").openConnection() as javax.net.ssl.HttpsURLConnection
+    connection.requestMethod = "POST"
+    connection.doOutput = true
+    connection.setRequestProperty("Connection", "close")
+    connection.connectTimeout = 15000
+    connection.readTimeout = 30000
+    val body = hex.toByteArray()
+    connection.setFixedLengthStreamingMode(body.size)
+    try {
+      connection.outputStream.use { it.write(body) }
+      val ok = connection.responseCode == 200
+      val text = (if (ok) connection.inputStream else connection.errorStream)?.bufferedReader()?.readText().orEmpty()
+      check(ok) { text.take(200) }
+      val list = swapIndex(context)
+      for (k in 0 until list.length()) list.getJSONObject(k).let { if (it.getString("file") == file) it.put("state", "refunded") }
+      saveSwaps(context, list)
+      return text.trim()
+    } finally { connection.disconnect() }
+  }
+
+  /** From the VPN service and the panel: move purchases on; quiet without any. */
+  fun advanceSwaps(context: Context) {
+    if (!PublicAccess.enabled(context) || !available(context) || !exists(context) || !hasOpenSwaps(context)) return
+    val payment = PublicAccess.payment(context) ?: return
+    advance(context, payment)
+  }
+
   fun refund(context: Context, payment: PaymentInfo) {
     val terms = payment.channels ?: error(uiResources(context).getString(R.string.wallet_no_channels))
-    run(context, terms, payment.network, listOf("channel", "refund", "channel.json"))
+    run(context, terms.api, payment.network, listOf("channel", "refund", "channel.json"))
   }
 }

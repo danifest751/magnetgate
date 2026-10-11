@@ -13,6 +13,12 @@ data class ChannelTerms(
   val height: Int? = null,
 )
 
+/** Where the app buys RQT: the service's maker, its price and limits (atoms), and the APIs it needs. */
+data class SwapTerms(
+  val maker: String, val methods: List<String>, val bitcoinApi: String, val requantApi: String, val satsPerRqt: Long,
+  val minAtoms: Long, val maxAtoms: Long, val lightning: Boolean,
+)
+
 /** The service's view of the account's latest channel. */
 data class ChannelState(val status: String, val deposit: Long, val paid: Long)
 
@@ -20,7 +26,7 @@ data class ChannelState(val status: String, val deposit: Long, val paid: Long)
 data class PaymentInfo(
   val network: String, val address: String, val full: Boolean, val paidUntil: Long, val expires: Long,
   val balance: Long, val price: Long, val discounts: List<Pair<Int, Int>>, val confirmations: Int,
-  val channels: ChannelTerms? = null, val channel: ChannelState? = null,
+  val channels: ChannelTerms? = null, val channel: ChannelState? = null, val swaps: SwapTerms? = null,
 ) {
   fun cost(days: Int): PriceStep {
     val off = discounts.filter { days >= it.first }.maxOfOrNull { it.second } ?: 0
@@ -51,7 +57,8 @@ object Payments {
     }
     val confirmations = json.getInt("confirmations").also { require(it in 1..1000) }
     return PaymentInfo(network, address, tier == "full", atoms("paidUntil"), atoms("expires"), atoms("balanceAtoms"),
-      price, discounts, confirmations, json.optJSONObject("channels")?.let(::terms), json.optJSONObject("channel")?.let(::state))
+      price, discounts, confirmations, json.optJSONObject("channels")?.let(::terms), json.optJSONObject("channel")?.let(::state),
+      json.optJSONObject("swaps")?.let { runCatching { swapTerms(it) }.getOrNull() })
   }
 
   private fun terms(c: JSONObject): ChannelTerms {
@@ -61,6 +68,16 @@ object Payments {
     return ChannelTerms(api, pubkey, payTo, c.getLong("minDepositAtoms").also { require(it > 0) }, c.getInt("minBlocks"),
       c.getInt("maxBlocks"), c.getInt("closeMarginBlocks"), c.getLong("priceAtomsPerMinute").also { require(it > 0) },
       if (c.has("height") && !c.isNull("height")) c.getInt("height").also { require(it >= 0) } else null)
+  }
+
+  private fun swapTerms(c: JSONObject): SwapTerms {
+    val maker = c.getString("maker").also { require(Regex("[A-Za-z0-9.-]{1,80}:[0-9]{1,5}").matches(it)) }
+    val list = c.getJSONArray("methods")
+    val methods = (0 until list.length()).map { list.getString(it) }.filter { it in listOf("lightning", "bitcoin") }
+    val bitcoinApi = c.getString("bitcoinApi").also { require(it.startsWith("https://") && it.length < 120) }
+    val requantApi = c.getString("requantApi").trimEnd('/').also { require(Regex("https?://[A-Za-z0-9.:\\[\\]-]{1,100}").matches(it)) }
+    return SwapTerms(maker, methods, bitcoinApi, requantApi, c.getLong("satsPerRqt").also { require(it > 0) },
+      c.getLong("minAtoms"), c.getLong("maxAtoms"), c.optBoolean("lightning"))
   }
 
   private fun state(c: JSONObject) = ChannelState(c.getString("status").also { require(it.length <= 20) },
