@@ -110,7 +110,12 @@ def run(config):
                     _, epoch, traffic = samples[0]
                 else:
                     epoch, traffic = agent_epoch, combine(memory, samples)
-                report = central('node-report', {'online': online, 'traffic': traffic, 'epoch': epoch})
+                body = {'online': online, 'traffic': traffic, 'epoch': epoch}
+                full = next((item for item in listeners if item['name'] == 'full'), None)
+                if full and not single:
+                    # devices on the full listener: the service drops those whose paid time ended
+                    body['fullOnline'] = sorted(stats('online', None, full) or {})
+                report = central('node-report', body)
                 if report.get('kick'):
                     print('central policy requested disconnection', flush=True)
                     for listener in listeners:

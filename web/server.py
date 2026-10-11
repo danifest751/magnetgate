@@ -186,12 +186,18 @@ class AccessStore:
             if any(type(v) is not int or v < 0 or v > 1000 for v in online.values()):
                 raise AccessError(400, 'invalid online')
             self.db.execute('INSERT INTO nodes VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET seen=excluded.seen,online=excluded.online', (node, now, sum(online.values())))
+            full = data.get('fullOnline') or []
+            if not isinstance(full, list) or len(full) > 200 or any(not isinstance(d, str) for d in full):
+                raise AccessError(400, 'invalid fullOnline')
             kick = []
             for device, connections in online.items():
                 row = self.db.execute('SELECT account FROM devices WHERE id=?', (device,)).fetchone()
                 # Two transport sessions may overlap during a device reconnect. Both are billed
                 # to the same device/account; registration, device and node capacity limits remain.
-                if not row or connections > 2 or not self.allowed(row[0], now):
+                # A device on the full listener must still have paid time (minutes bought over a
+                # channel run out between reconnects).
+                listener = 'full' if device in full else None
+                if not row or connections > 2 or not self.allowed(row[0], now, listener):
                     kick.append(device)
             return {'kick': kick}
         return self.transaction(commit)

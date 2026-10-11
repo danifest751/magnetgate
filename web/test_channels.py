@@ -1,6 +1,7 @@
 import json
 import os
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -125,6 +126,21 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(self.wallet.closed, ['bb'])
         with self.assertRaises(AccessError):
             self.store.channel_pay(self.code, 'bb', now)
+
+    def test_a_device_on_the_full_listener_is_dropped_when_paid_time_ends(self):
+        self.store.channel_open(self.code, channel_file(), 1_000_000)
+        self.wallet.paid = {'aa': 2_000}
+        now = time.time()
+        self.store.channel_pay(self.code, 'aa', now)
+        profile = self.store.profile(self.code, 'd' * 64)
+        device = self.store.db.execute('SELECT id FROM devices').fetchone()[0]
+        self.assertEqual(profile['tier'], 'full')
+        report = {'traffic': {}, 'online': {device: 1}, 'epoch': 'test', 'fullOnline': [device]}
+        self.assertEqual(self.store.report('fi', report)['kick'], [])
+        # two minutes later the paid time is over: off the full listener, still fine on the free one
+        with mock.patch.object(time, 'time', return_value=now + 121):
+            self.assertEqual(self.store.report('fi', report)['kick'], [device])
+            self.assertEqual(self.store.report('fi', report | {'fullOnline': []})['kick'], [])
 
     def test_unconfirmed_expiring_or_forged_states_buy_nothing(self):
         now = 1_000_000
