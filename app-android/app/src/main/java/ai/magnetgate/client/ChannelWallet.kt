@@ -84,10 +84,14 @@ object ChannelWallet {
     val height = terms.height ?: error(strings.getString(R.string.public_unavailable))
     val expiry = height + minOf(terms.maxBlocks, maxOf(terms.minBlocks + terms.closeMargin + 60, 10080))
     listOf("channel.json", "state.hex").forEach { file(context, it).delete() }
-    run(context, terms, payment.network, listOf("channel", "open", "key.txt", terms.serverPubkey, terms.payTo,
-      Payments.formatRqt(deposit), expiry.toString(), "--out", "proposed.json"))
-    val proposed = JSONObject(file(context, "proposed.json").readText())
-    val accepted = PublicAccess.post(context, "channel/open", JSONObject().put("code", code).put("channel", proposed)).getJSONObject("channel")
+    // a proposal whose answer was lost goes again as it is (the service answers with the accepted
+    // channel), rather than locking other coins in a second one
+    val pending = file(context, "proposed.json")
+    if (!pending.isFile)
+      run(context, terms, payment.network, listOf("channel", "open", "key.txt", terms.serverPubkey, terms.payTo,
+        Payments.formatRqt(deposit), expiry.toString(), "--out", "proposed.json"))
+    val proposed = JSONObject(pending.readText())
+    val accepted = PublicAccess.post(context, "channel/open", JSONObject().put("code", code).put("channel", proposed), 60000).getJSONObject("channel")
     // the service's copy must be this channel with the refund signed
     check(accepted.getString("funding_txid") == proposed.getString("funding_txid") && accepted.optBoolean("accepted") &&
       accepted.getString("refund") != proposed.getString("refund")) { strings.getString(R.string.wallet_bad_accept) }
@@ -106,14 +110,14 @@ object ChannelWallet {
     val state = file(context, "state.hex")
     // the service has not taken the last state yet (the deposit still confirming): send it again
     if (paid > (payment.channel?.paid ?: 0) && state.isFile) {
-      PublicAccess.post(context, "channel/pay", JSONObject().put("code", code).put("state", state.readText().trim()))
+      PublicAccess.post(context, "channel/pay", JSONObject().put("code", code).put("state", state.readText().trim()), 60000)
       return true
     }
     val most = ch.getLong("deposit") - FEE
     if (paid >= most) return false
     val total = minOf(most, paid + STEP_MINUTES * terms.pricePerMinute)
     run(context, terms, payment.network, listOf("channel", "pay", "key.txt", "channel.json", Payments.formatRqt(total), "--out", "state.hex"))
-    PublicAccess.post(context, "channel/pay", JSONObject().put("code", code).put("state", state.readText().trim()))
+    PublicAccess.post(context, "channel/pay", JSONObject().put("code", code).put("state", state.readText().trim()), 60000)
     return true
   }
 
@@ -124,7 +128,7 @@ object ChannelWallet {
     return keepPaid(context, payment, Settings.publicCode(context))
   }
 
-  fun close(context: Context) { PublicAccess.post(context, "channel/close", JSONObject().put("code", Settings.publicCode(context))) }
+  fun close(context: Context) { PublicAccess.post(context, "channel/close", JSONObject().put("code", Settings.publicCode(context)), 60000) }
 
   fun refund(context: Context, payment: PaymentInfo) {
     val terms = payment.channels ?: error(uiResources(context).getString(R.string.wallet_no_channels))

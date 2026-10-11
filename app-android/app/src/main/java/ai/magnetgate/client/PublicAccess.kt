@@ -84,12 +84,12 @@ object PublicAccess {
     return result
   }
   /** POST a JSON body to the access service; a bounded JSON answer, or [ServiceError]. */
-  fun post(context: Context, path: String, body: JSONObject): JSONObject {
+  fun post(context: Context, path: String, body: JSONObject, timeoutMs: Int = 15000): JSONObject {
     val strings = uiResources(context)
     val connection = URL("https://magnet.norma.so/api/$path").openConnection() as HttpsURLConnection
     connection.instanceFollowRedirects = false
     connection.connectTimeout = 15000
-    connection.readTimeout = 15000
+    connection.readTimeout = timeoutMs
     connection.requestMethod = "POST"
     connection.doOutput = true
     connection.setRequestProperty("Content-Type", "application/json")

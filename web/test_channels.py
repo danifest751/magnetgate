@@ -106,6 +106,9 @@ class ChannelTests(unittest.TestCase):
         opened = self.store.channel_open(self.code, channel_file(), now)
         self.assertTrue(opened['channel']['accepted'])
         self.assertEqual(opened['status']['status'], 'accepted')
+        # the same proposal again (a lost answer): the channel as accepted, nothing new
+        again = self.store.channel_open(self.code, channel_file(), now)
+        self.assertEqual(again['channel'], opened['channel'])
         # a second channel is refused while this one is funded
         with self.assertRaises(AccessError):
             self.store.channel_open(self.code, channel_file() | {'funding_txid': 'aa' * 32}, now)

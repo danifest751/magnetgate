@@ -284,6 +284,10 @@ class AccessStore:
             active = self.active_channel(account)
         if active:
             funding = active[0].split(':')[0]
+            # the same proposal again (the answer to the first one was lost): the channel as accepted
+            if active[1] == 'accepted' and isinstance(channel.get('funding_txid'), str) and                     active[0] == channel['funding_txid'] + ':' + str(channel.get('vout')):
+                with self.lock:
+                    return {'channel': json.loads(active[2]), 'status': self.channel_view(account)}
             if active[1] == 'open' or channels.confirmations(self.channels, funding) > 0:
                 raise AccessError(409, 'This code already has a channel: close it first.', 'channel_exists')
         try:
@@ -556,6 +560,8 @@ def handler(store, config):
                 else:
                     raise AccessError(404, 'Не найдено')
                 self.reply(200, result)
+                if self.path.startswith('/api/channel/'):
+                    print('%s %.1f s' % (self.path, time.monotonic() - self.request_started), flush=True)
             except AccessError as error:
                 self.metric_reason = error.reason
                 self.reply(error.status, {'error': error.message})

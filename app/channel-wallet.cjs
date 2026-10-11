@@ -85,7 +85,9 @@ class ChannelWallet {
     const height = await this.height(info)
     const expiry = height + Math.min(c.maxBlocks, Math.max(c.minBlocks + c.closeMarginBlocks + 60, 10080))
     for (const name of ['channel.json', 'state.hex']) fs.rmSync(this.file(name), { force: true })
-    await this.run(['channel', 'open', 'key.txt', c.serverPubkey, c.payTo, rqt(depositAtoms), String(expiry), '--out', 'proposed.json'], info)
+    // a proposal whose answer was lost goes again as it is, rather than locking other coins in a second one
+    if (!fs.existsSync(this.file('proposed.json')))
+      await this.run(['channel', 'open', 'key.txt', c.serverPubkey, c.payTo, rqt(depositAtoms), String(expiry), '--out', 'proposed.json'], info)
     const proposed = JSON.parse(fs.readFileSync(this.file('proposed.json'), 'utf8'))
     const accepted = (await this.post('channel/open', { code, channel: proposed })).channel
     // the service's copy must be this channel with the refund signed
