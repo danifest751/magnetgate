@@ -146,8 +146,10 @@ private fun PayAsYouGo(payment: PaymentInfo, reload: () -> Unit) {
         }
       }
       val ch = payment.channel
-      val live = ch != null && ch.status in listOf("accepted", "open")
+      val pending = ChannelWallet.pending(context) && ch?.status == "accepted"
+      val live = ch != null && ch.status in listOf("accepted", "open") && !pending
       val text = when {
+        pending -> ui.text(R.string.wallet_pending)
         ch == null || ch.status in listOf("dropped", "expired") -> ui.text(R.string.wallet_none)
         ch.status == "closed" -> ui.text(R.string.wallet_closed, Payments.formatRqt(ch.paid))
         ch.status == "abandoned" -> ui.text(R.string.wallet_unclosed)

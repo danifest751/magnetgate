@@ -307,4 +307,5 @@
     <string name="wallet_opened">Канал открыт, депозит отправлен.</string>
     <string name="wallet_closing">Канал закрыт.</string>
     <string name="wallet_refunded">Возврат отправлен.</string>
+    <string name="wallet_pending">Открытие прервалось до отправки депозита: нажмите «Открыть канал», чтобы завершить его.</string>
 </resources>

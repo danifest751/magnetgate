@@ -117,6 +117,8 @@ test('the pay-as-you-go block in both languages', () => {
     const live = channelView(payment({ channel: { status: 'open', depositAtoms: 2e8, paidAtoms: 1e7 } }), wallet)
     assert.ok(live.status.includes('0.1'))
     assert.ok(channelView(payment({ channel: { status: 'abandoned', depositAtoms: 2e8, paidAtoms: 0 } }), wallet).refund)
+    const pending = channelView(payment({ channel: { status: 'accepted', depositAtoms: 2e8, paidAtoms: 0 } }), { ...wallet, pending: true })
+    assert.ok(pending.canOpen && !pending.live)
     assert.ok(channelView(payment({ channel: { status: 'closed', depositAtoms: 2e8, paidAtoms: 1e7 } }), wallet).canOpen)
   }
   assert.equal(rqt(123_000_000), '1.23')

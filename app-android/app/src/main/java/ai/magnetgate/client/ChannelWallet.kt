@@ -66,6 +66,9 @@ object ChannelWallet {
     return Status(address, balance)
   }
 
+  /** A proposal is waiting and this app has no accepted channel: opening has to be finished. */
+  fun pending(context: Context) = file(context, "proposed.json").isFile && !file(context, "channel.json").isFile
+
   fun channel(context: Context): JSONObject? = file(context, "channel.json").takeIf { it.isFile }?.let { JSONObject(it.readText()) }
 
   fun exportKey(context: Context, uri: Uri) {
@@ -79,7 +82,7 @@ object ChannelWallet {
     val strings = uiResources(context)
     val terms = payment.channels ?: error(strings.getString(R.string.wallet_no_channels))
     require(deposit >= terms.minDeposit) { strings.getString(R.string.wallet_deposit_small, Payments.formatRqt(terms.minDeposit)) }
-    check(payment.channel?.status !in listOf("accepted", "open")) { strings.getString(R.string.wallet_channel_exists) }
+    check(payment.channel?.status !in listOf("accepted", "open") || pending(context)) { strings.getString(R.string.wallet_channel_exists) }
     // from the service: Android lets the app itself make no plain-HTTP request to the node API
     val height = terms.height ?: error(strings.getString(R.string.public_unavailable))
     val expiry = height + minOf(terms.maxBlocks, maxOf(terms.minBlocks + terms.closeMargin + 60, 10080))

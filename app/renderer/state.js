@@ -144,7 +144,9 @@
       price: t('wallet.price', { amount: formatRqt(c.priceAtomsPerMinute), min: formatRqt(c.minDepositAtoms) }),
       canOpen: true, live: false, refund: false
     }
-    if (!ch || ['closed', 'dropped', 'expired'].includes(ch.status)) {
+    if (wallet.pending && ch?.status === 'accepted') {
+      view.status = t('wallet.pending')
+    } else if (!ch || ['closed', 'dropped', 'expired'].includes(ch.status)) {
       view.status = ch?.status === 'closed' ? t('wallet.closed', { paid: formatRqt(ch.paidAtoms) }) : t('wallet.none')
     } else if (ch.status === 'abandoned') {
       view.status = t('wallet.unclosed')

@@ -309,4 +309,5 @@
     <string name="wallet_opened">Channel opened; the deposit is on its way.</string>
     <string name="wallet_closing">Channel closed.</string>
     <string name="wallet_refunded">Refund sent.</string>
+    <string name="wallet_pending">Opening was interrupted before the deposit was sent: tap Open channel to finish it.</string>
 </resources>

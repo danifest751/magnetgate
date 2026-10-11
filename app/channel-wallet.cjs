@@ -57,6 +57,9 @@ class ChannelWallet {
 
   exportKey(destination) { fs.copyFileSync(this.file('key.txt'), destination) }
 
+  // a proposal is waiting and there is no accepted channel: opening has to be finished
+  pending() { return fs.existsSync(this.file('proposed.json')) && !fs.existsSync(this.file('channel.json')) }
+
   channel() {
     return fs.existsSync(this.file('channel.json')) ? JSON.parse(fs.readFileSync(this.file('channel.json'), 'utf8')) : null
   }
@@ -74,14 +77,14 @@ class ChannelWallet {
     } catch { /* the API may be unreachable; the address is still shown */ }
     const ch = this.channel()
     return { exists: true, address: field('address'), pubkey: field('pubkey'), balanceAtoms: balance,
-      channel: ch && { deposit: ch.deposit, paid: ch.paid, expiry: ch.expiry, accepted: ch.accepted } }
+      channel: ch && { deposit: ch.deposit, paid: ch.paid, expiry: ch.expiry, accepted: ch.accepted }, pending: this.pending() }
   }
 
   // Propose a channel to the service, store what it accepted, then send the deposit.
   async open(info, code, depositAtoms) {
     const c = info.channels
     if (!Number.isSafeInteger(depositAtoms) || depositAtoms < c.minDepositAtoms) throw new Error(I18n.t('wallet.depositTooSmall', { amount: rqt(c.minDepositAtoms) }))
-    if (['accepted', 'open'].includes(info.channel?.status)) throw new Error(I18n.t('wallet.channelExists'))
+    if (['accepted', 'open'].includes(info.channel?.status) && !this.pending()) throw new Error(I18n.t('wallet.channelExists'))
     const height = await this.height(info)
     const expiry = height + Math.min(c.maxBlocks, Math.max(c.minBlocks + c.closeMarginBlocks + 60, 10080))
     for (const name of ['channel.json', 'state.hex']) fs.rmSync(this.file(name), { force: true })
