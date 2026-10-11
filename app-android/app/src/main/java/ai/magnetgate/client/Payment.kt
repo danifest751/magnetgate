@@ -9,6 +9,8 @@ data class PriceStep(val days: Int, val atoms: Long, val off: Int)
 data class ChannelTerms(
   val api: String, val serverPubkey: String, val payTo: String, val minDeposit: Long, val minBlocks: Int,
   val maxBlocks: Int, val closeMargin: Int, val pricePerMinute: Long,
+  /** The chain height the service sees (the app needs no plain-HTTP request of its own). */
+  val height: Int? = null,
 )
 
 /** The service's view of the account's latest channel. */
@@ -57,7 +59,8 @@ object Payments {
     val pubkey = c.getString("serverPubkey").also { require(Regex("[a-f0-9]{64}").matches(it)) }
     val payTo = c.getString("payTo").also { require(ADDRESS.matches(it)) }
     return ChannelTerms(api, pubkey, payTo, c.getLong("minDepositAtoms").also { require(it > 0) }, c.getInt("minBlocks"),
-      c.getInt("maxBlocks"), c.getInt("closeMarginBlocks"), c.getLong("priceAtomsPerMinute").also { require(it > 0) })
+      c.getInt("maxBlocks"), c.getInt("closeMarginBlocks"), c.getLong("priceAtomsPerMinute").also { require(it > 0) },
+      if (c.has("height") && !c.isNull("height")) c.getInt("height").also { require(it >= 0) } else null)
   }
 
   private fun state(c: JSONObject) = ChannelState(c.getString("status").also { require(it.length <= 20) },

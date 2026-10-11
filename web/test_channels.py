@@ -120,6 +120,7 @@ class ChannelTests(unittest.TestCase):
         self.assertEqual(self.store.channel_pay(self.code, 'bb', now)['paidUntil'], now + 1500)
         # the profile gives the full tier; the payment view shows the channel
         self.assertEqual(self.store.payment(self.code, now)['channel']['paidAtoms'], 25_000)
+        self.assertEqual(self.store.payment(self.code, now)['channels']['height'], 2000)
         # the client closes: the last state is countersigned and sent
         closed = self.store.channel_close(self.code, now)
         self.assertEqual(closed['channel']['status'], 'closed')

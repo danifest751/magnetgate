@@ -73,12 +73,6 @@ object ChannelWallet {
       ?: error(uiResources(context).getString(R.string.public_save_failed))
   }
 
-  private fun height(terms: ChannelTerms): Int {
-    val connection = java.net.URL(terms.api + "/api/info").openConnection() as java.net.HttpURLConnection
-    connection.connectTimeout = 15000
-    connection.readTimeout = 15000
-    try { return JSONObject(connection.inputStream.bufferedReader().readText()).getInt("height") } finally { connection.disconnect() }
-  }
 
   /** Propose a channel to the service, store what it accepted, then send the deposit. */
   fun open(context: Context, payment: PaymentInfo, code: String, deposit: Long) {
@@ -86,7 +80,9 @@ object ChannelWallet {
     val terms = payment.channels ?: error(strings.getString(R.string.wallet_no_channels))
     require(deposit >= terms.minDeposit) { strings.getString(R.string.wallet_deposit_small, Payments.formatRqt(terms.minDeposit)) }
     check(payment.channel?.status !in listOf("accepted", "open")) { strings.getString(R.string.wallet_channel_exists) }
-    val expiry = height(terms) + minOf(terms.maxBlocks, maxOf(terms.minBlocks + terms.closeMargin + 60, 10080))
+    // from the service: Android lets the app itself make no plain-HTTP request to the node API
+    val height = terms.height ?: error(strings.getString(R.string.public_unavailable))
+    val expiry = height + minOf(terms.maxBlocks, maxOf(terms.minBlocks + terms.closeMargin + 60, 10080))
     listOf("channel.json", "state.hex").forEach { file(context, it).delete() }
     run(context, terms, payment.network, listOf("channel", "open", "key.txt", terms.serverPubkey, terms.payTo,
       Payments.formatRqt(deposit), expiry.toString(), "--out", "proposed.json"))

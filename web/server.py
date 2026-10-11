@@ -239,12 +239,25 @@ class AccessStore:
             result = {**payments.public(self.payments), 'address': row[0], 'tier': 'full' if paid_until > now else 'free',
                       'paidUntil': paid_until, 'expires': expires, 'balanceAtoms': balance, 'credits': credits}
             if self.channels:
-                result['channels'] = channels.public(self.channels, *self.channel_key)
+                result['channels'] = {**channels.public(self.channels, *self.channel_key), 'height': self.chain_height()}
                 result['channel'] = self.channel_view(account)
             return result
         return self.transaction(commit)
 
     # ---- payment channels -------------------------------------------------------------------------
+
+    def chain_height(self, now=None):
+        """The chain height for clients choosing an expiry (cached for 30 s; None when the node is unreachable).
+        The apps cannot always ask the node API themselves (Android allows no plain HTTP)."""
+        now = time.time() if now is None else now
+        cached = getattr(self, '_height', None)
+        if cached and now - cached[1] < 30:
+            return cached[0]
+        try:
+            self._height = (channels.height(self.channels), now)
+        except Exception:
+            return cached[0] if cached else None
+        return self._height[0]
 
     def need_channels(self):
         if not self.channels:
