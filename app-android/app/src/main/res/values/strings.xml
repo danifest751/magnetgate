@@ -318,6 +318,7 @@
     <string name="swap_refund_to_tron">TRON address for the USDT</string>
     <string name="swap_refund_from">The lock can be taken back from %1$s.</string>
     <string name="swap_state_waiting_usdt">waiting for your USDT</string>
+    <string name="swap_state_usdt_locked">your USDT is locked; waiting for the maker to lock the RQT</string>
     <string name="swap_state_locking">locking your USDT on TRON…</string>
     <string name="swap_usdt_state_expired">expired: if you sent USDT, take it back</string>
     <string name="swap_usdt_state_refund">not completed: take the USDT back after the timeout</string>

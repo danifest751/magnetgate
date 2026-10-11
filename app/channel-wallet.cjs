@@ -179,6 +179,8 @@ class ChannelWallet {
         if (e.method === 'usdt') {
           Object.assign(e, { held: st.usdt_held, lock: st.lock, refundFrom: st.refund_from })
           if (this.locking.has(e.file)) e.note = this.locking.get(e.file) || undefined
+          // locked, the maker not yet: nothing more to send
+          if (st.state === 'waiting_token' && st.lock === 'open') e.state = 'usdt_locked'
           if (st.state === 'waiting_token' && st.lock === 'none' && Number(st.usdt_held) >= Number(st.usdt_to_lock)) {
             if (this.locking.get(e.file) === null) e.state = 'locking'
             else this.lockUsdt(info, e.file)

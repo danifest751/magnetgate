@@ -212,6 +212,8 @@ object ChannelWallet {
         if (e.getString("method") == "usdt") {
           e.put("held", st.optString("usdt_held")).put("lock", st.optString("lock")).put("refundFrom", st.optLong("refund_from"))
           e.put("note", locking[file] ?: "")
+          // locked, the maker not yet: nothing more to send
+          if (state == "waiting_token" && st.optString("lock") == "open") e.put("state", "usdt_locked")
           val arrived = (st.optString("usdt_held").toDoubleOrNull() ?: 0.0) >= (st.optString("usdt_to_lock").toDoubleOrNull() ?: 1e18)
           if (state == "waiting_token" && st.optString("lock") == "none" && arrived) {
             if (locking[file] == "") e.put("state", "locking")

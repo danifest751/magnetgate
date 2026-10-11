@@ -180,6 +180,7 @@ private fun PayAsYouGo(payment: PaymentInfo, reload: () -> Unit) {
 private fun usdtText(units: Long) = java.math.BigDecimal.valueOf(units, 6).stripTrailingZeros().toPlainString()
 
 /** Buying RQT from the service's maker over Lightning, on-chain Bitcoin or USDT on TRON (atomic swaps). */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BuyRqt(payment: PaymentInfo) {
   val context = LocalContext.current
@@ -205,6 +206,7 @@ private fun BuyRqt(payment: PaymentInfo) {
       "rqt_locked" -> R.string.swap_state_locked
       "waiting_token" -> R.string.swap_state_waiting_usdt
       "locking" -> R.string.swap_state_locking
+      "usdt_locked" -> R.string.swap_state_usdt_locked
       "claimed", "done" -> R.string.swap_state_done
       "expired" -> R.string.swap_state_expired
       "underpaid", "too_late" -> R.string.swap_state_refund
@@ -221,7 +223,8 @@ private fun BuyRqt(payment: PaymentInfo) {
     if (usdt != null) Text(ui.text(R.string.swap_price_usdt, usdtText(usdt.unitsPerRqt)), style = MaterialTheme.typography.bodySmall)
     OutlinedTextField(amount, { if (it.length <= 20) amount = it }, label = { Text(ui.text(R.string.swap_amount)) }, singleLine = true,
       enabled = !busy, modifier = Modifier.fillMaxWidth())
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // three ways to pay do not fit one line on a phone: the chips wrap
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       if (terms.lightning && "lightning" in terms.methods)
         FilterChip(selected = method == "lightning", onClick = { method = "lightning" }, label = { Text(ui.text(R.string.swap_lightning)) })
       if ("bitcoin" in terms.methods)

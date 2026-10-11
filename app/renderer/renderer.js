@@ -451,7 +451,7 @@ const SWAP_STATES = {
   rqt_locked: 'swap.state.rqt_locked', claimed: 'swap.state.claimed', done: 'swap.state.done',
   expired: 'swap.state.expired', failed: 'swap.state.failed', underpaid: 'swap.state.underpaid',
   too_late: 'swap.state.too_late', rqt_refunded: 'swap.state.rqt_refunded', refunded: 'swap.state.refunded',
-  waiting_token: 'swap.state.waiting_token', locking: 'swap.state.locking'
+  waiting_token: 'swap.state.waiting_token', locking: 'swap.state.locking', usdt_locked: 'swap.state.usdt_locked'
 }
 // the same states where a USDT purchase reads differently (no Lightning or BTC)
 const USDT_STATES = {

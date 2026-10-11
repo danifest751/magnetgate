@@ -316,6 +316,7 @@
     <string name="swap_refund_to_tron">TRON-адрес для USDT</string>
     <string name="swap_refund_from">Блокировку можно вернуть с %1$s.</string>
     <string name="swap_state_waiting_usdt">ждём ваши USDT</string>
+    <string name="swap_state_usdt_locked">ваши USDT заблокированы; ждём, пока мейкер заблокирует RQT</string>
     <string name="swap_state_locking">блокируем ваши USDT в TRON…</string>
     <string name="swap_usdt_state_expired">истёк: если вы отправили USDT, верните их</string>
     <string name="swap_usdt_state_refund">не состоялся: верните USDT после таймаута</string>
