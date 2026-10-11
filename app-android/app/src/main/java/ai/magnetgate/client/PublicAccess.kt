@@ -93,6 +93,9 @@ object PublicAccess {
     connection.requestMethod = "POST"
     connection.doOutput = true
     connection.setRequestProperty("Content-Type", "application/json")
+    // a fresh connection for every request: over some mobile networks a connection to the service stalls
+    // once it has carried a few kilobytes, and a pooled one then hangs the next request
+    connection.setRequestProperty("Connection", "close")
     val payload = body.toString().toByteArray()
     // the length up front: the body goes out at once with the headers instead of being buffered
     connection.setFixedLengthStreamingMode(payload.size)

@@ -3,6 +3,25 @@ const I18n = require('./renderer/i18n.js')
 const fs = require('node:fs')
 const path = require('node:path')
 const net = require('node:net')
+const https = require('node:https')
+const { Readable } = require('node:stream')
+
+// fetch over a fresh connection each time: over some mobile networks a connection to the service stalls
+// once it has carried a few kilobytes, and a pooled one then hangs the next request
+function freshFetch(url, options = {}) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(url, { method: options.method || 'GET', headers: options.headers, agent: false,
+      signal: options.signal }, reply => {
+      if (reply.statusCode >= 300 && reply.statusCode < 400) {
+        reply.resume()
+        return reject(new Error('unexpected redirect'))
+      }
+      resolve(new Response(Readable.toWeb(reply), { status: reply.statusCode }))
+    })
+    request.on('error', reject)
+    request.end(options.body)
+  })
+}
 
 function validateProfile(value) {
   if (value?.version !== 1 || !Number.isSafeInteger(value.expires) || value.expires * 1000 <= Date.now() ||
@@ -70,12 +89,12 @@ function checkCode(code) {
   return code.trim()
 }
 
-async function requestProfile(code, device, fetcher = fetch) {
+async function requestProfile(code, device, fetcher = freshFetch) {
   return validateProfile(await post('profile', { code: checkCode(code), device }, fetcher))
 }
 
 // The account's deposit address, tier and balance; null when the service takes no payments.
-async function requestPayment(code, fetcher = fetch) {
+async function requestPayment(code, fetcher = freshFetch) {
   try {
     return validatePayment(await post('payment', { code: checkCode(code) }, fetcher))
   } catch (error) {
@@ -120,7 +139,7 @@ class PublicAccess {
   endpoints() { return this.profile && this.profile.expires * 1000 > Date.now() ? this.profile.endpoints : [] }
   // the saved personal code (for the payment channel requests), or null without one
   code() { return fs.existsSync(this.file) ? this.safeStorage.decryptString(fs.readFileSync(this.file)) : null }
-  async payment(fetcher = fetch) {
+  async payment(fetcher = freshFetch) {
     if (!fs.existsSync(this.file)) return null
     const payment = await requestPayment(this.safeStorage.decryptString(fs.readFileSync(this.file)), fetcher)
     // paid days change the endpoints (the full tier's listener): fetch the profile again on connect
@@ -128,4 +147,4 @@ class PublicAccess {
     return payment
   }
 }
-module.exports = { PublicAccess, requestProfile, requestPayment, validateProfile, validatePayment, post }
+module.exports = { PublicAccess, requestProfile, requestPayment, validateProfile, validatePayment, post, freshFetch }

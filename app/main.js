@@ -11,7 +11,7 @@ const { switchMode, engineSignature } = require('./mode.cjs')
 const { rotatingLog } = require('./log.cjs')
 const { accumulate, rate } = require('./stats.cjs')
 const { PeerHost } = require('./peer-host.cjs')
-const { PublicAccess, post } = require('./public-access.cjs')
+const { PublicAccess, post, freshFetch } = require('./public-access.cjs')
 const { ChannelWallet } = require('./channel-wallet.cjs')
 // messages the main process shows to the user follow the language the renderer chose
 const I18n = require('./renderer/i18n.js')
@@ -34,7 +34,7 @@ const publicAccess = new PublicAccess(app.getPath('userData'), safeStorage)
 // the in-app wallet for payment channels, with the bundled requant-wallet
 const channelWallet = new ChannelWallet(app.getPath('userData'), safeStorage,
   path.join(RES, 'tools', 'requant', process.platform === 'win32' ? 'requant-wallet.exe' : 'requant-wallet'),
-  (pathname, body) => post(pathname, body, fetch))
+  (pathname, body) => post(pathname, body, freshFetch))
 // Pay-as-you-go: keep a few minutes of full access paid ahead over the channel (no channel: nothing).
 async function payAhead() {
   const code = publicAccess.code()

@@ -113,7 +113,7 @@ private fun PayAsYouGo(payment: PaymentInfo, reload: () -> Unit) {
       busy = true; message = ui.text(R.string.wallet_working)
       runCatching { withContext(Dispatchers.IO) { work() } }
         .onSuccess { message = done?.let { ui.text(it) } ?: ""; exists = ChannelWallet.exists(context); reload() }
-        .onFailure { message = it.message?.take(240) ?: ui.text(R.string.public_failed) }
+        .onFailure { android.util.Log.w("MgWallet", "wallet action failed", it); message = it.message?.take(240) ?: ui.text(R.string.public_failed) }
       busy = false
     }
   }
