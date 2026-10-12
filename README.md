@@ -34,7 +34,7 @@ Installers are served there; a GitHub tag alone does not indicate a current inst
 
 | Platform | Download / installation | Status |
 |---|---|---|
-| Windows x64 | ZIP: extract all files, run `magnetgate.exe` | Desktop 0.3.4; administrator access for VPN |
+| Windows x64 | ZIP: extract all files, run `magnetgate.exe` | Desktop 0.3.9; administrator access for VPN |
 | macOS, Apple Silicon | ARM64 DMG: move the app to Applications | Desktop 0.3.4; experimental, unsigned and unnotarized |
 | macOS, Intel | x64 DMG: move the app to Applications | Desktop 0.3.4; experimental, unsigned and unnotarized |
 | Android 8+ | ARM64 APK: allow installation from the browser/file manager | Native client; build identifier is shown in Settings |
@@ -78,6 +78,15 @@ Traffic accounting is periodic, so quota enforcement is approximate rather than 
 UDP application traffic, but it cannot connect when the underlying network blocks this UDP
 transport entirely. The public mode does not currently fall back to Reality/native TCP.
 
+## Pay with RQT
+
+Full access can also be paid in RQT, the coin of the [Requant](https://requant.network) test network:
+a deposit to a personal address, or **pay as you go** by the hour over a one-way payment channel
+from the app's own wallet (Windows 0.3.7+, Android build 278+). **Buy RQT** in the app (Windows
+0.3.8+, Android build 281+) gets RQT for bitcoin, Lightning or, from Windows 0.3.9 and Android build
+284, USDT on TRON, with an atomic swap. Guide: [pay with RQT](https://requant.network/magnetgate/pay-with-rqt);
+design: [PAYMENTS.md](PAYMENTS.md). English website: [magnetvpn.world](https://magnetvpn.world).
+
 ## How personal access protects the owner's key
 
 ```text
@@ -116,7 +125,7 @@ access to the public nodes. Do not distribute an owner-configured private build 
 The following architecture, data-plane, CLI, discovery and rotation sections describe **your own
 PSK-based group**. They are not required to connect using a website code.
 
-The Node core/exit version is **0.11.1**, desktop is **0.3.4**, and Android uses a separate
+The Node core/exit version is **0.11.1**, desktop is **0.3.9** (the macOS builds are still 0.3.4), and Android uses a separate
 git-derived build identifier. Node.js 20.19+ is required for the core; desktop builds need 22.12+.
 Native sessions and sealed rendezvous envelopes use **wire v4**, and offer JSON uses schema v3.
 Update private clients and exits together when migrating from older wire versions.
