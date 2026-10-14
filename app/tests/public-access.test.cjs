@@ -9,7 +9,7 @@ const { safeConfig } = require('../mac-helper.cjs')
 function profile() {
   return { version: 1, expires: Math.floor(Date.now() / 1000) + 3600, endpoints: [{
     t: 'hy2', host: '192.0.2.1', port: 4443, pw: 'a'.repeat(64), obfs: 'b'.repeat(64),
-    country: 'FI', sni: 'magnet.norma.so', ca: '-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----'
+    country: 'FI', sni: 'magnet.retensor.tech', ca: '-----BEGIN CERTIFICATE-----\nfixture\n-----END CERTIFICATE-----'
   }] }
 }
 test('Windows and macOS public profiles build without PSK or native SOCKS fallback', () => {
@@ -52,7 +52,7 @@ test('личный код отправляется только на довер�
   let called = false
   await requestProfile('MG1-' + 'c'.repeat(64), 'd'.repeat(64), async (url, options) => {
     called = true
-    assert.equal(url, 'https://magnet.norma.so/api/profile')
+    assert.equal(url, 'https://magnet.retensor.tech/api/profile')
     assert.equal(options.redirect, 'error')
     assert.equal(JSON.parse(options.body).device, 'd'.repeat(64))
     return new Response(JSON.stringify(profile()))

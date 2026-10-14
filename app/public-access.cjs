@@ -31,7 +31,7 @@ function validateProfile(value) {
   for (const d of value.endpoints) {
     if (d.t !== 'hy2' || !net.isIPv4(d.host) || /^(0|10|127|169\.254|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(d.host) || ![4443, 4444].includes(d.port) ||
         !/^[a-f0-9]{64}$/.test(d.pw) || !/^[a-f0-9]{64}$/.test(d.obfs) ||
-        !['FI', 'NL'].includes(d.country) || d.sni !== 'magnet.norma.so' ||
+        !['FI', 'NL'].includes(d.country) || d.sni !== 'magnet.retensor.tech' ||
         typeof d.ca !== 'string' || d.ca.length > 4096 || !d.ca.startsWith('-----BEGIN CERTIFICATE-----'))
       throw new Error(I18n.t('publicAccess.badAddress'))
   }
@@ -58,7 +58,7 @@ function validatePayment(value) {
 
 // POST a JSON body to the access service and read a bounded JSON answer.
 async function post(pathname, body, fetcher) {
-  const reply = await fetcher('https://magnet.norma.so/api/' + pathname, {
+  const reply = await fetcher('https://magnet.retensor.tech/api/' + pathname, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(pathname.startsWith('channel/') ? 60000 : 15000),
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   })

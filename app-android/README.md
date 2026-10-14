@@ -21,12 +21,12 @@ manufacturer. Development testing includes an emulator and a Xiaomi phone with A
 broader device coverage remains on the [roadmap](../ROADMAP.md).
 
 APKs and the AAR are local build outputs, ignored by Git. The source tree does not include an
-installer. Download the public ARM64 release APK from [magnet.norma.so](https://magnet.norma.so/#start),
+installer. Download the public ARM64 release APK from [magnet.retensor.tech](https://magnet.retensor.tech/#start),
 build with the instructions below, or obtain a compatible signed APK from your operator.
 
 ## First connection: personal public access
 
-1. Install the public APK and get a personal `MG1-…` code on [the website](https://magnet.norma.so/#start).
+1. Install the public APK and get a personal `MG1-…` code on [the website](https://magnet.retensor.tech/#start).
 2. With the VPN off, open **Settings → Group access** and find **Личный доступ MagnetGate**.
    Paste the code and tap **Подключить личный доступ**. This new panel currently uses Russian labels.
 3. Return to **Home**, connect and accept Android's VPN permission. No shared PSK is needed.

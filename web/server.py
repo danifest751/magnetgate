@@ -119,7 +119,7 @@ class AccessStore:
             raise AccessError(401, 'Код не найден, истёк или был отозван. Получите новый код на сайте.')
         return row
 
-    def profile(self, code, device):
+    def profile(self, code, device, hostname=None):
         if not isinstance(device, str) or len(device) != 64 or any(c not in '0123456789abcdef' for c in device):
             raise AccessError(400, 'Некорректный идентификатор устройства.')
         def commit():
@@ -137,6 +137,13 @@ class AccessStore:
             for index, node in enumerate(self.config['nodes']):
                 # a node may run a separate unthrottled listener for the full tier
                 endpoint = node.get('fullEndpoint') if full and node.get('fullEndpoint') else node['endpoint']
+                endpoint = dict(endpoint)
+                # During a domain migration, old clients still validate their original
+                # SNI. Only an explicit operator-owned mapping may select another SNI;
+                # an arbitrary Host header never becomes a TLS identity.
+                compatibility_sni = self.config.get('profileSniByHost', {}).get(hostname)
+                if compatibility_sni:
+                    endpoint['sni'] = compatibility_sni
                 endpoints.append({**endpoint, 'pw': password, 'exitId': str(index), 'node': 'MagnetGate', 'country': node['country']})
             result = {'version': 1, 'expires': expires, 'endpoints': endpoints}
             if self.payments:
@@ -557,7 +564,8 @@ def handler(store, config):
                         raise AccessError(403, 'Пройдите проверку на странице и попробуйте снова.', 'challenge')
                     result = store.issue(ip)
                 elif self.path == '/api/profile':
-                    result = store.profile(data.get('code'), data.get('device'))
+                    hostname = self.headers.get('Host', '').lower().split(':', 1)[0]
+                    result = store.profile(data.get('code'), data.get('device'), hostname)
                 elif self.path == '/api/revoke':
                     result = store.revoke(data.get('code'))
                 elif self.path == '/api/payment':

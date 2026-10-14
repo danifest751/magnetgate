@@ -46,6 +46,20 @@ class AccessTests(unittest.TestCase):
         with self.assertRaises(AccessError): self.store.profile(code, '1' * 64)
         self.assertEqual([identity], self.store.report('fi', {'traffic': {}, 'online': {identity: 1}, 'epoch': 'test'})['kick'])
 
+    def test_domain_migration_preserves_credentials_without_trusting_arbitrary_hosts(self):
+        self.config['nodes'][0]['endpoint'].update(sni='vpn.new.example', ca='same trust anchor')
+        self.config['profileSniByHost'] = {'vpn.old.example': 'vpn.old.example'}
+        code = self.store.issue('198.51.100.4')['code']
+        current = self.store.profile(code, '1' * 64, 'vpn.new.example')['endpoints'][0]
+        legacy = self.store.profile(code, '1' * 64, 'vpn.old.example')['endpoints'][0]
+        hostile = self.store.profile(code, '1' * 64, 'attacker.example')['endpoints'][0]
+        self.assertEqual('vpn.new.example', current['sni'])
+        self.assertEqual('vpn.old.example', legacy['sni'])
+        self.assertEqual(current, hostile)
+        self.assertEqual(current['pw'], legacy['pw'])
+        self.assertEqual(current['ca'], legacy['ca'])
+        self.assertEqual('vpn.new.example', self.config['nodes'][0]['endpoint']['sni'])
+
     def test_reconnect_overlap_keeps_quota_and_connection_limits(self):
         code = self.store.issue('198.51.100.4')['code']
         password = self.store.profile(code, '1' * 64)['endpoints'][0]['pw']

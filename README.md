@@ -2,7 +2,7 @@
 
 **Free, open-source VPN access for websites, video and calls.**
 
-[Get the app and a personal code](https://magnet.norma.so/#start) · [Connection guide](https://magnet.norma.so/#guide) · [Русский](README.ru.md)
+[Get the app and a personal code](https://magnet.retensor.tech/#start) · [Connection guide](https://magnet.retensor.tech/#guide) · [Русский](README.ru.md)
 
 MagnetGate connects your device to ready-to-use nodes in Finland and the Netherlands.
 You can also run your own nodes for a trusted group. These are separate access modes:
@@ -14,7 +14,7 @@ Operators: the optional [private analytics admin](web/ADMIN.md) provides read-on
 personal-access metrics and chart drilldowns. Until authentication is integrated,
 it is available only over SSH forwarding, never through the public website.
 
-1. Open **[magnet.norma.so](https://magnet.norma.so/#start)** and download the app for your device.
+1. Open **[magnet.retensor.tech](https://magnet.retensor.tech/#start)** and download the app for your device.
 2. Complete the human verification on the website and save your personal `MG1-…` code.
    Codes are issued automatically when capacity is available; no payment card is needed.
 3. With the VPN disconnected, open the app's settings and activate the code in
@@ -24,12 +24,12 @@ it is available only over SSH forwarding, never through the public website.
    Accept the operating system's VPN/administrator prompt when requested.
 
 Keep the code private. It grants access to your devices and can be revoked on the
-[website](https://magnet.norma.so/#questions). Revocation disconnects its active sessions
+[website](https://magnet.retensor.tech/#questions). Revocation disconnects its active sessions
 when the node next checks access. Public access does not require entering the node owner's PSK.
 
 ## Downloads and platforms
 
-Use the current download links on the **[official website](https://magnet.norma.so/#start)**.
+Use the current download links on the **[official website](https://magnet.retensor.tech/#start)**.
 Installers are served there; a GitHub tag alone does not indicate a current installer.
 
 | Platform | Download / installation | Status |

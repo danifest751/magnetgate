@@ -21,7 +21,7 @@ test('payment details are checked before they are shown', () => {
 test('the code goes only to the trusted service; no payments there is not an error', async () => {
   const code = 'MG1-' + 'c'.repeat(64)
   const got = await requestPayment(code, async (url, options) => {
-    assert.equal(url, 'https://magnet.norma.so/api/payment')
+    assert.equal(url, 'https://magnet.retensor.tech/api/payment')
     assert.equal(options.redirect, 'error')
     assert.deepEqual(JSON.parse(options.body), { code })
     return new Response(JSON.stringify(payment()))
@@ -35,7 +35,7 @@ test('the code goes only to the trusted service; no payments there is not an err
 
 test('the full tier listener port is accepted in a profile', () => {
   const endpoint = { t: 'hy2', host: '192.0.2.1', port: 4444, pw: 'a'.repeat(64), obfs: 'b'.repeat(64), country: 'FI',
-    sni: 'magnet.norma.so', ca: '-----BEGIN CERTIFICATE-----\nx' }
+    sni: 'magnet.retensor.tech', ca: '-----BEGIN CERTIFICATE-----\nx' }
   const profile = { version: 1, expires: Math.floor(Date.now() / 1000) + 60, tier: 'full', endpoints: [endpoint] }
   assert.equal(validateProfile(profile).tier, 'full')
   assert.throws(() => validateProfile({ ...profile, tier: 'gold' }))

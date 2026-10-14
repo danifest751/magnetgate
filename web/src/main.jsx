@@ -55,7 +55,7 @@ function Access({ info }) {
   }
   async function copy() { try { await navigator.clipboard.writeText(code); setCopied(true) } catch { setMessage('Выделите код в поле и скопируйте его вручную.') } }
   function save() {
-    const blob = new Blob([`Личный код MagnetGate\n${code}\n\nВставьте его в приложении: Настройки → Личный доступ.\nНикому не пересылайте этот файл.\nДействует до ${new Date(expires * 1000).toLocaleDateString('ru-RU')}.\nhttps://magnet.norma.so\n`], { type: 'text/plain;charset=utf-8' })
+    const blob = new Blob([`Личный код MagnetGate\n${code}\n\nВставьте его в приложении: Настройки → Личный доступ.\nНикому не пересылайте этот файл.\nДействует до ${new Date(expires * 1000).toLocaleDateString('ru-RU')}.\nhttps://magnet.retensor.tech\n`], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = 'magnetgate-access.txt'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000)
   }
   return <div id="access" className="access-box scroll-mt-28"><div className="flex justify-between items-start gap-4"><span className="eyebrow">ВАШ ЛИЧНЫЙ ПРОПУСК</span><LockKey size={24}/></div><h3>{stage === 'ready' ? 'Добро пожаловать.' : 'Интернет ближе,\nчем кажется.'}</h3><p>{stage === 'ready' ? 'Код готов. Сохраните его и добавьте в приложение на своих устройствах.' : 'Получите бесплатный код. Без почты, банковской карты и ожидания ответа администратора.'}</p>

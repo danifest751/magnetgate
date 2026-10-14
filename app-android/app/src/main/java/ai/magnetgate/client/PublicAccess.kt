@@ -77,7 +77,7 @@ object PublicAccess {
       require(!address.isAnyLocalAddress && !address.isLoopbackAddress && !address.isLinkLocalAddress && !address.isSiteLocalAddress && !address.isMulticastAddress)
       // 4443: the free listener (and today's nodes); 4444: the full tier's
       require(item.getString("t") == "hy2" && item.getInt("port") in listOf(4443, 4444))
-      require(item.getString("country") in listOf("NL", "FI") && item.getString("sni") == "magnet.norma.so")
+      require(item.getString("country") in listOf("NL", "FI") && item.getString("sni") == "magnet.retensor.tech")
       require(Regex("[a-f0-9]{64}").matches(item.getString("pw")) && Regex("[a-f0-9]{64}").matches(item.getString("obfs")))
       require(item.getString("ca").startsWith("-----BEGIN CERTIFICATE-----") && item.getString("ca").length <= 4096)
     }
@@ -86,7 +86,7 @@ object PublicAccess {
   /** POST a JSON body to the access service; a bounded JSON answer, or [ServiceError]. */
   fun post(context: Context, path: String, body: JSONObject, timeoutMs: Int = 15000): JSONObject {
     val strings = uiResources(context)
-    val connection = URL("https://magnet.norma.so/api/$path").openConnection() as HttpsURLConnection
+    val connection = URL("https://magnet.retensor.tech/api/$path").openConnection() as HttpsURLConnection
     connection.instanceFollowRedirects = false
     connection.connectTimeout = 15000
     connection.readTimeout = timeoutMs

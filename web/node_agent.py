@@ -63,8 +63,8 @@ def combine(memory, samples):
 
 
 def run(config):
-    central_base = config.get('centralBase', 'https://magnet.norma.so/api/')
-    if central_base not in ('https://magnet.norma.so/api/', 'http://127.0.0.1:3410/api/'):
+    central_base = config.get('centralBase', 'https://magnet.retensor.tech/api/')
+    if central_base not in ('https://magnet.retensor.tech/api/', 'http://127.0.0.1:3410/api/'):
         raise ValueError('invalid central endpoint')
     lock = threading.Lock()
     state = {'healthy': False, 'online': {}, 'pending': {}, 'epoch': ''}

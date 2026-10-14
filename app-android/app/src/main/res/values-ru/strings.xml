@@ -246,7 +246,7 @@
     <string name="public_connection_details">Состояние подключения</string>
     <string name="public_nodes_count">Доступных узлов: %1$d</string>
     <string name="public_title">Личный доступ MagnetGate</string>
-    <string name="public_hint">Получите бесплатный код на magnet.norma.so. Сайты, видео и звонки — через ваши личные данные подключения.</string>
+    <string name="public_hint">Получите бесплатный код на magnet.retensor.tech. Сайты, видео и звонки — через ваши личные данные подключения.</string>
     <string name="public_code_label">Личный код MG1-…</string>
     <string name="public_vpn_first">Сначала отключите VPN.</string>
     <string name="public_checking">Проверяем код…</string>
@@ -259,7 +259,7 @@
     <string name="public_deactivate">Отключить личный доступ</string>
     <string name="public_device_failed">Не удалось сохранить идентификатор устройства.</string>
     <string name="public_storage_unavailable">Защищённое хранилище недоступно.</string>
-    <string name="public_bad_code">Вставьте личный код с сайта magnet.norma.so. Он начинается с MG1-.</string>
+    <string name="public_bad_code">Вставьте личный код с сайта magnet.retensor.tech. Он начинается с MG1-.</string>
     <string name="public_too_large">Слишком большой ответ сервиса.</string>
     <string name="public_unavailable">Сервис доступа недоступен.</string>
     <string name="public_node">Личный доступ</string>

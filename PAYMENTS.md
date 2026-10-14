@@ -46,7 +46,7 @@ one deployment, the operator's public service, and not part of the core.
 - **Nothing tied to our deployment.**
   - Deposit addresses come from the deployer's own seed; prices, discounts and the exit share come
     from their own admin panel.
-  - The client must not hard-code our hosts. Today `magnet.norma.so` is fixed in the desktop and
+  - The client must not hard-code our hosts. Today `magnet.retensor.tech` is fixed in the desktop and
     Android personal-access code and the countries are limited to FI/NL. A self-hosted public service
     needs these to be configurable (a service URL entered with the code, or a build setting). That is
     work in its own right.
