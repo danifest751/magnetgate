@@ -30,19 +30,21 @@
   },
   "ruleSets": {
     "_comment": [
-      "Routing rule-sets. Their pin matters as much as the binary's: a rule-set decides which",
-      "destinations bypass the tunnel. The upstream 'latest' URL is used on purpose, but the",
-      "checksum is pinned, so an upstream change stops the fetch instead of silently retuning routes."
+      "Routing rule-sets decide which destinations bypass the tunnel. Checksums remain pinned.",
+      "Upstream latest assets change in place. The immutable mirror preserves the originally reviewed bytes;",
+      "upstreamUrl records provenance. A checksum mismatch still stops every download."
     ],
     "refilter-domains.srs": {
-      "url": "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-domain-refilter_domains.srs",
+      "url": "https://magnet.retensor.tech/downloads/refilter-domains-2756235a05407dced55bd362f80daeafd19a87ed9720f98cbf69343023a5b534.srs",
       "sha256": "2756235a05407dced55bd362f80daeafd19a87ed9720f98cbf69343023a5b534",
-      "role": "split mode: blocked domains routed through the exit"
+      "role": "split mode: blocked domains routed through the exit",
+      "upstreamUrl": "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-domain-refilter_domains.srs"
     },
     "refilter-ip.srs": {
-      "url": "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-ip-refilter_ipsum.srs",
+      "url": "https://magnet.retensor.tech/downloads/refilter-ip-381fcfaaf4d2b95b0b3c5ece1cb3525eb2f34f41013930ad25409a29deca3daa.srs",
       "sha256": "381fcfaaf4d2b95b0b3c5ece1cb3525eb2f34f41013930ad25409a29deca3daa",
-      "role": "split mode: blocked IP summaries routed through the exit"
+      "role": "split mode: blocked IP summaries routed through the exit",
+      "upstreamUrl": "https://github.com/1andrevich/Re-filter-lists/releases/latest/download/ruleset-ip-refilter_ipsum.srs"
     }
   },
   "requantWallet": {
