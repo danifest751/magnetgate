@@ -6,7 +6,7 @@ SOCKS client provides Reality/Hysteria2 endpoints and native fallback. Node is b
 
 ## Connect with a personal code
 
-1. Download the Windows ZIP or the matching macOS DMG from [magnet.retensor.tech](https://magnet.retensor.tech/#start).
+1. Download the Windows ZIP or the matching macOS DMG from [magnetvpn.world](https://magnetvpn.world/#start).
    On Windows extract the complete ZIP. On macOS move the app to Applications.
 2. Get and save a personal `MG1-…` code on the same website.
 3. With the VPN off, open **Настройки → Личный доступ MagnetGate**, paste the code and select
