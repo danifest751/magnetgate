@@ -21,7 +21,7 @@ test('payment details are checked before they are shown', () => {
 test('the code goes only to the trusted service; no payments there is not an error', async () => {
   const code = 'MG1-' + 'c'.repeat(64)
   const got = await requestPayment(code, async (url, options) => {
-    assert.equal(url, 'https://magnet.retensor.tech/api/payment')
+    assert.equal(url, 'https://magnetvpn.world/api/payment')
     assert.equal(options.redirect, 'error')
     assert.deepEqual(JSON.parse(options.body), { code })
     return new Response(JSON.stringify(payment()))

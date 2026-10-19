@@ -191,3 +191,19 @@ together. Offer JSON remains schema v3; desktop endpoint snapshots are schema v4
 helper names `frame2`/`makeCodecV2` do not imply old-wire compatibility.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the validation commands and [README.md](../README.md) for discovery and exit configuration.
+
+## Windows installation
+
+Desktop 0.3.11 adds `magnetgate-0.3.11-setup-x64.exe`, a one-click NSIS installer.
+Approve Windows administrator access; the installer writes Program Files and adds
+Desktop and Start menu shortcuts. It also registers an uninstaller in Windows
+Settings. Reinstalling or uninstalling preserves the existing application data,
+personal code and encrypted wallet. Portable EXE and ZIP builds remain available.
+The installed client reaches personal-access APIs at `https://magnetvpn.world`;
+the transport certificate remains pinned to `magnet.retensor.tech`.
+
+`.github/workflows/desktop-windows.yml` builds from source on Windows and tests
+silent installation, repeated installation, shortcuts, and uninstallation while
+checking that a user-data sentinel survives. Runtime assets are recovered from the
+checksum-pinned 0.3.10 archive and verified against `scripts/pins.json`; the app and
+Go peer host are rebuilt. Public installers always use the PSK-free example seed.

@@ -13,6 +13,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from admin_metrics import RequestMetrics
+from site_bridge import bridge_identity
 import payments
 import channels
 
@@ -541,8 +542,10 @@ def handler(store, config):
                 length = int(self.headers.get('Content-Length', '0'))
                 if not 0 < length <= (65536 if self.path in ('/api/node-report', '/api/channel/open') else 4096 if self.path != '/api/channel/pay' else 8192):
                     raise AccessError(413, 'Слишком большой запрос.')
+                body = self.rfile.read(length)
+                bridged_ip = bridge_identity(config, self.headers, self.path, body)
                 origin = self.headers.get('Origin')
-                if origin and origin != 'https://' + config['hostname']:
+                if origin and origin != 'https://' + config['hostname'] and bridged_ip is None:
                     raise AccessError(403, 'Недопустимый источник запроса.')
                 is_node = self.path in ('/api/node-auth', '/api/node-report')
                 node = None
@@ -553,14 +556,14 @@ def handler(store, config):
                         raise AccessError(403, 'forbidden')
                 else:
                     # Только локальный cloudflared обращается к этому слушателю.
-                    ip = str(ipaddress.ip_address(self.headers.get('CF-Connecting-IP', self.client_address[0])))
+                    ip = bridged_ip or str(ipaddress.ip_address(self.headers.get('CF-Connecting-IP', self.client_address[0])))
                     if self.limited(ip):
                         raise AccessError(429, 'Слишком много запросов. Подождите минуту.', 'rate_limit')
-                data = json.loads(self.rfile.read(length))
+                data = json.loads(body)
                 if not isinstance(data, dict):
                     raise AccessError(400, 'Некорректный запрос.')
                 if self.path == '/api/access':
-                    if origin != 'https://' + config['hostname'] or not verify_turnstile(config, data.get('challenge'), ip):
+                    if bridged_ip is None and (origin != 'https://' + config['hostname'] or not verify_turnstile(config, data.get('challenge'), ip)):
                         raise AccessError(403, 'Пройдите проверку на странице и попробуйте снова.', 'challenge')
                     result = store.issue(ip)
                 elif self.path == '/api/profile':

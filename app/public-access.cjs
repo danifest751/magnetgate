@@ -58,7 +58,7 @@ function validatePayment(value) {
 
 // POST a JSON body to the access service and read a bounded JSON answer.
 async function post(pathname, body, fetcher) {
-  const reply = await fetcher('https://magnet.retensor.tech/api/' + pathname, {
+  const reply = await fetcher('https://magnetvpn.world/api/' + pathname, {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(pathname.startsWith('channel/') ? 60000 : 15000),
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
   })
