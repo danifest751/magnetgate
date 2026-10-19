@@ -1,7 +1,5 @@
 # Payments in RQT (design draft)
 
-> **Product status, 2026-10-20:** New swaps and maker expansion are outside the current roadmap. Requant Wallet 0.5.1 disables new offers, approvals and locks; the public wallet gateway rejects new offers. Keep existing funded swap backups for recovery. RQT deposits and payment channels remain in scope; historical protocol references below do not promise a buying service.
-
 Status: **draft for review, no code.** Date: 2026-10-10. Scope: how MagnetGate users pay for the full
 service in RQT, how people who share their connection (peer exits) earn RQT, and what each project has
 to build. Facts about MagnetGate are taken from [README.md](README.md) and [PEER-PILOT.md](PEER-PILOT.md)
@@ -93,7 +91,7 @@ exits are not paid for it.
 
 1. **Start free** with a code, at low speed, for as long as needed.
 2. **Get RQT** to unlock the full tier:
-   - on the test network, use the **faucet**, **mine**, or receive test RQT from another wallet; new swaps are paused;
+   - on the test network, use the **faucet**, **mine**, or receive test RQT from another wallet;
    - **mine**, but only with an NVIDIA GPU (RTX 20xx or newer); most phone and laptop users cannot;
    - **earn by sharing**: run a peer exit and get paid (phase 2).
 3. **Pay** by topping up a prepaid balance (phase 1). The app shows the deposit address and the days
@@ -114,7 +112,7 @@ The simplest working version needs no channels and no wallet in the app.
   backup phrase.
 - **Watching.** The access service polls a Requant node's public API (`/api/history?owners=`), best
   the operator's own `requantd`. It credits a deposit after N confirmations, once per (txid, address). Proposed N is 6 on the test network;
-  for value, scale it with the amount and the network hashrate ([Requant SWAPS.md](https://github.com/requant-network/requant/blob/main/SWAPS.md), Finality).
+  for value, scale it with the amount and the network hashrate ([Requant PAYMENT_CHANNELS.md](https://github.com/requant-network/requant/blob/main/PAYMENT_CHANNELS.md), Finality).
 - **Crediting.** A confirmed deposit buys days of full access, added to any days left, from one day up.
   Longer purchases are cheaper per day: the price of `d` days is
   `d × price_atoms_per_day × (1 − discount(d))`, where `discount` is a step table in the admin panel
@@ -202,7 +200,7 @@ the service's older error messages.
 
 Status: **implemented** in the access service (`web/channels.py`) and the desktop app
 (`app/channel-wallet.cjs`); Android to follow. It runs Requant's one-way channel
-(`requant-wallet channel`, wallet 0.7.0, [SWAPS.md §3](https://github.com/requant-network/requant/blob/main/SWAPS.md))
+(`requant-wallet channel`, wallet 0.7.0, [PAYMENT_CHANNELS.md](https://github.com/requant-network/requant/blob/main/PAYMENT_CHANNELS.md))
 between the user and the operator, before any peer-exit channels (§8).
 
 - **The user's side.** The app keeps its own Requant key file (the standard `requant-wallet` format,
@@ -332,7 +330,6 @@ and by hand. Nothing below runs automatically.
 
 | Use | Why it is safe | Limits |
 |---|---|---|
-| **Historical maker proposal — excluded from the current roadmap** | No new swap service or fund allocation is promised | Existing funded swap recovery only |
 | **Grants** to the first exits in missing countries | Manual, named and time-limited | A budget per month; published |
 | **A free-tier pool**, if the operator wants to pay exits for some free traffic | Capped per day; metered by the relay | Off by default; easy to farm otherwise |
 
@@ -342,7 +339,7 @@ What is not proposed: automatic per-megabyte payments from the fund.
 
 Phase 3 matters only if exits and clients should not have to trust the operator with money, for
 example if peer discovery moves off the operator's relay. It uses the one-way channel already
-proven in Requant's consensus tests ([`one_way_payment_channel`](https://github.com/requant-network/requant/blob/main/crates/consensus/tests/conditions.rs); [Requant SWAPS.md](https://github.com/requant-network/requant/blob/main/SWAPS.md) §3):
+proven in Requant's consensus tests ([`one_way_payment_channel`](https://github.com/requant-network/requant/blob/main/crates/consensus/tests/conditions.rs); [Requant PAYMENT_CHANNELS.md](https://github.com/requant-network/requant/blob/main/PAYMENT_CHANNELS.md)):
 
 1. The client locks a deposit under 2-of-2 (client, exit), with fresh keys for each channel.
 2. The exit signs a refund to the client that is valid from an expiry height (for example 7 days,
@@ -407,13 +404,12 @@ Still open:
   a communications service) and a fund that sells coins each carry legal questions that depend on
   the jurisdiction. They need a review before real value.
 - **Linkability.** The operator links accounts to deposit addresses, as it links accounts to traffic
-  totals today. Payments from an exchange account link the user's identity to the deposit. Swaps
-  from XMR avoid that. Batched exit payouts reveal payout addresses and amounts on chain, so exits
+  totals today. Payments from an exchange account link the user's identity to the deposit. Batched exit payouts reveal payout addresses and amounts on chain, so exits
   should use fresh payout addresses.
 - **Hot wallet.** Phase 1 and 2 deposits and payouts sit on the operator's server. Keep them on a
   machine separate from Requant seed nodes and from the faucet and pool keys, with small balances
   and regular sweeps to cold storage.
-- **Finality.** Credit deposits only after confirmations proportionate to the amount ([Requant SWAPS.md](https://github.com/requant-network/requant/blob/main/SWAPS.md)).
+- **Finality.** Credit deposits only after confirmations proportionate to the amount ([Requant PAYMENT_CHANNELS.md](https://github.com/requant-network/requant/blob/main/PAYMENT_CHANNELS.md)).
 
 ## 11. Work split
 

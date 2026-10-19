@@ -100,10 +100,6 @@ expanding this private-group tunnel into one.
 These are research directions, not supported configuration options. Any physical fallback depends
 on separately available connectivity and is outside the current software.
 
-## Swap scope
-
-New swaps and additional swap markets are outside the current product roadmap. RQT deposits and payment channels remain in scope. Older client buying screens are historical behavior, not an advertised way to obtain RQT; keep existing funded swap backups for recovery. See [current Requant recovery guidance](https://requant.network/docs/swaps).
-
 ## 6. Sequencing
 
 Stabilize and document the existing clients, exercise compatibility and recovery, then establish
