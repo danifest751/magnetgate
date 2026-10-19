@@ -1,0 +1,48 @@
+name: Windows installer
+on:
+  push:
+    branches: [main, codex/windows-installer]
+    paths: ['app/**', 'src/**', 'scripts/windows/**', '.github/workflows/desktop-windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  installer:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app-android/core/go.mod
+          cache-dependency-path: app-android/core/go.sum
+      - run: npm ci
+      - run: ./scripts/windows/prepare-release-assets.ps1
+      - run: npm test
+      - run: npm ci
+        working-directory: app
+      - run: npm test
+        working-directory: app
+      - run: npm run dist -- --x64
+        working-directory: app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          MAGNETGATE_PERSONAL_BUILD: '0'
+      - run: ./scripts/windows/test-installer.ps1
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem app/dist -File | Where-Object Extension -in '.exe','.zip' | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content app/dist/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: magnetgate-windows-x64
+          path: |
+            app/dist/*.exe
+            app/dist/*.zip
+            app/dist/SHA256SUMS.txt
+          if-no-files-found: error
