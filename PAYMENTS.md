@@ -1,5 +1,7 @@
 # Payments in RQT (design draft)
 
+> **Product status, 2026-10-20:** New swaps and maker expansion are outside the current roadmap. Requant Wallet 0.5.1 disables new offers, approvals and locks; the public wallet gateway rejects new offers. Keep existing funded swap backups for recovery. RQT deposits and payment channels remain in scope; historical protocol references below do not promise a buying service.
+
 Status: **draft for review, no code.** Date: 2026-10-10. Scope: how MagnetGate users pay for the full
 service in RQT, how people who share their connection (peer exits) earn RQT, and what each project has
 to build. Facts about MagnetGate are taken from [README.md](README.md) and [PEER-PILOT.md](PEER-PILOT.md)
@@ -91,7 +93,7 @@ exits are not paid for it.
 
 1. **Start free** with a code, at low speed, for as long as needed.
 2. **Get RQT** to unlock the full tier:
-   - **buy** from the fund's market maker or **swap** (XMR, BTC and others; see [Requant SWAPS.md](https://github.com/requant-network/requant/blob/main/SWAPS.md)), the main path;
+   - on the test network, use the **faucet**, **mine**, or receive test RQT from another wallet; new swaps are paused;
    - **mine**, but only with an NVIDIA GPU (RTX 20xx or newer); most phone and laptop users cannot;
    - **earn by sharing**: run a peer exit and get paid (phase 2).
 3. **Pay** by topping up a prepaid balance (phase 1). The app shows the deposit address and the days
@@ -330,7 +332,7 @@ and by hand. Nothing below runs automatically.
 
 | Use | Why it is safe | Limits |
 |---|---|---|
-| **Market maker:** sell RQT for XMR/BTC/USDT through swaps | Users get a way to buy RQT; the fund gives nothing away | Pricing policy; legal review of selling coins (§10) |
+| **Historical maker proposal — excluded from the current roadmap** | No new swap service or fund allocation is promised | Existing funded swap recovery only |
 | **Grants** to the first exits in missing countries | Manual, named and time-limited | A budget per month; published |
 | **A free-tier pool**, if the operator wants to pay exits for some free traffic | Capped per day; metered by the relay | Off by default; easy to farm otherwise |
 
