@@ -82,9 +82,7 @@ MagnetGate подключает устройство к готовым нода�
 
 Полный доступ можно оплатить и в RQT — монете тестовой сети [Requant](https://requant.network):
 депозитом на личный адрес или **поминутно** через односторонний платёжный канал из кошелька
-приложения (Windows 0.3.7+, Android build 278+). Кнопка **Buy RQT** в приложении (Windows 0.3.8+,
-Android build 281+) покупает RQT за биткоин, Lightning, а с Windows 0.3.9 и Android build 284 —
-за USDT в сети TRON, атомарным свопом. Инструкция: [pay with RQT](https://requant.network/magnetgate/pay-with-rqt);
+приложения (Windows 0.3.7+, Android build 278+). Тестовые RQT можно получить из крана, майнинга или другого кошелька. Инструкция: [pay with RQT](https://requant.network/magnetgate/pay-with-rqt);
 устройство: [PAYMENTS.md](PAYMENTS.md). Сайт на английском: [magnetvpn.world](https://magnetvpn.world).
 
 ## Как личный доступ защищает ключ владельца

@@ -82,9 +82,7 @@ transport entirely. The public mode does not currently fall back to Reality/nati
 
 Full access can also be paid in RQT, the coin of the [Requant](https://requant.network) test network:
 a deposit to a personal address, or **pay as you go** by the hour over a one-way payment channel
-from the app's own wallet (Windows 0.3.7+, Android build 278+). **Buy RQT** in the app (Windows
-0.3.8+, Android build 281+) gets RQT for bitcoin, Lightning or, from Windows 0.3.9 and Android build
-284, USDT on TRON, with an atomic swap. Guide: [pay with RQT](https://requant.network/magnetgate/pay-with-rqt);
+from the app's own wallet (Windows 0.3.7+, Android build 278+). Obtain test RQT from the faucet, mining or another wallet. Guide: [pay with RQT](https://requant.network/magnetgate/pay-with-rqt);
 design: [PAYMENTS.md](PAYMENTS.md). English website: [magnetvpn.world](https://magnetvpn.world).
 
 ## How personal access protects the owner's key

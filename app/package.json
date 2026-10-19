@@ -1,7 +1,7 @@
 {
   "name": "magnetgate-app",
   "productName": "magnetgate",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Desktop UI for the magnetgate censorship-resistant tunnel client",
   "author": "magnetgate",
   "private": true,
@@ -10,7 +10,7 @@
     "prestart": "node prepare-seed.js && node ../scripts/build-peer.cjs",
     "start": "electron .",
     "predist": "node prepare-seed.js && node ../scripts/build-peer.cjs",
-    "dist": "electron-builder --win portable zip",
+    "dist": "electron-builder --win nsis portable zip",
     "install:electron": "node node_modules/electron/install.js",
     "test": "node --test tests/*.test.cjs",
     "test:ui": "node tests/renderer-browser.cjs",
@@ -87,6 +87,7 @@
     ],
     "win": {
       "target": [
+        "nsis",
         "portable",
         "zip"
       ],
@@ -108,6 +109,18 @@
     },
     "dmg": {
       "artifactName": "magnetgate-${version}-mac-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": true,
+      "allowElevation": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "MagnetGate",
+      "uninstallDisplayName": "MagnetGate",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": false,
+      "artifactName": "magnetgate-${version}-setup-${arch}.${ext}"
     }
   },
   "engines": {

@@ -52,7 +52,7 @@ test('личный код отправляется только на довер�
   let called = false
   await requestProfile('MG1-' + 'c'.repeat(64), 'd'.repeat(64), async (url, options) => {
     called = true
-    assert.equal(url, 'https://magnet.retensor.tech/api/profile')
+    assert.equal(url, 'https://magnetvpn.world/api/profile')
     assert.equal(options.redirect, 'error')
     assert.equal(JSON.parse(options.body).device, 'd'.repeat(64))
     return new Response(JSON.stringify(profile()))
